@@ -1,0 +1,273 @@
+from __future__ import annotations
+
+"""Performance-oriented static checks."""
+
+import ast
+
+from .. import project
+from ..models import DoctorIssue
+
+def check_sequential_awaits() -> list[DoctorIssue]:
+    """Detect sequential await expressions that could be parallelised with asyncio.gather().
+
+    Inspired by react-doctor's ``async-parallel`` rule. When two or more ``await``
+    calls appear in sequence and operate on independent expressions (no data flow
+    from one to the next), they can be run concurrently via ``asyncio.gather()``.
+
+    Heuristic: flags ≥2 consecutive awaited assignments where the awaited calls look
+    like value-producing work (not transaction commits, logging, or cleanup) and the
+    later await does not depend on names produced by earlier awaits.
+    """
+    side_effect_only_attrs = {
+        "commit",
+        "rollback",
+        "flush",
+        "close",
+        "aclose",
+        "emit",
+        "publish",
+        "send",
+        "save",
+        "delete",
+        "create",
+        "update",
+        "insert",
+    }
+
+    def await_call(stmt: ast.stmt) -> ast.Call | None:
+        if isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Await) and isinstance(stmt.value.value, ast.Call):
+            return stmt.value.value
+        if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.value, ast.Await) and isinstance(stmt.value.value, ast.Call):
+            return stmt.value.value
+        return None
+
+    def assigned_names(stmt: ast.stmt) -> set[str]:
+        names: set[str] = set()
+        targets: list[ast.expr] = []
+        if isinstance(stmt, ast.Assign):
+            targets = list(stmt.targets)
+        elif isinstance(stmt, ast.AnnAssign):
+            targets = [stmt.target]
+        for target in targets:
+            for child in ast.walk(target):
+                if isinstance(child, ast.Name):
+                    names.add(child.id)
+        return names
+
+    def looks_parallelisable(call: ast.Call) -> bool:
+        func = call.func
+        if isinstance(func, ast.Attribute):
+            if func.attr in side_effect_only_attrs:
+                return False
+            if func.attr.startswith(("emit_", "log_", "save_", "delete_", "update_", "commit_", "publish_")):
+                return False
+        elif isinstance(func, ast.Name):
+            if func.id.startswith(("emit_", "log_", "save_", "delete_", "update_", "commit_", "publish_")):
+                return False
+        return True
+
+    issues: list[DoctorIssue] = []
+    for filepath in project.own_python_files():
+        try:
+            source = filepath.read_text()
+            tree = ast.parse(source)
+        except Exception:
+            continue
+        rel_path = str(filepath.relative_to(project.REPO_ROOT))
+        lines = source.splitlines()
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.AsyncFunctionDef):
+                continue
+            body = node.body
+            i = 0
+            while i < len(body) - 1:
+                # Look for runs of awaited assignments that produce values.
+                run_start = i
+                run: list[ast.stmt] = []
+                assigned_so_far: set[str] = set()
+                while i < len(body):
+                    stmt = body[i]
+                    await_expr = await_call(stmt)
+                    if await_expr is None or not looks_parallelisable(await_expr):
+                        break
+
+                    # Check if this await references any name assigned by a previous await in this run
+                    used_names: set[str] = set()
+                    for child in ast.walk(await_expr):
+                        if isinstance(child, ast.Name):
+                            used_names.add(child.id)
+                    if used_names & assigned_so_far:
+                        # Data dependency — break the run
+                        break
+
+                    run.append(stmt)
+                    assigned_so_far.update(assigned_names(stmt))
+                    i += 1
+
+                if len(run) >= 2:
+                    lineno = run[0].lineno
+                    if lineno <= len(lines) and "# noqa" in lines[lineno - 1]:
+                        i = run_start + len(run)
+                        continue
+                    issues.append(DoctorIssue(
+                        check="performance/sequential-awaits",
+                        severity="warning",
+                        message=f"{len(run)} sequential awaits in {node.name}() could use asyncio.gather()",
+                        path=rel_path,
+                        category="Performance",
+                        help="Independent awaits can run concurrently: results = await asyncio.gather(coro1(), coro2())",
+                        line=lineno,
+                    ))
+                i = max(i, run_start + 1)
+    return issues
+
+def check_regex_in_loop() -> list[DoctorIssue]:
+    """Detect re.compile/match/search/findall with literal patterns inside loops.
+
+    Inspired by react-doctor's ``js-hoist-regexp`` rule. Compiling or matching
+    with a string-literal regex inside a for/while loop recompiles on every
+    iteration. Hoist the pattern to module level or above the loop.
+    """
+    _RE_FUNCS = frozenset({"compile", "match", "search", "findall", "fullmatch", "sub", "split"})
+    issues: list[DoctorIssue] = []
+    for filepath in project.own_python_files():
+        try:
+            source = filepath.read_text()
+            tree = ast.parse(source)
+        except Exception:
+            continue
+        rel_path = str(filepath.relative_to(project.REPO_ROOT))
+        lines = source.splitlines()
+
+        # Walk AST, tracking loop depth
+        class _LoopVisitor(ast.NodeVisitor):
+            def __init__(self) -> None:
+                self.loop_depth = 0
+
+            def visit_For(self, node: ast.For) -> None:
+                self.loop_depth += 1
+                self.generic_visit(node)
+                self.loop_depth -= 1
+
+            def visit_While(self, node: ast.While) -> None:
+                self.loop_depth += 1
+                self.generic_visit(node)
+                self.loop_depth -= 1
+
+            def visit_Call(self, node: ast.Call) -> None:
+                if self.loop_depth > 0:
+                    func = node.func
+                    is_re_call = False
+                    # re.compile("..."), re.match("..."), etc.
+                    if (isinstance(func, ast.Attribute)
+                        and func.attr in _RE_FUNCS
+                        and isinstance(func.value, ast.Name)
+                        and func.value.id == "re"):
+                        # Check first arg is a string literal
+                        if node.args and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str):
+                            is_re_call = True
+                    if is_re_call:
+                        if node.lineno <= len(lines) and "# noqa" in lines[node.lineno - 1]:
+                            pass
+                        else:
+                            issues.append(DoctorIssue(
+                                check="performance/regex-in-loop",
+                                severity="warning",
+                                message=f"re.{func.attr}() with literal pattern inside loop — hoist to module level",
+                                path=rel_path,
+                                category="Performance",
+                                help="Compile regex patterns outside loops: PATTERN = re.compile('...') at module level.",
+                                line=node.lineno,
+                            ))
+                self.generic_visit(node)
+
+        _LoopVisitor().visit(tree)
+    return issues
+
+def check_n_plus_one_hint() -> list[DoctorIssue]:
+    """Detect potential N+1 query patterns: database calls inside loops.
+
+    Flags calls to session.query(), session.execute(), session.get(),
+    .filter(), .all(), .first(), .one() inside for/while loops. These often
+    indicate N+1 queries that should be batched with IN clauses or joins.
+    """
+    _DB_ATTRS = frozenset({"query", "execute", "get", "filter", "filter_by", "all", "first", "one", "scalars", "scalar"})
+    issues: list[DoctorIssue] = []
+    for filepath in project.own_python_files():
+        try:
+            source = filepath.read_text()
+            tree = ast.parse(source)
+        except Exception:
+            continue
+        rel_path = str(filepath.relative_to(project.REPO_ROOT))
+        lines = source.splitlines()
+
+        class _LoopDBVisitor(ast.NodeVisitor):
+            def __init__(self) -> None:
+                self.loop_target_stack: list[set[str]] = []
+                self.seen_lines: set[int] = set()
+
+            def visit_For(self, node: ast.For) -> None:
+                loop_names = {
+                    child.id
+                    for child in ast.walk(node.target)
+                    if isinstance(child, ast.Name)
+                }
+                self.loop_target_stack.append(loop_names)
+                self.generic_visit(node)
+                self.loop_target_stack.pop()
+
+            def visit_While(self, node: ast.While) -> None:
+                condition_names = {
+                    child.id
+                    for child in ast.walk(node.test)
+                    if isinstance(child, ast.Name)
+                }
+                self.loop_target_stack.append(condition_names)
+                self.generic_visit(node)
+                self.loop_target_stack.pop()
+
+            def visit_Call(self, node: ast.Call) -> None:
+                if self.loop_target_stack and node.lineno not in self.seen_lines:
+                    func = node.func
+                    if isinstance(func, ast.Attribute) and func.attr in _DB_ATTRS:
+                        # Heuristic: the object should look like a session/db variable
+                        obj = func.value
+                        # Only flag if object name suggests a DB session
+                        session_hints = {"session", "db", "database", "conn", "connection", "cursor"}
+                        referenced_names = {
+                            child.id
+                            for child in ast.walk(node)
+                            if isinstance(child, ast.Name)
+                        }
+                        current_loop_names = set().union(*self.loop_target_stack)
+                        if (
+                            isinstance(obj, ast.Name)
+                            and obj.id.lower() in session_hints
+                            and referenced_names & current_loop_names
+                        ):
+                            if node.lineno <= len(lines) and "# noqa" in lines[node.lineno - 1]:
+                                pass
+                            else:
+                                self.seen_lines.add(node.lineno)
+                                issues.append(DoctorIssue(
+                                    check="performance/n-plus-one-hint",
+                                    severity="warning",
+                                    message=f"Potential N+1: {obj.id}.{func.attr}() inside loop — batch with IN clause or join",
+                                    path=rel_path,
+                                    category="Performance",
+                                    help="Collect IDs first, then query in batch: session.query(M).filter(M.id.in_(ids))",
+                                    line=node.lineno,
+                                ))
+                self.generic_visit(node)
+
+        _LoopDBVisitor().visit(tree)
+    return issues
+
+
+__all__ = [
+    "check_n_plus_one_hint",
+    "check_regex_in_loop",
+    "check_sequential_awaits",
+]

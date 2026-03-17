@@ -1,0 +1,30 @@
+# .python-doctor.yml — project-level configuration
+# Place this file in your project root (next to pyproject.toml).
+# All keys are optional — missing keys use the defaults shown here.
+
+# ── Architecture rules ───────────────────────────────────────────────────────
+# These overlap with ruff (C901, PLR0915, etc.) and pylint.
+# If you already enforce function length via your linter, disable here.
+architecture:
+  enabled: true           # false → skip ALL architecture rules
+  giant_function: 400     # lines (error).  0 → disable this rule
+  large_function: 200     # lines (warning). 0 → disable this rule
+  god_module: 1500        # lines. 0 → disable
+  deep_nesting: 5         # levels. 0 → disable
+  import_bloat: 30        # import count. 0 → disable
+  fat_route_handler: 100  # lines. 0 → disable
+
+# ── Pydantic rules ──────────────────────────────────────────────────────────
+pydantic:
+  # "boundary"   — only flag TypedDict/NamedTuple/dataclass at API boundaries
+  #                (routers, interfaces, schemas). Internal code is free to use
+  #                dataclasses and TypedDicts. This is the trust-boundary approach.
+  #
+  # "everywhere" — flag ALL TypedDict/NamedTuple/dataclass as should-be-Pydantic.
+  #                Some teams prefer Pydantic everywhere for consistency, uniform
+  #                serialization, and fewer mental-model switches.
+  #
+  # Both modes exempt:  @dataclass(slots=True), @dataclass(frozen=True),
+  #                     TypedDict(total=False), small NamedTuples (≤3 fields),
+  #                     TYPE_CHECKING blocks.
+  should_be_model: "boundary"
