@@ -1,17 +1,18 @@
 # fastapi-doctor
 
-`fastapi-doctor` is an opinionated backend health checker for FastAPI and Python services.
+`fastapi-doctor` is an agent-first backend evaluator for FastAPI and Python services.
 
-It combines project discovery, route inspection, AST-based static checks, and optional external tooling into a single CLI that works against common repo layouts without assuming your package is named `app`.
+Point it at a repo and it will discover the app layout, inspect routes, run AST-based checks, optionally run external tools, and return a scored report that an agent can act on without hardcoding repo structure.
 
-## Features
+## What Agents Get
 
 - Auto-detects common layouts such as repo-root packages, `src/<pkg>`, and `backend/<pkg>`.
 - Loads FastAPI apps from both `module:app` and `module:create_app()` entrypoints.
 - Splits checks by concern: route/OpenAPI, architecture, correctness, security, resilience, performance, config, and Pydantic usage.
-- Produces human-readable output for local use and JSON for CI pipelines.
+- Emits stable JSON with `score`, `label`, discovered project layout, command results, and doctor findings.
+- Works inside the target repo's own environment, which matters for agent runs against real applications.
 
-## Install
+## Agent Setup
 
 Sync the project environment:
 
@@ -19,12 +20,27 @@ Sync the project environment:
 uv sync --extra dev
 ```
 
-## Usage
+## Default Agent Call
 
-Run inside the target repository:
+For automation, prefer JSON:
 
 ```bash
-uv run fastapi-doctor
+uv run fastapi-doctor --json
+```
+
+This returns:
+
+- overall `score` and `label`
+- discovered `project` metadata such as `repo_root`, `import_root`, `code_dir`, and `app_module`
+- `commands` results for `ruff`, `pyright`, `bandit`, or `pytest` when enabled
+- `doctor` findings with categorized issues and counts
+
+## Common Agent Invocations
+
+Run against the current repo:
+
+```bash
+uv run fastapi-doctor --json
 ```
 
 Scan another project explicitly:
@@ -43,13 +59,15 @@ uv run fastapi-doctor \
   --app-module my_backend.api:create_app()
 ```
 
-Machine-readable output:
+Add more signals when the task warrants it:
 
 ```bash
-uv run fastapi-doctor --json
+uv run fastapi-doctor --json --with-bandit --with-tests
 ```
 
-## Real Example
+Human-readable output is still available by omitting `--json`.
+
+## Example Repo
 
 To verify the doctor against a clean public repo, use the maintained example script:
 
@@ -61,7 +79,7 @@ It clones [fastapi/full-stack-fastapi-template](https://github.com/fastapi/full-
 
 You can override the clone location with `FASTAPI_DOCTOR_EXAMPLE_DIR=/path/to/clone`.
 
-## Project Layout
+## Internal Layout
 
 ```text
 src/python_doctor/

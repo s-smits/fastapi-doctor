@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "fastapi-doctor"
 version = "0.1.0"
-description = "Opinionated FastAPI/Python backend health checker."
+description = "Agent-first FastAPI/Python backend health checker."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.12"
