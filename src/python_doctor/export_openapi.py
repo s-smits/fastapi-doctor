@@ -11,7 +11,7 @@ from .app_loader import build_app_for_doctor
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export OpenAPI schema without starting the server.")
-    parser.add_argument("--output", default="tmp/python-doctor-openapi.json", help="Output path relative to repo root.")
+    parser.add_argument("--output", default="tmp/fastapi-doctor-openapi.json", help="Output path relative to repo root.")
     parser.add_argument("--stdout", action="store_true", help="Print schema to stdout instead of writing a file.")
     return parser.parse_args()
 

@@ -2,9 +2,9 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-EXAMPLE_PARENT="${PYTHON_DOCTOR_EXAMPLE_PARENT:-$ROOT_DIR/.examples}"
-EXAMPLE_DIR="${PYTHON_DOCTOR_EXAMPLE_DIR:-$EXAMPLE_PARENT/full-stack-fastapi-template}"
-REPO_URL="${PYTHON_DOCTOR_EXAMPLE_REPO:-https://github.com/fastapi/full-stack-fastapi-template.git}"
+EXAMPLE_PARENT="${FASTAPI_DOCTOR_EXAMPLE_PARENT:-${PYTHON_DOCTOR_EXAMPLE_PARENT:-$ROOT_DIR/.examples}}"
+EXAMPLE_DIR="${FASTAPI_DOCTOR_EXAMPLE_DIR:-${PYTHON_DOCTOR_EXAMPLE_DIR:-$EXAMPLE_PARENT/full-stack-fastapi-template}}"
+REPO_URL="${FASTAPI_DOCTOR_EXAMPLE_REPO:-${PYTHON_DOCTOR_EXAMPLE_REPO:-https://github.com/fastapi/full-stack-fastapi-template.git}}"
 
 mkdir -p "$EXAMPLE_PARENT"
 
@@ -22,7 +22,7 @@ if [[ -f .env ]]; then
   set +a
 fi
 
-uv run python "$ROOT_DIR/scripts/python_doctor.py" \
+uv run fastapi-doctor \
   --repo-root "$EXAMPLE_DIR" \
   --skip-ruff \
   --skip-pyright \

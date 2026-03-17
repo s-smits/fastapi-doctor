@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""CLI entrypoint for python-doctor."""
+"""CLI entrypoint for fastapi-doctor."""
 
 import argparse
 import json

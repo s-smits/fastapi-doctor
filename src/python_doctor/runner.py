@@ -148,7 +148,7 @@ def run_python_doctor_checks(
         issues.extend(check_naive_datetime())
 
     # ── Architecture checks (AST / file scanning) ────────────────────────
-    # Skippable via .python-doctor.yml → architecture.enabled: false
+    # Skippable via .fastapi-doctor.yml → architecture.enabled: false
     # Individual thresholds can also be set to 0 to disable specific rules.
     # Ruff covers many of these (C901, PLR0915, etc.) — defer to ruff if preferred.
     if not project.ARCHITECTURE_ENABLED:

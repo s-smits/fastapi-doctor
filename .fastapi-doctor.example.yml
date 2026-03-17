@@ -1,4 +1,4 @@
-# .python-doctor.yml — project-level configuration
+# .fastapi-doctor.yml — project-level configuration
 # Place this file in your project root (next to pyproject.toml).
 # All keys are optional — missing keys use the defaults shown here.
 

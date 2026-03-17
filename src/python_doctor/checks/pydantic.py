@@ -13,7 +13,7 @@ def check_should_be_pydantic_model() -> list[DoctorIssue]:
     """Detect TypedDict, NamedTuple, dataclass, and dict-factory patterns that
     should be Pydantic models.
 
-    Two modes (set via ``.python-doctor.yml`` → ``pydantic.should_be_model``):
+    Two modes (set via ``.fastapi-doctor.yml`` → ``pydantic.should_be_model``):
 
     **"boundary"** (default) — Trust-boundary analysis.  Pydantic belongs at
     API edges where untrusted data enters.  Internal code is free to use
@@ -32,7 +32,7 @@ def check_should_be_pydantic_model() -> list[DoctorIssue]:
     - Classes with ``__slots__`` (same as slots=True)
     - ``TypedDict`` with ``total=False`` (partial update / PATCH pattern)
     - Small ``NamedTuple`` (≤3 fields) — lightweight value objects, cache keys
-    - Our own python_doctor_checks module
+    - The doctor's own internal modules
     """
     # ── Trust boundary heuristics ────────────────────────────────────────────
     _API_BOUNDARY_DIRS = frozenset({
@@ -129,7 +129,7 @@ def check_should_be_pydantic_model() -> list[DoctorIssue]:
             continue
         rel_path = str(filepath.relative_to(project.REPO_ROOT))
         # Skip our own checks module
-        if filepath.stem == own_module_name or filepath.stem == "python_doctor_checks":
+        if filepath.stem == own_module_name:
             continue
 
         at_boundary = _is_api_boundary(rel_path)

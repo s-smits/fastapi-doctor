@@ -3,7 +3,7 @@ requires = ["hatchling>=1.27.0"]
 build-backend = "hatchling.build"
 
 [project]
-name = "python-doctor"
+name = "fastapi-doctor"
 version = "0.1.0"
 description = "Opinionated FastAPI/Python backend health checker."
 readme = "README.md"
@@ -30,8 +30,8 @@ dev = [
 ]
 
 [project.scripts]
-python-doctor = "python_doctor.cli:main"
-python-doctor-export-openapi = "python_doctor.export_openapi:main"
+fastapi-doctor = "python_doctor.cli:main"
+fastapi-doctor-export-openapi = "python_doctor.export_openapi:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

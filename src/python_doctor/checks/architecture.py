@@ -216,7 +216,7 @@ def check_import_bloat() -> list[DoctorIssue]:
     the module depends on too many things — it should be split into focused
     sub-modules. __init__.py and main.py are exempt (they're aggregators).
     """
-    threshold = project._IMPORT_BLOAT_THRESHOLD  # via .python-doctor.yml
+    threshold = project._IMPORT_BLOAT_THRESHOLD  # via .fastapi-doctor.yml
     if threshold <= 0:
         return []
     exempt_names = {"__init__.py", "main.py"}

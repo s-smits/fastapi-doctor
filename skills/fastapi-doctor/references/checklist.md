@@ -1,4 +1,4 @@
-# Python Doctor Checklist
+# FastAPI Doctor Checklist
 
 > **Prerequisite:** Run from the target project's working directory, or pass
 > `--repo-root /path/to/project` when scanning a different checkout.
@@ -6,7 +6,7 @@
 ## Fast Pass (score + ruff + pyright)
 
 ```bash
-uv run python scripts/python_doctor.py
+uv run fastapi-doctor
 ```
 
 Use for:
@@ -20,7 +20,7 @@ Target: **score >= 80** (Great)
 ## Deep Pass (add bandit + targeted tests)
 
 ```bash
-uv run python scripts/python_doctor.py --with-tests --with-bandit
+uv run fastapi-doctor --with-tests --with-bandit
 ```
 
 Use for:
@@ -34,7 +34,7 @@ Target: **score >= 80**, 0 high-severity bandit issues, all tests passing
 ## Schema Pass
 
 ```bash
-uv run python scripts/export_openapi_schema.py --stdout
+uv run fastapi-doctor-export-openapi --stdout
 ```
 
 Use for:
@@ -45,7 +45,7 @@ Use for:
 ## Machine-Readable Output
 
 ```bash
-uv run python scripts/python_doctor.py --json
+uv run fastapi-doctor --json
 ```
 
 Returns JSON with `score`, `label`, `categories`, `issues[]`, and external tool results.

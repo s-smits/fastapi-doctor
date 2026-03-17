@@ -37,9 +37,16 @@ _PROJECT_LAYOUT = ProjectLayout(
 )
 
 def _load_doctor_config() -> dict[str, Any]:
-    """Load .python-doctor.yml from REPO_ROOT. Returns empty dict if missing."""
-    config_path = REPO_ROOT / ".python-doctor.yml"
-    if not config_path.is_file():
+    """Load .fastapi-doctor.yml from REPO_ROOT, with a fallback to .python-doctor.yml."""
+    config_path = next(
+        (
+            REPO_ROOT / candidate
+            for candidate in (".fastapi-doctor.yml", ".python-doctor.yml")
+            if (REPO_ROOT / candidate).is_file()
+        ),
+        None,
+    )
+    if config_path is None:
         return {}
     try:
         import yaml  # noqa: E402 — late import; yaml is optional
@@ -75,8 +82,8 @@ ASYNC_ENDPOINT_NOAWAIT_EXCLUDE = frozenset(
 
 DEFAULT_ENV: dict[str, str] = {
     "SIMPLE_BOOT": "1",
-    "OPENAI_API_KEY": "python-doctor-openai-key",
-    "OS_SECURITY_KEY": "python-doctor-os-security-key-32-chars-minimum",
+    "OPENAI_API_KEY": "fastapi-doctor-openai-key",
+    "OS_SECURITY_KEY": "fastapi-doctor-os-security-key-32-chars-minimum",
 }
 
 _EXCLUDED_DISCOVERY_DIRS = frozenset(

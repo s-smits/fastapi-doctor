@@ -1,4 +1,4 @@
-"""Public package API for python-doctor."""
+"""Public package API for fastapi-doctor."""
 
 from .app_loader import build_app_for_doctor
 from .cli import main

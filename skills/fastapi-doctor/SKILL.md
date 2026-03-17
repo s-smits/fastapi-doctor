@@ -1,5 +1,5 @@
 ---
-name: python-doctor
+name: fastapi-doctor
 description: |
   Opinionated FastAPI/Python health checker. Audits backend quality, security gates,
   and architectural health (Ruff/Pyright/Bandit/AST). Use for backend verification,
@@ -8,13 +8,13 @@ description: |
 last_verified: 2026-03-17
 ---
 
-# Python Doctor
+# FastAPI Doctor
 
-Opinionated backend health checker for FastAPI applications. Scores the backend 0-100 using severity-weighted unique rule violations across 7 categories. All checks use AST-based static analysis — no regex hacks. Configurable via `.python-doctor.yml` in your project root.
+Opinionated backend health checker for FastAPI applications. Scores the backend 0-100 using severity-weighted unique rule violations across 7 categories. All checks use AST-based static analysis — no regex hacks. Configurable via `.fastapi-doctor.yml` in your project root.
 
 ## Configuration
 
-Place `.python-doctor.yml` in your project root. All keys are optional — missing keys use defaults. See `.python-doctor.example.yml` for the full schema.
+Place `.fastapi-doctor.yml` in your project root. All keys are optional — missing keys use defaults. See `.fastapi-doctor.example.yml` for the full schema.
 
 ```yaml
 architecture:
@@ -57,7 +57,7 @@ Counts **unique rule types** violated, not instances. 60 dataclass violations co
 |----------|-------|---------------|--------------|
 | **Security** | 10 | Auth deps, IDOR, secrets, SQL injection, error leaks, CORS | No |
 | **Correctness** | 12 | Duplicate routes, response models, sync-in-async, naive datetime | No |
-| **Architecture** | 8 | Giant functions, god modules, deep nesting, import bloat, passthrough, async misuse | Yes — disable all or per-rule via `.python-doctor.yml` |
+| **Architecture** | 8 | Giant functions, god modules, deep nesting, import bloat, passthrough, async misuse | Yes — disable all or per-rule via `.fastapi-doctor.yml` |
 | **API Surface** | 5 | OpenAPI operation IDs, tags, endpoint docstrings | No |
 | **Pydantic** | 4 | Deprecated validators, mutable defaults, extra="allow", should-be-model | Yes — `boundary` or `everywhere` mode |
 | **Resilience** | 4 | Bare except:pass, re-raise without context, swallowed exceptions | No |
@@ -67,7 +67,7 @@ Counts **unique rule types** violated, not instances. 60 dataclass violations co
 
 ### `pydantic/should-be-model` — Configurable Pydantic adoption detector
 
-Two modes via `.python-doctor.yml` → `pydantic.should_be_model`:
+Two modes via `.fastapi-doctor.yml` → `pydantic.should_be_model`:
 
 **"boundary"** (default) — Trust-boundary analysis. Only flags at API edges (routers, interfaces, schemas) or with API-suggestive names (`*Request`, `*Response`, `*Schema`, `*Payload`, `*Body`, `*Input`, `*Output`). Internal code is free to use dataclasses and TypedDicts.
 
@@ -82,7 +82,7 @@ Finds except handlers that catch and immediately re-raise without adding ANY val
 Finds functions whose body is a single `return other_func(same_args)` — unnecessary indirection. Smart exemptions: decorated functions, methods, validators, functions with docstrings, <2 params.
 
 ### `architecture/import-bloat` — AST-based module complexity signal
-Files with >30 import statements depend on too many things. Use `TYPE_CHECKING` guards, lazy imports, or split the module. Exempts: `__init__.py`, `main.py`. Threshold configurable via `.python-doctor.yml`.
+Files with >30 import statements depend on too many things. Use `TYPE_CHECKING` guards, lazy imports, or split the module. Exempts: `__init__.py`, `main.py`. Threshold configurable via `.fastapi-doctor.yml`.
 
 ## Commands
 
@@ -91,16 +91,16 @@ scanning another checkout.
 
 ```bash
 # Quick scan (doctor checks + ruff + pyright)
-uv run python scripts/python_doctor.py
+uv run fastapi-doctor
 
 # Full scan (add bandit + targeted tests)
-uv run python scripts/python_doctor.py --with-tests --with-bandit
+uv run fastapi-doctor --with-tests --with-bandit
 
 # Machine-readable output
-uv run python scripts/python_doctor.py --json
+uv run fastapi-doctor --json
 
 # Scan a different repo explicitly
-uv run python scripts/python_doctor.py --repo-root /path/to/project
+uv run fastapi-doctor --repo-root /path/to/project
 ```
 
 ## Rule Reference
@@ -151,7 +151,7 @@ uv run python scripts/python_doctor.py --repo-root /path/to/project
 | `correctness/naive-datetime` | Correctness | Usage of `datetime.utcnow()` or `now()` without timezones |
 | `correctness/avoid-os-path` | Correctness | Usage of `os.path` APIs instead of `pathlib.Path` |
 
-## Thresholds (configurable via `.python-doctor.yml`)
+## Thresholds (configurable via `.fastapi-doctor.yml`)
 
 | Threshold | Default | Config key | Why |
 |-----------|---------|-----------|-----|

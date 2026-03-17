@@ -1,4 +1,4 @@
-# Python Doctor — Rule Definitions
+# FastAPI Doctor — Rule Definitions
 
 24 opinionated rules across 7 categories, tuned for Python/FastAPI backends.
 Unique rule violations are counted (not instances), then penalized.
@@ -148,4 +148,4 @@ If you add a new rule, update:
 - `src/python_doctor/runner.py` and the appropriate `src/python_doctor/checks/*.py` module
 - `tests/test_doctor_checks.py` (regression tests)
 - this reference file (rule definitions)
-- `skills/python-doctor/SKILL.md` (rule tables)
+- `skills/fastapi-doctor/SKILL.md` (rule tables)
