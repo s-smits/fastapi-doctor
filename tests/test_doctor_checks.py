@@ -12,7 +12,9 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import python_doctor.app_loader as app_loader_module  # noqa: E402
+import python_doctor.cli as cli_module  # noqa: E402
 import python_doctor.checks.static_checks as static_checks_module  # noqa: E402
+import python_doctor.models as models_module  # noqa: E402
 import python_doctor.project as project_module  # noqa: E402
 import python_doctor.runner as runner_module  # noqa: E402
 
@@ -172,3 +174,94 @@ def test_n_plus_one_requires_loop_data_flow(monkeypatch, tmp_path: Path) -> None
     assert len(issues) == 1
     assert issues[0].check == "performance/n-plus-one-hint"
     assert issues[0].line == 7
+
+
+def test_issue_dict_exposes_agent_fields() -> None:
+    issue = models_module.DoctorIssue(
+        check="security/missing-auth-dep",
+        severity="error",
+        message="Protected route is missing auth dependency",
+        path="app/api/routes/users.py",
+        category="Security",
+        help="Add a dependency like Depends(require_auth) to the route.",
+        line=12,
+    )
+
+    payload = issue.to_dict()
+
+    assert payload["blocking"] is True
+    assert payload["priority"] == "high"
+    assert payload["safe_to_autofix"] is False
+    assert "why_it_matters" in payload
+    assert payload["suggested_fix"] == "Add a dependency like Depends(require_auth) to the route."
+    assert payload["fingerprint"] == "security/missing-auth-dep:app/api/routes/users.py:12:0"
+
+
+def test_report_dict_includes_next_actions() -> None:
+    report = models_module.DoctorReport(
+        route_count=2,
+        openapi_path_count=2,
+        issues=[
+            models_module.DoctorIssue(
+                check="security/missing-auth-dep",
+                severity="error",
+                message="Protected route is missing auth dependency",
+                path="app/api/routes/users.py",
+                category="Security",
+                help="Add a dependency like Depends(require_auth) to the route.",
+                line=12,
+            ),
+            models_module.DoctorIssue(
+                check="architecture/print-in-production",
+                severity="warning",
+                message="Use logger instead of print()",
+                path="app/service.py",
+                category="Architecture",
+                help="Replace print() calls with a structured logger.",
+                line=8,
+            ),
+        ],
+    )
+
+    payload = report.to_dict()
+
+    assert payload["schema_version"] == models_module.SCHEMA_VERSION
+    assert payload["rule_counts"]["security/missing-auth-dep"] == 1
+    assert payload["next_actions"][0]["rule"] == "security/missing-auth-dep"
+    assert payload["next_actions"][0]["blocking"] is True
+
+
+def test_build_json_payload_includes_effective_config(monkeypatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "pkg"
+    _write(package_dir / "__init__.py", "")
+    _write(package_dir / "main.py", "from fastapi import FastAPI\n\napp = FastAPI()\n")
+
+    _reload_doctor(monkeypatch, tmp_path)
+    report = models_module.DoctorReport(route_count=1, openapi_path_count=1, issues=[])
+    args = SimpleNamespace(
+        repo_root=None,
+        code_dir=None,
+        import_root=None,
+        app_module=None,
+        only_rules=None,
+        ignore_rules=None,
+        fail_on="none",
+        with_bandit=False,
+        with_tests=False,
+        skip_ruff=True,
+        skip_pyright=True,
+        skip_structure=False,
+        skip_openapi=False,
+    )
+
+    payload = cli_module.build_json_payload(
+        args=args,
+        command_results=[],
+        doctor_report=report,
+        final_score=report.score,
+        final_label=report.label,
+    )
+
+    assert payload["schema_version"] == models_module.SCHEMA_VERSION
+    assert payload["effective_config"]["architecture"]["enabled"] is True
+    assert payload["project"]["app_module"] == "pkg.main:app"

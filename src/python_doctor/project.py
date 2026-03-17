@@ -38,6 +38,7 @@ _PROJECT_LAYOUT = ProjectLayout(
 
 def _load_doctor_config() -> dict[str, Any]:
     """Load .fastapi-doctor.yml from REPO_ROOT, with a fallback to .python-doctor.yml."""
+    global _CONFIG_PATH
     config_path = next(
         (
             REPO_ROOT / candidate
@@ -46,6 +47,7 @@ def _load_doctor_config() -> dict[str, Any]:
         ),
         None,
     )
+    _CONFIG_PATH = config_path
     if config_path is None:
         return {}
     try:
@@ -62,6 +64,7 @@ _PYDANTIC_CONFIG: dict[str, Any] = {}
 _API_CONFIG: dict[str, Any] = {}
 _SECURITY_CONFIG: dict[str, Any] = {}
 _SCAN_CONFIG: dict[str, Any] = {}
+_CONFIG_PATH: Path | None = None
 
 ARCHITECTURE_ENABLED: bool = True
 GIANT_FUNCTION_THRESHOLD: int = 400
@@ -313,6 +316,37 @@ def refresh_runtime_config() -> ProjectLayout:
 
 def get_project_layout() -> ProjectLayout:
     return _PROJECT_LAYOUT
+
+
+def get_effective_config() -> dict[str, Any]:
+    return {
+        "config_path": str(_CONFIG_PATH) if _CONFIG_PATH else None,
+        "uses_legacy_config_name": bool(_CONFIG_PATH and _CONFIG_PATH.name == ".python-doctor.yml"),
+        "architecture": {
+            "enabled": ARCHITECTURE_ENABLED,
+            "giant_function": GIANT_FUNCTION_THRESHOLD,
+            "large_function": LARGE_FUNCTION_THRESHOLD,
+            "god_module": GOD_MODULE_THRESHOLD,
+            "deep_nesting": DEEP_NESTING_THRESHOLD,
+            "import_bloat": _IMPORT_BLOAT_THRESHOLD,
+            "fat_route_handler": _FAT_ROUTE_HANDLER_THRESHOLD,
+        },
+        "pydantic": {
+            "should_be_model": SHOULD_BE_MODEL_MODE,
+        },
+        "api": {
+            "create_post_prefixes": list(POST_CREATE_PREFIXES),
+            "tag_required_prefixes": list(TAG_REQUIRED_PREFIXES),
+        },
+        "security": {
+            "forbidden_write_params": sorted(FORBIDDEN_WRITE_PARAMS),
+        },
+        "scan": {
+            "exclude_dirs": sorted(SCAN_EXCLUDED_DIRS),
+        },
+    }
+
+
 @dataclass(slots=True)
 class LibraryInfo:
     """Detected library stack for the project."""
@@ -433,6 +467,7 @@ __all__ = [
     "_FAT_ROUTE_HANDLER_THRESHOLD",
     "_IMPORT_BLOAT_THRESHOLD",
     "discover_libraries",
+    "get_effective_config",
     "get_project_layout",
     "own_python_files",
     "refresh_runtime_config",

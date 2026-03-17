@@ -30,10 +30,13 @@ uv run fastapi-doctor --json
 
 This returns:
 
+- `schema_version` for contract stability
 - overall `score` and `label`
+- the original `requested` inputs
 - discovered `project` metadata such as `repo_root`, `import_root`, `code_dir`, and `app_module`
+- the resolved `effective_config`
 - `commands` results for `ruff`, `pyright`, `bandit`, or `pytest` when enabled
-- `doctor` findings with categorized issues and counts
+- `doctor` findings with categorized issues, remediation fields, and ranked `next_actions`
 
 ## Common Agent Invocations
 

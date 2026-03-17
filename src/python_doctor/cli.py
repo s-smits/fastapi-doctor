@@ -8,8 +8,8 @@ import os
 from pathlib import Path
 
 from .external_tools import CommandResult, count_bandit_highs, run_command
-from .models import PERFECT_SCORE
-from .project import get_project_layout
+from .models import PERFECT_SCORE, SCHEMA_VERSION
+from .project import get_effective_config, get_project_layout
 from .reporting import print_report_human
 from .runner import run_python_doctor_checks
 
@@ -114,20 +114,13 @@ def main() -> int:
         return 0
 
     if args.json:
-        project_layout = get_project_layout()
-        payload = {
-            "score": final_score,
-            "label": final_label,
-            "project": {
-                "repo_root": str(project_layout.repo_root),
-                "import_root": str(project_layout.import_root),
-                "code_dir": str(project_layout.code_dir),
-                "app_module": project_layout.app_module,
-                "discovery_source": project_layout.discovery_source,
-            },
-            "commands": [result.to_dict() for result in command_results],
-            "doctor": doctor_report.to_dict() if doctor_report else None,
-        }
+        payload = build_json_payload(
+            args=args,
+            command_results=command_results,
+            doctor_report=doctor_report,
+            final_score=final_score,
+            final_label=final_label,
+        )
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         print_report_human(doctor_report, command_results, final_score, final_label, verbose=args.verbose)
@@ -181,6 +174,47 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def build_json_payload(
+    *,
+    args: argparse.Namespace,
+    command_results: list[CommandResult],
+    doctor_report: object | None,
+    final_score: int,
+    final_label: str,
+) -> dict[str, object]:
+    project_layout = get_project_layout()
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "score": final_score,
+        "label": final_label,
+        "requested": {
+            "repo_root": args.repo_root,
+            "code_dir": args.code_dir,
+            "import_root": args.import_root,
+            "app_module": args.app_module,
+            "only_rules": args.only_rules,
+            "ignore_rules": args.ignore_rules,
+            "fail_on": args.fail_on,
+            "with_bandit": args.with_bandit,
+            "with_tests": args.with_tests,
+            "skip_ruff": args.skip_ruff,
+            "skip_pyright": args.skip_pyright,
+            "skip_structure": args.skip_structure,
+            "skip_openapi": args.skip_openapi,
+        },
+        "project": {
+            "repo_root": str(project_layout.repo_root),
+            "import_root": str(project_layout.import_root),
+            "code_dir": str(project_layout.code_dir),
+            "app_module": project_layout.app_module,
+            "discovery_source": project_layout.discovery_source,
+        },
+        "effective_config": get_effective_config(),
+        "commands": [result.to_dict() for result in command_results],
+        "doctor": doctor_report.to_dict() if doctor_report else None,
+    }
+
+
 def configure_environment_from_args(args: argparse.Namespace) -> None:
     mappings = {
         "DOCTOR_REPO_ROOT": args.repo_root,
@@ -197,4 +231,4 @@ def resolve_repo_root() -> Path:
     raw_root = os.environ.get("DOCTOR_REPO_ROOT") or os.getcwd()
     return Path(raw_root).resolve()
 
-__all__ = ["main", "parse_args"]
+__all__ = ["build_json_payload", "main", "parse_args"]
