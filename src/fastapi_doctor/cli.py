@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
+from .console import logger
 from .external_tools import CommandResult, count_bandit_highs, run_command
 from .models import PERFECT_SCORE, SCHEMA_VERSION
 from .project import get_effective_config, get_project_layout
@@ -50,38 +52,57 @@ def main() -> int:
     args = parse_args()
     configure_environment_from_args(args)
     repo_root = resolve_repo_root()
+    cli_version = get_cli_version()
 
     command_results: list[CommandResult] = []
 
-    # ── External tools ────────────────────────────────────────────────────
+    if not args.json and not args.score:
+        logger.log(f"fastapi-doctor v{cli_version}")
+        logger.break_line()
+
     ruff_passed = None
     pyright_passed = None
     bandit_high_count = None
 
     if not args.skip_ruff:
+        if not args.json and not args.score:
+            logger.dim("Running ruff...")
         result = run_command("ruff", ["uv", "run", "ruff", "check", "."], cwd=repo_root)
         command_results.append(result)
         ruff_passed = result.passed
+        if not args.json and not args.score:
+            logger.break_line()
 
     if not args.skip_pyright:
+        if not args.json and not args.score:
+            logger.dim("Running pyright...")
         result = run_command("pyright", ["uv", "run", "pyright"], cwd=repo_root)
         command_results.append(result)
         pyright_passed = result.passed
+        if not args.json and not args.score:
+            logger.break_line()
 
     if args.with_bandit:
+        if not args.json and not args.score:
+            logger.dim("Running bandit...")
         bandit_cmd = ["uv", "run", "bandit", "-q", "-r", "."]
         if (repo_root / "pyproject.toml").exists():
             bandit_cmd.extend(["-c", "pyproject.toml"])
         result = run_command("bandit", bandit_cmd, cwd=repo_root)
         command_results.append(result)
         bandit_high_count = count_bandit_highs(result.stdout)
+        if not args.json and not args.score:
+            logger.break_line()
 
     if args.with_tests:
+        if not args.json and not args.score:
+            logger.dim("Running pytest...")
         command_results.append(
             run_command("pytest", ["uv", "run", "pytest", *args.pytest_args.split()], cwd=repo_root)
         )
+        if not args.json and not args.score:
+            logger.break_line()
 
-    # ── Doctor checks ─────────────────────────────────────────────────────
     doctor_report = None
     if not args.skip_structure or not args.skip_openapi:
         only_rules = set(args.only_rules.split(",")) if args.only_rules else set()
@@ -97,18 +118,19 @@ def main() -> int:
         if args.skip_openapi:
             ignore_rules.add("api-surface/")
 
+        if not args.json and not args.score:
+            logger.dim("Running FastAPI Doctor checks...")
+            logger.break_line()
         doctor_report = run_python_doctor_checks(
             only_rules=only_rules if only_rules else None,
             ignore_rules=ignore_rules if ignore_rules else None,
         )
 
-    # ── Combined score ────────────────────────────────────────────────────
     base_score = doctor_report.score if doctor_report else PERFECT_SCORE
     final_score, final_label = compute_combined_score(
         base_score, ruff_passed, pyright_passed, bandit_high_count
     )
 
-    # ── Output ────────────────────────────────────────────────────────────
     if args.score:
         print(final_score)
         return 0
@@ -125,7 +147,6 @@ def main() -> int:
     else:
         print_report_human(doctor_report, command_results, final_score, final_label, verbose=args.verbose)
 
-    # ── Fail on level ─────────────────────────────────────────────────────
     if args.fail_on != "none":
         has_error = bool(doctor_report and doctor_report.error_count > 0)
         has_warning = bool(doctor_report and doctor_report.warning_count > 0)
@@ -141,6 +162,12 @@ def main() -> int:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Backend doctor for your FastAPI/Python stack. Scores 0-100."
+    )
+    parser.add_argument(
+        "-v",
+        "--version",
+        action="version",
+        version=f"%(prog)s {get_cli_version()}",
     )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON output.")
     parser.add_argument("--score", action="store_true", help="Output only the score.")
@@ -172,6 +199,13 @@ def parse_args() -> argparse.Namespace:
         help="Arguments passed to pytest when --with-tests is enabled.",
     )
     return parser.parse_args()
+
+
+def get_cli_version() -> str:
+    try:
+        return version("fastapi-doctor")
+    except PackageNotFoundError:
+        return "0.1.0"
 
 
 def build_json_payload(
