@@ -145,7 +145,7 @@ Router and service code should use a typed settings/config layer, not raw
 ## Extension Guidance
 
 If you add a new rule, update:
-- `src/python_doctor/runner.py` and the appropriate `src/python_doctor/checks/*.py` module
+- `src/fastapi_doctor/runner.py` and the appropriate `src/fastapi_doctor/checks/*.py` module
 - `tests/test_doctor_checks.py` (regression tests)
 - this reference file (rule definitions)
 - `skills/fastapi-doctor/SKILL.md` (rule tables)

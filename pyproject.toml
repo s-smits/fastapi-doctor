@@ -30,14 +30,14 @@ dev = [
 ]
 
 [project.scripts]
-fastapi-doctor = "python_doctor.cli:main"
-fastapi-doctor-export-openapi = "python_doctor.export_openapi:main"
+fastapi-doctor = "fastapi_doctor.cli:main"
+fastapi-doctor-export-openapi = "fastapi_doctor.export_openapi:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/python_doctor"]
+packages = ["src/fastapi_doctor"]
 
 [tool.hatch.build.targets.sdist]
 include = [

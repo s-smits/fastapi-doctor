@@ -85,7 +85,7 @@ You can override the clone location with `FASTAPI_DOCTOR_EXAMPLE_DIR=/path/to/cl
 ## Internal Layout
 
 ```text
-src/python_doctor/
+src/fastapi_doctor/
   app_loader.py
   cli.py
   external_tools.py

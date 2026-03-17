@@ -11,12 +11,12 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-import python_doctor.app_loader as app_loader_module  # noqa: E402
-import python_doctor.cli as cli_module  # noqa: E402
-import python_doctor.checks.static_checks as static_checks_module  # noqa: E402
-import python_doctor.models as models_module  # noqa: E402
-import python_doctor.project as project_module  # noqa: E402
-import python_doctor.runner as runner_module  # noqa: E402
+import fastapi_doctor.app_loader as app_loader_module  # noqa: E402
+import fastapi_doctor.cli as cli_module  # noqa: E402
+import fastapi_doctor.checks.static_checks as static_checks_module  # noqa: E402
+import fastapi_doctor.models as models_module  # noqa: E402
+import fastapi_doctor.project as project_module  # noqa: E402
+import fastapi_doctor.runner as runner_module  # noqa: E402
 
 
 def _write(path: Path, content: str) -> None:
