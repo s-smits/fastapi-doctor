@@ -14,16 +14,10 @@ It combines project discovery, route inspection, AST-based static checks, and op
 
 ## Install
 
-For local development:
+Sync the project environment:
 
 ```bash
-pip install -e .[dev]
-```
-
-For a standard install:
-
-```bash
-pip install .
+uv sync --extra dev
 ```
 
 ## Usage
@@ -31,19 +25,19 @@ pip install .
 Run inside the target repository:
 
 ```bash
-python-doctor
+uv run python-doctor
 ```
 
 Scan another project explicitly:
 
 ```bash
-python-doctor --repo-root /path/to/project
+uv run python-doctor --repo-root /path/to/project
 ```
 
 Override discovery when the project layout is unusual:
 
 ```bash
-python-doctor \
+uv run python-doctor \
   --repo-root /path/to/project \
   --import-root src \
   --code-dir src/my_backend \
@@ -53,7 +47,7 @@ python-doctor \
 Machine-readable output:
 
 ```bash
-python-doctor --json
+uv run python-doctor --json
 ```
 
 ## Real Example
@@ -98,11 +92,11 @@ tests/
 
 ## Development
 
-Install editable dependencies and run tests:
+Sync dependencies and run tests:
 
 ```bash
-pip install -e .[dev]
-pytest -q
+uv sync --extra dev
+uv run pytest -q
 ```
 
 The doctor is designed to run inside the target project's environment when importing the FastAPI app requires the target project's dependencies.

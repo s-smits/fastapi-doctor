@@ -3,14 +3,14 @@
 ## Setup
 
 ```bash
-pip install -e .[dev]
+uv sync --extra dev
 ```
 
 ## Validation
 
 ```bash
-pytest -q
-python -m py_compile $(find src scripts tests -name '*.py')
+uv run pytest -q
+uv run python -m py_compile $(find src scripts tests -name '*.py')
 ```
 
 ## Design Notes
