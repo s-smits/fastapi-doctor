@@ -12,21 +12,16 @@ def check_giant_functions() -> list[DoctorIssue]:
     if project.GIANT_FUNCTION_THRESHOLD <= 0 and project.LARGE_FUNCTION_THRESHOLD <= 0:
         return []
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
-            continue
-        for node in ast.walk(tree):
+    for module in project.parsed_python_modules():
+        for node in ast.walk(module.tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 # Allow # noqa: architecture to suppress architectural warnings
-                source_segment = ast.get_source_segment(source, node)
+                source_segment = ast.get_source_segment(module.source, node)
                 if source_segment and "# noqa: architecture" in source_segment:
                     continue
 
                 size = (node.end_lineno or node.lineno) - node.lineno + 1
-                rel_path = str(filepath.relative_to(project.REPO_ROOT))
+                rel_path = module.rel_path
                 if project.GIANT_FUNCTION_THRESHOLD > 0 and size > project.GIANT_FUNCTION_THRESHOLD:
                     issues.append(
                         DoctorIssue(
@@ -100,16 +95,11 @@ def check_print_statements() -> list[DoctorIssue]:
     """Production code should use the logger, not print()."""
     issues: list[DoctorIssue] = []
     exclude_dirs = {"scripts", "lib"}
-    for filepath in project.own_python_files():
-        parts = filepath.relative_to(project.OWN_CODE_DIR).parts
+    for module in project.parsed_python_modules():
+        parts = module.path.relative_to(project.OWN_CODE_DIR).parts
         if parts and parts[0] in exclude_dirs:
             continue
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
-            continue
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if isinstance(node, ast.Call):
                 func = node.func
                 if isinstance(func, ast.Name) and func.id == "print":
@@ -118,7 +108,7 @@ def check_print_statements() -> list[DoctorIssue]:
                             check="architecture/print-in-production",
                             severity="warning",
                             message="print() in production code — use logger instead",
-                            path=str(filepath.relative_to(project.REPO_ROOT)),
+                            path=module.rel_path,
                             category="Architecture",
                             help="Replace with logger.info/debug/warning as appropriate.",
                             line=node.lineno,
@@ -131,21 +121,18 @@ def check_god_modules() -> list[DoctorIssue]:
     if project.GOD_MODULE_THRESHOLD <= 0:
         return []
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            if "# noqa: architecture" in source:
-                continue
-            line_count = len(source.splitlines())
-        except Exception:
+    for module in project.parsed_python_modules():
+        source = module.source
+        if "# noqa: architecture" in source:
             continue
+        line_count = len(source.splitlines())
         if line_count > project.GOD_MODULE_THRESHOLD:
             issues.append(
                 DoctorIssue(
                     check="architecture/god-module",
                     severity="warning",
                     message=f"File is {line_count} lines (>{project.GOD_MODULE_THRESHOLD}) — decompose into focused modules",
-                    path=str(filepath.relative_to(project.REPO_ROOT)),
+                    path=module.rel_path,
                     category="Architecture",
                     help="Extract cohesive groups of functions into separate modules. Each module should have one reason to change.",
                 )
@@ -179,16 +166,11 @@ def check_deep_nesting() -> list[DoctorIssue]:
     if project.DEEP_NESTING_THRESHOLD <= 0:
         return []
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
-            continue
-        for node in ast.walk(tree):
+    for module in project.parsed_python_modules():
+        for node in ast.walk(module.tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 # Allow # noqa: architecture to suppress architectural warnings
-                source_segment = ast.get_source_segment(source, node)
+                source_segment = ast.get_source_segment(module.source, node)
                 if source_segment and "# noqa: architecture" in source_segment:
                     continue
 
@@ -200,7 +182,7 @@ def check_deep_nesting() -> list[DoctorIssue]:
                             check="architecture/deep-nesting",
                             severity="warning",
                             message=f"Function '{node.name}' has {depth} levels of nesting (>{project.DEEP_NESTING_THRESHOLD}) — extract inner logic",
-                            path=str(filepath.relative_to(project.REPO_ROOT)),
+                            path=module.rel_path,
                             category="Architecture",
                             help="Use early returns, guard clauses, or extract nested blocks into helper functions.",
                             line=node.lineno,
@@ -221,24 +203,19 @@ def check_import_bloat() -> list[DoctorIssue]:
         return []
     exempt_names = {"__init__.py", "main.py"}
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        if filepath.name in exempt_names:
+    for module in project.parsed_python_modules():
+        if module.path.name in exempt_names:
             continue
-        try:
-            source = filepath.read_text()
-            if "# noqa: architecture" in source:
-                continue
-            tree = ast.parse(source)
-        except Exception:
+        if "# noqa: architecture" in module.source:
             continue
-        import_count = sum(1 for node in ast.walk(tree) if isinstance(node, (ast.Import, ast.ImportFrom)))
+        import_count = sum(1 for node in ast.walk(module.tree) if isinstance(node, (ast.Import, ast.ImportFrom)))
         if import_count > threshold:
             issues.append(
                 DoctorIssue(
                     check="architecture/import-bloat",
                     severity="warning",
                     message=f"File has {import_count} imports (>{threshold}) — consider decomposing",
-                    path=str(filepath.relative_to(project.REPO_ROOT)),
+                    path=module.rel_path,
                     category="Architecture",
                     help="Use TYPE_CHECKING guards for type-only imports, lazy-import heavy libraries, or split the module.",
                 )
@@ -275,19 +252,12 @@ def check_passthrough_functions() -> list[DoctorIssue]:
         "cache",
         "cached_property",
     }
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
-            continue
-        for node in ast.walk(tree):
+    for module in project.parsed_python_modules():
+        for node in ast.walk(module.tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            # Skip methods (inside classes)
-            if any(
-                isinstance(parent, ast.ClassDef) for parent in ast.walk(tree) if node in ast.iter_child_nodes(parent)
-            ):
+            # Skip methods (inside classes) by only considering module-level functions.
+            if not any(node is top_level for top_level in module.tree.body if isinstance(top_level, (ast.FunctionDef, ast.AsyncFunctionDef))):
                 continue
             # Skip decorated functions
             if node.decorator_list:
@@ -346,7 +316,7 @@ def check_passthrough_functions() -> list[DoctorIssue]:
                         check="architecture/passthrough-function",
                         severity="warning",
                         message=f"Function '{node.name}' is a pure passthrough — consider inlining",
-                        path=str(filepath.relative_to(project.REPO_ROOT)),
+                        path=module.rel_path,
                         category="Architecture",
                         help="This function just delegates to another. Inline it or add a docstring explaining why the wrapper exists.",
                         line=node.lineno,
@@ -357,15 +327,10 @@ def check_passthrough_functions() -> list[DoctorIssue]:
 
 def check_avoid_sys_exit() -> list[DoctorIssue]:
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        if filepath.name in ("__main__.py", "cli.py") or "scripts/" in str(filepath):
+    for module in project.parsed_python_modules():
+        if module.path.name in ("__main__.py", "cli.py") or "scripts/" in str(module.path):
             continue
-        try:
-            tree = ast.parse(filepath.read_text())
-        except Exception:
-            continue
-            
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if isinstance(node, ast.Call):
                 is_exit = False
                 if isinstance(node.func, ast.Attribute) and getattr(node.func.value, "id", "") == "sys" and node.func.attr == "exit":
@@ -378,7 +343,7 @@ def check_avoid_sys_exit() -> list[DoctorIssue]:
                         check="architecture/avoid-sys-exit",
                         severity="warning",
                         message="sys.exit() or quit() in library code — raise an Exception instead",
-                        path=str(filepath.relative_to(project.REPO_ROOT)),
+                        path=module.rel_path,
                         category="Architecture",
                         help="Deep application logic should raise exceptions, not abruptly kill the process.",
                         line=node.lineno
@@ -394,18 +359,13 @@ def check_star_import() -> list[DoctorIssue]:
     static analysis and IDE support, and can silently shadow existing names.
     """
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        if filepath.name == "__init__.py":
+    for module in project.parsed_python_modules():
+        if module.path.name == "__init__.py":
             continue  # __init__.py re-exports are a common valid pattern
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
-            continue
-        rel_path = str(filepath.relative_to(project.REPO_ROOT))
-        lines = source.splitlines()
+        rel_path = module.rel_path
+        lines = module.source.splitlines()
 
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if isinstance(node, ast.ImportFrom):
                 if any(alias.name == "*" for alias in node.names):
                     if node.lineno <= len(lines) and "# noqa" in lines[node.lineno - 1]:

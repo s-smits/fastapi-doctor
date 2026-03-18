@@ -28,6 +28,14 @@ class ProjectLayout:
     app_module: str | None
     discovery_source: str
 
+
+@dataclass(slots=True)
+class ParsedModule:
+    path: Path
+    rel_path: str
+    source: str
+    tree: ast.AST
+
 _PROJECT_LAYOUT = ProjectLayout(
     repo_root=REPO_ROOT,
     import_root=IMPORT_ROOT,
@@ -36,6 +44,7 @@ _PROJECT_LAYOUT = ProjectLayout(
     discovery_source="uninitialized",
 )
 _CONFIG_SIGNATURE: tuple[str | None, str | None, str | None, str | None, str] | None = None
+_PARSED_MODULE_CACHE: tuple[tuple[str | None, str | None, str | None, str | None, str], list[ParsedModule]] | None = None
 
 def _load_doctor_config() -> dict[str, Any]:
     """Load .fastapi-doctor.yml from REPO_ROOT, with a fallback to .python-doctor.yml."""
@@ -313,7 +322,7 @@ def refresh_runtime_config() -> ProjectLayout:
     global _FAT_ROUTE_HANDLER_THRESHOLD, SHOULD_BE_MODEL_MODE
     global FORBIDDEN_WRITE_PARAMS, POST_CREATE_PREFIXES, TAG_REQUIRED_PREFIXES, SCAN_EXCLUDED_DIRS
 
-    global _CONFIG_SIGNATURE
+    global _CONFIG_SIGNATURE, _PARSED_MODULE_CACHE
 
     layout = _discover_project_layout()
     REPO_ROOT = layout.repo_root
@@ -343,6 +352,7 @@ def refresh_runtime_config() -> ProjectLayout:
     TAG_REQUIRED_PREFIXES = tuple(_API_CONFIG.get("tag_required_prefixes", ["/api/"]))
     SCAN_EXCLUDED_DIRS = frozenset(_SCAN_CONFIG.get("exclude_dirs", ["lib", "vendor", "vendored", "third_party"]))
     _CONFIG_SIGNATURE = _current_config_signature()
+    _PARSED_MODULE_CACHE = None
 
     return layout
 
@@ -496,6 +506,35 @@ def own_python_files() -> list[Path]:
             or parts[0] not in SCAN_EXCLUDED_DIRS
         )
     )
+
+
+def parsed_python_modules() -> list[ParsedModule]:
+    global _PARSED_MODULE_CACHE
+    ensure_runtime_config()
+    signature = _current_config_signature()
+    if _PARSED_MODULE_CACHE is not None and _PARSED_MODULE_CACHE[0] == signature:
+        return _PARSED_MODULE_CACHE[1]
+
+    modules: list[ParsedModule] = []
+    for path in own_python_files():
+        try:
+            source = path.read_text()
+            tree = ast.parse(source)
+        except Exception:
+            continue
+        modules.append(
+            ParsedModule(
+                path=path,
+                rel_path=str(path.relative_to(REPO_ROOT)),
+                source=source,
+                tree=tree,
+            )
+        )
+
+    _PARSED_MODULE_CACHE = (signature, modules)
+    return modules
+
+
 __all__ = [
     "APP_MODULE",
     "ARCHITECTURE_ENABLED",
@@ -508,6 +547,7 @@ __all__ = [
     "IMPORT_ROOT",
     "LARGE_FUNCTION_THRESHOLD",
     "OWN_CODE_DIR",
+    "ParsedModule",
     "PROTECTED_ROUTE_RULES",
     "ProjectLayout",
     "REPO_ROOT",
@@ -520,5 +560,6 @@ __all__ = [
     "get_effective_config",
     "get_project_layout",
     "own_python_files",
+    "parsed_python_modules",
     "refresh_runtime_config",
 ]
