@@ -1,8 +1,31 @@
 # fastapi-doctor
 
-`fastapi-doctor` is an agent-first backend evaluator for FastAPI and Python services.
+`fastapi-doctor` is an agent-first backend verifier for FastAPI and Python services.
+
+AI coding agents are good at producing local code and still unreliable at consistently enforcing backend patterns across a real repo. They will often get most of the implementation right and still miss one important thing: a missing auth dependency, blocking I/O inside an async handler, weak response model coverage, OpenAPI drift, or a Pydantic v1/v2 mismatch.
+
+`fastapi-doctor` is the safety net for that gap.
 
 Point it at a repo and it will discover the app layout, inspect routes, run AST-based checks, optionally run external tools, and return a scored report that an agent can act on without hardcoding repo structure.
+
+## Why This Exists
+
+Most FastAPI skills and prompt packs help an agent write code:
+
+- scaffold a new project
+- generate endpoints and models
+- explain dependency injection, auth, or async patterns
+- provide review checklists for humans
+
+That is useful, but it does not give you a deterministic backend verifier after the code is written.
+
+`fastapi-doctor` is different:
+
+- It inspects an existing repo instead of just suggesting how code should look.
+- It uses AST-based checks instead of relying on prompt memory alone.
+- It scores backend health across multiple categories instead of giving generic advice.
+- It emits stable JSON so another agent can consume the findings automatically.
+- It is built for AI-assisted development, where catching the last 10-20% of missed backend patterns matters.
 
 ## What Agents Get
 
@@ -11,6 +34,36 @@ Point it at a repo and it will discover the app layout, inspect routes, run AST-
 - Splits checks by concern: route/OpenAPI, architecture, correctness, security, resilience, performance, config, and Pydantic usage.
 - Emits stable JSON with `score`, `label`, discovered project layout, command results, and doctor findings.
 - Works inside the target repo's own environment, which matters for agent runs against real applications.
+
+## How It Differs From Typical FastAPI Skills
+
+Most external FastAPI skills fall into one of four buckets:
+
+- implementation guides for building APIs
+- templates and scaffolds for starting new services
+- framework best-practice references
+- code review checklists
+
+`fastapi-doctor` overlaps with those inputs, but the product shape is different. It is not primarily:
+
+- a FastAPI coding tutor
+- a project template
+- a lint replacement
+- a human-only review checklist
+
+It is a post-generation verifier for AI-assisted backend work.
+
+Concretely, it combines:
+
+- repo discovery and app loading
+- FastAPI-aware static analysis
+- route/auth/OpenAPI checks
+- async correctness checks
+- Pydantic usage checks
+- optional external tool execution
+- machine-readable output for agent loops
+
+That combination is the novelty.
 
 ## Agent Setup
 
