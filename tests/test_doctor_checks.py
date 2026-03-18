@@ -12,6 +12,7 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 import fastapi_doctor.app_loader as app_loader_module  # noqa: E402
+import fastapi_doctor.checks.architecture as architecture_module  # noqa: E402
 import fastapi_doctor.cli as cli_module  # noqa: E402
 import fastapi_doctor.checks.static_checks as static_checks_module  # noqa: E402
 import fastapi_doctor.models as models_module  # noqa: E402
@@ -48,13 +49,16 @@ def _reload_doctor(
     project = importlib.reload(project_module)
     app_loader = importlib.reload(app_loader_module)
     static_checks = importlib.reload(static_checks_module)
+    architecture = importlib.reload(architecture_module)
     runner = importlib.reload(runner_module)
     return SimpleNamespace(
         get_project_layout=project.get_project_layout,
+        parsed_python_modules=project.parsed_python_modules,
         build_app_for_doctor=app_loader.build_app_for_doctor,
         run_python_doctor_checks=runner.run_python_doctor_checks,
         check_get_with_side_effect=static_checks.check_get_with_side_effect,
         check_n_plus_one_hint=static_checks.check_n_plus_one_hint,
+        check_passthrough_functions=architecture.check_passthrough_functions,
     )
 
 
@@ -317,3 +321,42 @@ def test_explicit_app_module_skips_repo_scan_and_infers_layout(monkeypatch, tmp_
     assert layout.import_root == tmp_path / "src"
     assert layout.code_dir == tmp_path / "src" / "service"
     assert layout.app_module == "service.api:create_app()"
+
+
+def test_parsed_python_modules_reuses_cache(monkeypatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "pkg"
+    _write(package_dir / "__init__.py", "")
+    _write(package_dir / "main.py", "from fastapi import FastAPI\n\napp = FastAPI()\n")
+    _write(package_dir / "service.py", "def compute() -> int:\n    return 1\n")
+
+    module = _reload_doctor(monkeypatch, tmp_path)
+    first = module.parsed_python_modules()
+    second = module.parsed_python_modules()
+
+    assert first is second
+    assert [parsed.rel_path for parsed in first] == ["pkg/__init__.py", "pkg/main.py", "pkg/service.py"]
+
+
+def test_passthrough_function_ignores_methods(monkeypatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "pkg"
+    _write(package_dir / "__init__.py", "")
+    _write(package_dir / "main.py", "from fastapi import FastAPI\n\napp = FastAPI()\n")
+    _write(
+        package_dir / "service.py",
+        (
+            "class Delegator:\n"
+            "    def method(self, a, b):\n"
+            "        return target(a, b)\n\n"
+            "def wrapper(a, b):\n"
+            "    return target(a, b)\n\n"
+            "def target(a, b):\n"
+            "    return a + b\n"
+        ),
+    )
+
+    module = _reload_doctor(monkeypatch, tmp_path)
+    issues = module.check_passthrough_functions()
+
+    assert len(issues) == 1
+    assert issues[0].check == "architecture/passthrough-function"
+    assert issues[0].line == 5
