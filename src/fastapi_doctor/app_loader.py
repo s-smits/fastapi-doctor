@@ -22,7 +22,7 @@ def _ensure_env_defaults() -> None:
 
 def build_app_for_doctor() -> FastAPI:
     _ensure_env_defaults()
-    project.refresh_runtime_config()
+    project.ensure_runtime_config()
 
     import sys
     import importlib

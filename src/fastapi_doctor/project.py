@@ -35,6 +35,7 @@ _PROJECT_LAYOUT = ProjectLayout(
     app_module=APP_MODULE,
     discovery_source="uninitialized",
 )
+_CONFIG_SIGNATURE: tuple[str | None, str | None, str | None, str | None, str] | None = None
 
 def _load_doctor_config() -> dict[str, Any]:
     """Load .fastapi-doctor.yml from REPO_ROOT, with a fallback to .python-doctor.yml."""
@@ -75,13 +76,7 @@ _IMPORT_BLOAT_THRESHOLD: int = 30
 _FAT_ROUTE_HANDLER_THRESHOLD: int = 100
 SHOULD_BE_MODEL_MODE: str = "boundary"
 
-ASYNC_ENDPOINT_NOAWAIT_EXCLUDE = frozenset(
-    {
-        "stream_hierarchy_updates",
-        "stream_hierarchy_updates_all",
-        "require_admin",
-    }
-)
+ASYNC_ENDPOINT_NOAWAIT_EXCLUDE = frozenset()
 
 DEFAULT_ENV: dict[str, str] = {
     "SIMPLE_BOOT": "1",
@@ -227,6 +222,33 @@ def _discover_code_dir(repo_root: Path) -> Path:
         return max(candidates, key=lambda item: item[0])[1]
     return repo_root
 
+
+def _infer_layout_from_app_module(repo_root: Path, app_module: str) -> tuple[Path, Path] | None:
+    module_path, _, _ = app_module.partition(":")
+    if not module_path:
+        return None
+
+    module_parts = module_path.split(".")
+    if not module_parts:
+        return None
+
+    search_roots = (
+        repo_root / "src",
+        repo_root / "backend",
+        repo_root,
+    )
+    for import_root in search_roots:
+        package_dir = import_root.joinpath(*module_parts[:-1]) if len(module_parts) > 1 else import_root
+        module_file = import_root.joinpath(*module_parts).with_suffix(".py")
+        package_init = import_root.joinpath(*module_parts, "__init__.py")
+        if module_file.is_file():
+            code_dir = import_root / module_parts[0]
+            return import_root, code_dir if code_dir.exists() else package_dir
+        if package_init.is_file():
+            code_dir = import_root / module_parts[0]
+            return import_root, code_dir if code_dir.exists() else import_root.joinpath(*module_parts)
+    return None
+
 def _discover_project_layout() -> ProjectLayout:
     repo_root = _resolve_path(os.environ.get("DOCTOR_REPO_ROOT"), base=Path.cwd()) or Path.cwd().resolve()
     explicit_code_dir = _resolve_path(os.environ.get("DOCTOR_CODE_DIR"), base=repo_root)
@@ -235,14 +257,21 @@ def _discover_project_layout() -> ProjectLayout:
 
     discovery_source = "explicit overrides"
     discovered_candidate = None
-    if not explicit_app_module or not explicit_code_dir or not explicit_import_root:
+    inferred_layout = None
+    if explicit_app_module and (not explicit_code_dir or not explicit_import_root):
+        inferred_layout = _infer_layout_from_app_module(repo_root, explicit_app_module)
+        if inferred_layout is not None:
+            candidate_import_root, candidate_code_dir = inferred_layout
+            candidate_module = explicit_app_module.split(":", 1)[0]
+            discovery_source = "explicit app module"
+    if inferred_layout is None and (not explicit_app_module or not explicit_code_dir or not explicit_import_root):
         discovered_candidate = _discover_app_candidate(repo_root)
 
     if discovered_candidate is not None:
         candidate_file, candidate_attr, candidate_reason = discovered_candidate
         candidate_import_root, candidate_code_dir, candidate_module = _module_context_from_file(candidate_file, repo_root)
         discovery_source = f"auto ({candidate_reason})"
-    else:
+    elif inferred_layout is None:
         candidate_import_root = repo_root
         candidate_code_dir = _discover_code_dir(repo_root)
         entrypoint_file = next(
@@ -284,6 +313,8 @@ def refresh_runtime_config() -> ProjectLayout:
     global _FAT_ROUTE_HANDLER_THRESHOLD, SHOULD_BE_MODEL_MODE
     global FORBIDDEN_WRITE_PARAMS, POST_CREATE_PREFIXES, TAG_REQUIRED_PREFIXES, SCAN_EXCLUDED_DIRS
 
+    global _CONFIG_SIGNATURE
+
     layout = _discover_project_layout()
     REPO_ROOT = layout.repo_root
     IMPORT_ROOT = layout.import_root
@@ -311,14 +342,33 @@ def refresh_runtime_config() -> ProjectLayout:
     POST_CREATE_PREFIXES = tuple(_API_CONFIG.get("create_post_prefixes", []))
     TAG_REQUIRED_PREFIXES = tuple(_API_CONFIG.get("tag_required_prefixes", ["/api/"]))
     SCAN_EXCLUDED_DIRS = frozenset(_SCAN_CONFIG.get("exclude_dirs", ["lib", "vendor", "vendored", "third_party"]))
+    _CONFIG_SIGNATURE = _current_config_signature()
 
     return layout
 
+def _current_config_signature() -> tuple[str | None, str | None, str | None, str | None, str]:
+    return (
+        os.environ.get("DOCTOR_REPO_ROOT"),
+        os.environ.get("DOCTOR_CODE_DIR"),
+        os.environ.get("DOCTOR_IMPORT_ROOT"),
+        os.environ.get("DOCTOR_APP_MODULE"),
+        str(Path.cwd().resolve()),
+    )
+
+
+def ensure_runtime_config() -> ProjectLayout:
+    if _PROJECT_LAYOUT.discovery_source == "uninitialized" or _CONFIG_SIGNATURE != _current_config_signature():
+        return refresh_runtime_config()
+    return _PROJECT_LAYOUT
+
+
 def get_project_layout() -> ProjectLayout:
+    ensure_runtime_config()
     return _PROJECT_LAYOUT
 
 
 def get_effective_config() -> dict[str, Any]:
+    ensure_runtime_config()
     return {
         "config_path": str(_CONFIG_PATH) if _CONFIG_PATH else None,
         "uses_legacy_config_name": bool(_CONFIG_PATH and _CONFIG_PATH.name == ".python-doctor.yml"),
@@ -365,6 +415,7 @@ class LibraryInfo:
 
 def discover_libraries() -> LibraryInfo:
     """Detect libraries from the target project, not the doctor's own environment."""
+    ensure_runtime_config()
     info = LibraryInfo()
     search_paths = [
         REPO_ROOT / "pyproject.toml",
@@ -433,6 +484,7 @@ def discover_libraries() -> LibraryInfo:
 
 def own_python_files() -> list[Path]:
     """All Python files under the discovered code directory."""
+    ensure_runtime_config()
     if not OWN_CODE_DIR.exists():
         return []
     return sorted(
@@ -444,9 +496,6 @@ def own_python_files() -> list[Path]:
             or parts[0] not in SCAN_EXCLUDED_DIRS
         )
     )
-
-refresh_runtime_config()
-
 __all__ = [
     "APP_MODULE",
     "ARCHITECTURE_ENABLED",
@@ -467,6 +516,7 @@ __all__ = [
     "_FAT_ROUTE_HANDLER_THRESHOLD",
     "_IMPORT_BLOAT_THRESHOLD",
     "discover_libraries",
+    "ensure_runtime_config",
     "get_effective_config",
     "get_project_layout",
     "own_python_files",

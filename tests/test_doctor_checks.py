@@ -265,3 +265,55 @@ def test_build_json_payload_includes_effective_config(monkeypatch, tmp_path: Pat
     assert payload["schema_version"] == models_module.SCHEMA_VERSION
     assert payload["effective_config"]["architecture"]["enabled"] is True
     assert payload["project"]["app_module"] == "pkg.main:app"
+
+
+def test_get_project_layout_refreshes_when_env_changes(monkeypatch, tmp_path: Path) -> None:
+    first_repo = tmp_path / "first"
+    second_repo = tmp_path / "second"
+    for repo_root, title in ((first_repo, "first"), (second_repo, "second")):
+        package_dir = repo_root / "pkg"
+        _write(package_dir / "__init__.py", "")
+        _write(package_dir / "main.py", f"from fastapi import FastAPI\n\napp = FastAPI(title='{title}')\n")
+
+    module = _reload_doctor(monkeypatch, first_repo)
+    first_layout = module.get_project_layout()
+
+    assert first_layout.repo_root == first_repo
+    assert first_layout.app_module == "pkg.main:app"
+
+    monkeypatch.setenv("DOCTOR_REPO_ROOT", str(second_repo))
+    monkeypatch.delenv("DOCTOR_CODE_DIR", raising=False)
+    monkeypatch.delenv("DOCTOR_IMPORT_ROOT", raising=False)
+    monkeypatch.delenv("DOCTOR_APP_MODULE", raising=False)
+
+    second_layout = module.get_project_layout()
+
+    assert second_layout.repo_root == second_repo
+    assert second_layout.app_module == "pkg.main:app"
+
+
+def test_explicit_app_module_skips_repo_scan_and_infers_layout(monkeypatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "src" / "service"
+    _write(package_dir / "__init__.py", "")
+    _write(package_dir / "api.py", "from fastapi import FastAPI\n\ndef create_app() -> FastAPI:\n    return FastAPI()\n")
+
+    monkeypatch.setenv("DOCTOR_REPO_ROOT", str(tmp_path))
+    monkeypatch.setenv("DOCTOR_APP_MODULE", "service.api:create_app()")
+    monkeypatch.delenv("DOCTOR_CODE_DIR", raising=False)
+    monkeypatch.delenv("DOCTOR_IMPORT_ROOT", raising=False)
+
+    original_discover = project_module._discover_app_candidate
+
+    def _boom(repo_root: Path):  # type: ignore[unused-argument]
+        raise AssertionError("explicit app modules should not trigger repo-wide app discovery")
+
+    monkeypatch.setattr(project_module, "_discover_app_candidate", _boom)
+    try:
+        project = importlib.reload(project_module)
+        layout = project.get_project_layout()
+    finally:
+        monkeypatch.setattr(project_module, "_discover_app_candidate", original_discover)
+
+    assert layout.import_root == tmp_path / "src"
+    assert layout.code_dir == tmp_path / "src" / "service"
+    assert layout.app_module == "service.api:create_app()"
