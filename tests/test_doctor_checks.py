@@ -360,3 +360,126 @@ def test_passthrough_function_ignores_methods(monkeypatch, tmp_path: Path) -> No
     assert len(issues) == 1
     assert issues[0].check == "architecture/passthrough-function"
     assert issues[0].line == 5
+
+
+def test_alembic_target_metadata_check_requires_real_metadata(monkeypatch, tmp_path: Path) -> None:
+    _write(
+        tmp_path / "pyproject.toml",
+        (
+            "[project]\n"
+            "name = 'example'\n"
+            "version = '0.1.0'\n"
+            "dependencies = ['sqlalchemy', 'alembic']\n"
+        ),
+    )
+    _write(tmp_path / "app" / "__init__.py", "")
+    _write(
+        tmp_path / "app" / "models.py",
+        "from sqlalchemy.orm import DeclarativeBase\n\nclass Base(DeclarativeBase):\n    pass\n",
+    )
+    _write(
+        tmp_path / "alembic" / "env.py",
+        (
+            "from alembic import context\n\n"
+            "target_metadata = None\n\n"
+            "def run_migrations_online(connection):\n"
+            "    context.configure(connection=connection, target_metadata=target_metadata)\n"
+        ),
+    )
+
+    module = _reload_doctor(monkeypatch, tmp_path, code_dir="app")
+    report = module.run_python_doctor_checks(only_rules={"config/alembic", "config/sqlalchemy-naming-convention"})
+
+    assert [issue.check for issue in report.issues] == ["config/alembic-target-metadata"]
+    assert report.issues[0].path == "alembic/env.py"
+
+
+def test_alembic_best_practice_checks_flag_missing_hooks(monkeypatch, tmp_path: Path) -> None:
+    _write(
+        tmp_path / "pyproject.toml",
+        (
+            "[project]\n"
+            "name = 'example'\n"
+            "version = '0.1.0'\n"
+            "dependencies = ['sqlalchemy', 'alembic']\n"
+        ),
+    )
+    _write(tmp_path / "app" / "__init__.py", "")
+    _write(
+        tmp_path / "app" / "models.py",
+        (
+            "from sqlalchemy.orm import DeclarativeBase\n\n"
+            "class Base(DeclarativeBase):\n"
+            "    pass\n"
+        ),
+    )
+    _write(
+        tmp_path / "alembic" / "env.py",
+        (
+            "from alembic import context\n"
+            "from app.models import Base\n\n"
+            "target_metadata = Base.metadata\n\n"
+            "def run_migrations_online(connection):\n"
+            "    context.configure(connection=connection, target_metadata=target_metadata)\n"
+        ),
+    )
+
+    module = _reload_doctor(monkeypatch, tmp_path, code_dir="app")
+    report = module.run_python_doctor_checks(only_rules={"config/alembic", "config/sqlalchemy-naming-convention"})
+
+    assert {issue.check for issue in report.issues} == {
+        "config/alembic-autogenerate-scope",
+        "config/alembic-empty-autogen-revision",
+        "config/sqlalchemy-naming-convention",
+    }
+    assert all(issue.path == "alembic/env.py" for issue in report.issues)
+
+
+def test_alembic_best_practice_checks_accept_common_hooks(monkeypatch, tmp_path: Path) -> None:
+    _write(
+        tmp_path / "pyproject.toml",
+        (
+            "[project]\n"
+            "name = 'example'\n"
+            "version = '0.1.0'\n"
+            "dependencies = ['sqlalchemy', 'alembic']\n"
+        ),
+    )
+    _write(tmp_path / "app" / "__init__.py", "")
+    _write(
+        tmp_path / "app" / "models.py",
+        (
+            "from sqlalchemy import MetaData\n\n"
+            "NAMING_CONVENTION = {\n"
+            "    'ix': 'ix_%(column_0_label)s',\n"
+            "    'uq': 'uq_%(table_name)s_%(column_0_name)s',\n"
+            "    'pk': 'pk_%(table_name)s',\n"
+            "}\n\n"
+            "metadata = MetaData(naming_convention=NAMING_CONVENTION)\n"
+        ),
+    )
+    _write(
+        tmp_path / "alembic" / "env.py",
+        (
+            "from alembic import context\n"
+            "from app.models import metadata\n\n"
+            "target_metadata = metadata\n\n"
+            "def include_name(name, type_, parent_names):\n"
+            "    return True\n\n"
+            "def process_revision_directives(context, revision, directives):\n"
+            "    if directives:\n"
+            "        return\n\n"
+            "def run_migrations_online(connection):\n"
+            "    context.configure(\n"
+            "        connection=connection,\n"
+            "        target_metadata=target_metadata,\n"
+            "        include_name=include_name,\n"
+            "        process_revision_directives=process_revision_directives,\n"
+            "    )\n"
+        ),
+    )
+
+    module = _reload_doctor(monkeypatch, tmp_path, code_dir="app")
+    report = module.run_python_doctor_checks(only_rules={"config/alembic", "config/sqlalchemy-naming-convention"})
+
+    assert report.issues == []

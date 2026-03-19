@@ -22,7 +22,13 @@ from .checks.architecture import (
     check_print_statements,
     check_star_import,
 )
-from .checks.configuration import check_direct_env_access
+from .checks.configuration import (
+    check_alembic_autogenerate_scope,
+    check_alembic_empty_autogen_revision,
+    check_alembic_target_metadata,
+    check_direct_env_access,
+    check_sqlalchemy_naming_convention,
+)
 from .checks.correctness import (
     check_asyncio_run_in_async_context,
     check_avoid_os_path,
@@ -173,6 +179,14 @@ def run_python_doctor_checks(
         issues.extend(check_unsafe_yaml_load())
     if should_run("config/direct-env-access"):
         issues.extend(check_direct_env_access())
+    if libraries.alembic and should_run("config/alembic-target-metadata"):
+        issues.extend(check_alembic_target_metadata())
+    if libraries.alembic and should_run("config/alembic-autogenerate-scope"):
+        issues.extend(check_alembic_autogenerate_scope())
+    if libraries.alembic and should_run("config/alembic-empty-autogen-revision"):
+        issues.extend(check_alembic_empty_autogen_revision())
+    if libraries.alembic and should_run("config/sqlalchemy-naming-convention"):
+        issues.extend(check_sqlalchemy_naming_convention())
     if project.ARCHITECTURE_ENABLED and should_run("architecture/avoid-sys-exit"):
         issues.extend(check_avoid_sys_exit())
     # architecture/todo-in-production — removed: TODOs/FIXMEs are planning
