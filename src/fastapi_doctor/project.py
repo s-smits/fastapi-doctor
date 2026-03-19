@@ -99,7 +99,8 @@ _EXCLUDED_DISCOVERY_DIRS = frozenset(
         ".git", ".hg", ".svn", ".venv", "venv", "__pycache__",
         "node_modules", "dist", "build", ".mypy_cache", ".pytest_cache",
         ".ruff_cache", "docs", "frontend", "tests", "test", "scripts",
-        "migrations", "alembic",
+        "migrations", "alembic", "tmp", "vendor", "third_party", "lib",
+        "site-packages", "egg-info", "dist-info", "__pypackages__",
     }
 )
 _APP_FILE_BONUS = {"main.py": 40, "app.py": 35, "api.py": 25, "server.py": 20}
@@ -121,11 +122,23 @@ def _should_skip_path(path: Path, *, repo_root: Path) -> bool:
     return any(part in _EXCLUDED_DISCOVERY_DIRS or part.startswith(".") for part in rel_parts)
 
 def _iter_repo_python_files(repo_root: Path) -> list[Path]:
-    return sorted(
-        path
-        for path in repo_root.rglob("*.py")
-        if not _should_skip_path(path, repo_root=repo_root)
-    )
+    """Iterate Python files in the repo, skipping ignored directories early."""
+    results: list[Path] = []
+    
+    def _walk(current: Path):
+        try:
+            for child in current.iterdir():
+                if child.is_dir():
+                    if child.name in _EXCLUDED_DISCOVERY_DIRS or child.name.startswith("."):
+                        continue
+                    _walk(child)
+                elif child.suffix == ".py":
+                    results.append(child)
+        except PermissionError:
+            pass
+
+    _walk(repo_root)
+    return sorted(results)
 
 def _looks_like_fastapi_call(node: ast.AST | None) -> bool:
     if not isinstance(node, ast.Call):
