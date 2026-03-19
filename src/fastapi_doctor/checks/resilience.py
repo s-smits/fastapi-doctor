@@ -10,20 +10,17 @@ from ..models import DoctorIssue
 def check_bare_except_pass() -> list[DoctorIssue]:
     """except Exception: pass silently swallows errors — at minimum log them."""
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
+    for module in project.parsed_python_modules():
+        if "except" not in module.source:
             continue
-        for node in ast.walk(tree):
+        lines = module.source.splitlines()
+        for node in ast.walk(module.tree):
             if not isinstance(node, ast.ExceptHandler):
                 continue
             # Check if the handler body is just `pass` (or `pass` with a comment)
             if len(node.body) == 1 and isinstance(node.body[0], ast.Pass):
                 # Check if there's a comment justification on the same line
                 line_idx = node.lineno - 1
-                lines = source.splitlines()
                 has_comment = False
                 # Check the except line and the pass line for comments
                 for check_line in range(
@@ -38,7 +35,7 @@ def check_bare_except_pass() -> list[DoctorIssue]:
                             check="resilience/bare-except-pass",
                             severity="warning",
                             message="except: pass silently swallows errors without logging or comment",
-                            path=str(filepath.relative_to(project.REPO_ROOT)),
+                            path=module.rel_path,
                             category="Resilience",
                             help="Add logger.debug/warning or a # comment explaining why it's safe to ignore.",
                             line=node.lineno,
@@ -56,13 +53,11 @@ def check_reraise_without_context() -> list[DoctorIssue]:
     If you need cleanup, add context with ``raise NewError(...) from exc``.
     """
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
+    for module in project.parsed_python_modules():
+        if "except" not in module.source:
             continue
-        for node in ast.walk(tree):
+        lines = module.source.splitlines()
+        for node in ast.walk(module.tree):
             if not isinstance(node, ast.ExceptHandler):
                 continue
             if not node.body:
@@ -94,7 +89,6 @@ def check_reraise_without_context() -> list[DoctorIssue]:
             if has_useful_work:
                 continue
             # Check for noqa comment
-            lines = source.splitlines()
             if node.lineno <= len(lines) and "# noqa" in lines[node.lineno - 1]:
                 continue
             issues.append(
@@ -102,7 +96,7 @@ def check_reraise_without_context() -> list[DoctorIssue]:
                     check="resilience/reraise-without-context",
                     severity="warning",
                     message="except handler re-raises without adding context — remove the try/except or add info",
-                    path=str(filepath.relative_to(project.REPO_ROOT)),
+                    path=module.rel_path,
                     category="Resilience",
                     help="Either remove the try/except (it's noise) or use `raise NewError(...) from exc`.",
                     line=node.lineno,
@@ -123,15 +117,12 @@ def check_exception_swallowed_silently() -> list[DoctorIssue]:
     """
     _LOG_CALLS = {"logger", "logging", "log"}
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
+    for module in project.parsed_python_modules():
+        if "except" not in module.source:
             continue
-        lines = source.splitlines()
+        lines = module.source.splitlines()
 
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if not isinstance(node, ast.ExceptHandler):
                 continue
             # Only flag 'except Exception' (not bare except, which is caught elsewhere)
@@ -147,7 +138,6 @@ def check_exception_swallowed_silently() -> list[DoctorIssue]:
 
             # Check if exception variable is referenced in body
             exc_name = node.name  # e.g. 'e' in 'except Exception as e'
-            body_source = ast.dump(ast.Module(body=body, type_ignores=[]))
 
             has_logging = False
             has_raise = False
@@ -183,7 +173,7 @@ def check_exception_swallowed_silently() -> list[DoctorIssue]:
                         check="resilience/exception-swallowed",
                         severity="warning",
                         message="except Exception block swallows error without logging or re-raising",
-                        path=str(filepath.relative_to(project.REPO_ROOT)),
+                        path=module.rel_path,
                         category="Resilience",
                         help="Add logger.exception() or logger.warning(..., exc_info=True) to preserve debugging context.",
                         line=node.lineno,
@@ -199,15 +189,12 @@ def check_broad_except_no_context() -> list[DoctorIssue]:
     but actually discards the traceback.
     """
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
+    for module in project.parsed_python_modules():
+        if "except" not in module.source:
             continue
-        lines = source.splitlines()
+        lines = module.source.splitlines()
 
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if not isinstance(node, ast.ExceptHandler):
                 continue
             if not (isinstance(node.type, ast.Name) and node.type.id == "Exception"):
@@ -254,7 +241,7 @@ def check_broad_except_no_context() -> list[DoctorIssue]:
                             check="resilience/broad-except-no-context",
                             severity="warning",
                             message=f"except Exception logs via logger.{func.attr}() but discards traceback",
-                            path=str(filepath.relative_to(project.REPO_ROOT)),
+                            path=module.rel_path,
                             category="Resilience",
                             help="Add exc_info=True to the logging call or include the exception variable in the message.",
                             line=child.lineno,

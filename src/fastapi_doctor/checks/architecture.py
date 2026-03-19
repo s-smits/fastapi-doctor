@@ -54,15 +54,10 @@ def check_async_without_await() -> list[DoctorIssue]:
     router_dir = project.OWN_CODE_DIR / "routers"
     if not router_dir.is_dir():
         return issues
-    for filepath in sorted(router_dir.rglob("*.py")):
-        if "__pycache__" in str(filepath):
+    for module in project.parsed_python_modules():
+        if not module.path.is_relative_to(router_dir):
             continue
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
-            continue
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if not isinstance(node, ast.AsyncFunctionDef):
                 continue
             if node.name in project.ASYNC_ENDPOINT_NOAWAIT_EXCLUDE:
@@ -83,7 +78,7 @@ def check_async_without_await() -> list[DoctorIssue]:
                             check="architecture/async-without-await",
                             severity="warning",
                             message=f"async def '{node.name}' never awaits — use plain def to avoid blocking the event loop",
-                            path=str(filepath.relative_to(project.REPO_ROOT)),
+                            path=module.rel_path,
                             category="Architecture",
                             help="FastAPI runs plain def endpoints in a thread pool, which is safer for sync code.",
                             line=node.lineno,
@@ -96,6 +91,8 @@ def check_print_statements() -> list[DoctorIssue]:
     issues: list[DoctorIssue] = []
     exclude_dirs = {"scripts", "lib"}
     for module in project.parsed_python_modules():
+        if "print(" not in module.source:
+            continue
         parts = module.path.relative_to(project.OWN_CODE_DIR).parts
         if parts and parts[0] in exclude_dirs:
             continue
@@ -328,6 +325,8 @@ def check_passthrough_functions() -> list[DoctorIssue]:
 def check_avoid_sys_exit() -> list[DoctorIssue]:
     issues: list[DoctorIssue] = []
     for module in project.parsed_python_modules():
+        if "sys.exit" not in module.source and "exit(" not in module.source and "quit(" not in module.source:
+            continue
         if module.path.name in ("__main__.py", "cli.py") or "scripts/" in str(module.path):
             continue
         for node in ast.walk(module.tree):
@@ -360,6 +359,8 @@ def check_star_import() -> list[DoctorIssue]:
     """
     issues: list[DoctorIssue] = []
     for module in project.parsed_python_modules():
+        if "import *" not in module.source:
+            continue
         if module.path.name == "__init__.py":
             continue  # __init__.py re-exports are a common valid pattern
         rel_path = module.rel_path

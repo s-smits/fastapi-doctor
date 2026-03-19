@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from .. import project
@@ -44,6 +45,40 @@ def _parse_tree(filepath: Path) -> tuple[str, ast.AST] | None:
         return source, ast.parse(source)
     except Exception:
         return None
+
+
+@dataclass(slots=True)
+class _AlembicEnv:
+    filepath: Path
+    tree: ast.AST
+    bindings: dict[str, ast.AST]
+    configure_calls: list[ast.Call]
+
+
+_ALEMBIC_ENV_CACHE: tuple[Path, list[_AlembicEnv]] | None = None
+
+
+def _get_alembic_envs() -> list[_AlembicEnv]:
+    """Cached alembic env.py discovery, parsing, and analysis."""
+    global _ALEMBIC_ENV_CACHE
+    if _ALEMBIC_ENV_CACHE is not None and _ALEMBIC_ENV_CACHE[0] == project.REPO_ROOT:
+        return _ALEMBIC_ENV_CACHE[1]
+    result: list[_AlembicEnv] = []
+    for filepath in _iter_alembic_env_files():
+        parsed = _parse_tree(filepath)
+        if parsed is None:
+            continue
+        _, tree = parsed
+        bindings = _module_level_bindings(tree)
+        configure_calls = _find_configure_calls(tree)
+        result.append(_AlembicEnv(
+            filepath=filepath,
+            tree=tree,
+            bindings=bindings,
+            configure_calls=configure_calls,
+        ))
+    _ALEMBIC_ENV_CACHE = (project.REPO_ROOT, result)
+    return result
 
 
 def _is_configure_call(node: ast.AST) -> bool:
@@ -129,14 +164,11 @@ def check_direct_env_access() -> list[DoctorIssue]:
     # Patterns that are OK (setting defaults, not reading)
     ok_patterns = re.compile(r"os\.environ\.setdefault|os\.environ\[.+\]\s*=|os\.environ\.get\(.+,")
 
-    for filepath in project.own_python_files():
-        parts = filepath.relative_to(project.OWN_CODE_DIR).parts
+    for module in project.parsed_python_modules():
+        parts = module.path.relative_to(project.OWN_CODE_DIR).parts
         if not parts or parts[0] not in check_dirs:
             continue
-        try:
-            lines = filepath.read_text().splitlines()
-        except Exception:
-            continue
+        lines = module.source.splitlines()
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
             if "os.environ" in stripped and not ok_patterns.search(stripped):
@@ -149,7 +181,7 @@ def check_direct_env_access() -> list[DoctorIssue]:
                             check="config/direct-env-access",
                             severity="warning",
                             message="Direct os.environ access in service/router code — use settings object",
-                            path=str(filepath.relative_to(project.REPO_ROOT)),
+                            path=module.rel_path,
                             category="Config",
                             help="Read env vars in one config/settings module, then inject the typed setting where needed.",
                             line=i,
@@ -164,22 +196,16 @@ def check_alembic_target_metadata() -> list[DoctorIssue]:
         return []
 
     issues: list[DoctorIssue] = []
-    for filepath in _iter_alembic_env_files():
-        parsed = _parse_tree(filepath)
-        if parsed is None:
+    for env in _get_alembic_envs():
+        if env.configure_calls and any(_has_non_none_target_metadata(call, env.bindings) for call in env.configure_calls):
             continue
-        _, tree = parsed
-        bindings = _module_level_bindings(tree)
-        configure_calls = _find_configure_calls(tree)
-        if configure_calls and any(_has_non_none_target_metadata(call, bindings) for call in configure_calls):
-            continue
-        line = _configure_call_line(configure_calls[0]) if configure_calls else 1
+        line = _configure_call_line(env.configure_calls[0]) if env.configure_calls else 1
         issues.append(
             DoctorIssue(
                 check="config/alembic-target-metadata",
                 severity="warning",
                 message="Alembic env.py does not pass a real target_metadata object for autogenerate",
-                path=str(filepath.relative_to(project.REPO_ROOT)),
+                path=str(env.filepath.relative_to(project.REPO_ROOT)),
                 category="Config",
                 help="Import your SQLAlchemy or SQLModel metadata and pass it to context.configure(target_metadata=...).",
                 line=line,
@@ -194,26 +220,21 @@ def check_alembic_autogenerate_scope() -> list[DoctorIssue]:
         return []
 
     issues: list[DoctorIssue] = []
-    for filepath in _iter_alembic_env_files():
-        parsed = _parse_tree(filepath)
-        if parsed is None:
+    for env in _get_alembic_envs():
+        active_calls = [call for call in env.configure_calls if _has_non_none_target_metadata(call, env.bindings)]
+        if not active_calls:
             continue
-        _, tree = parsed
-        bindings = _module_level_bindings(tree)
-        configure_calls = [call for call in _find_configure_calls(tree) if _has_non_none_target_metadata(call, bindings)]
-        if not configure_calls:
-            continue
-        if any(_has_keyword(call, "include_name") or _has_keyword(call, "include_object") for call in configure_calls):
+        if any(_has_keyword(call, "include_name") or _has_keyword(call, "include_object") for call in active_calls):
             continue
         issues.append(
             DoctorIssue(
                 check="config/alembic-autogenerate-scope",
                 severity="warning",
                 message="Alembic autogenerate has no include_name/include_object filter for unmanaged schemas or tables",
-                path=str(filepath.relative_to(project.REPO_ROOT)),
+                path=str(env.filepath.relative_to(project.REPO_ROOT)),
                 category="Config",
                 help="Add include_name or include_object in env.py so autogenerate only considers metadata you actually own.",
-                line=_configure_call_line(configure_calls[0]),
+                line=_configure_call_line(active_calls[0]),
             )
         )
     return issues
@@ -225,26 +246,21 @@ def check_alembic_empty_autogen_revision() -> list[DoctorIssue]:
         return []
 
     issues: list[DoctorIssue] = []
-    for filepath in _iter_alembic_env_files():
-        parsed = _parse_tree(filepath)
-        if parsed is None:
+    for env in _get_alembic_envs():
+        active_calls = [call for call in env.configure_calls if _has_non_none_target_metadata(call, env.bindings)]
+        if not active_calls:
             continue
-        _, tree = parsed
-        bindings = _module_level_bindings(tree)
-        configure_calls = [call for call in _find_configure_calls(tree) if _has_non_none_target_metadata(call, bindings)]
-        if not configure_calls:
-            continue
-        if any(_has_keyword(call, "process_revision_directives") for call in configure_calls):
+        if any(_has_keyword(call, "process_revision_directives") for call in active_calls):
             continue
         issues.append(
             DoctorIssue(
                 check="config/alembic-empty-autogen-revision",
                 severity="warning",
                 message="Alembic autogenerate will still create empty revisions",
-                path=str(filepath.relative_to(project.REPO_ROOT)),
+                path=str(env.filepath.relative_to(project.REPO_ROOT)),
                 category="Config",
                 help="Wire process_revision_directives in env.py and drop empty autogenerated revisions before the file is written.",
-                line=_configure_call_line(configure_calls[0]),
+                line=_configure_call_line(active_calls[0]),
             )
         )
     return issues
@@ -258,24 +274,19 @@ def check_sqlalchemy_naming_convention() -> list[DoctorIssue]:
     if _has_naming_convention():
         return []
 
-    for filepath in _iter_alembic_env_files():
-        parsed = _parse_tree(filepath)
-        if parsed is None:
-            continue
-        _, tree = parsed
-        bindings = _module_level_bindings(tree)
-        configure_calls = [call for call in _find_configure_calls(tree) if _has_non_none_target_metadata(call, bindings)]
-        if not configure_calls:
+    for env in _get_alembic_envs():
+        active_calls = [call for call in env.configure_calls if _has_non_none_target_metadata(call, env.bindings)]
+        if not active_calls:
             continue
         return [
             DoctorIssue(
                 check="config/sqlalchemy-naming-convention",
                 severity="warning",
                 message="Alembic-managed metadata has no SQLAlchemy naming_convention",
-                path=str(filepath.relative_to(project.REPO_ROOT)),
+                path=str(env.filepath.relative_to(project.REPO_ROOT)),
                 category="Config",
                 help="Set MetaData(naming_convention=...) on your DeclarativeBase or SQLModel metadata so constraint names stay deterministic.",
-                line=_configure_call_line(configure_calls[0]),
+                line=_configure_call_line(active_calls[0]),
             )
         ]
     return []

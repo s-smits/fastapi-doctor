@@ -252,17 +252,11 @@ def check_fat_route_handlers() -> list[DoctorIssue]:
     if not router_dir.is_dir():
         return issues
 
-    for filepath in sorted(router_dir.rglob("*.py")):
-        if "__pycache__" in str(filepath):
+    for module in project.parsed_python_modules():
+        if not module.path.is_relative_to(router_dir):
             continue
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
-            continue
-        rel_path = str(filepath.relative_to(project.REPO_ROOT))
 
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
 
@@ -278,7 +272,7 @@ def check_fat_route_handlers() -> list[DoctorIssue]:
             func_len = (node.end_lineno or node.lineno) - node.lineno + 1
             if func_len > project._FAT_ROUTE_HANDLER_THRESHOLD:
                 # Check for # noqa: architecture
-                lines = source.splitlines()
+                lines = module.source.splitlines()
                 if node.lineno <= len(lines) and "# noqa: architecture" in lines[node.lineno - 1]:
                     continue
                 # Also check decorator lines
@@ -291,7 +285,7 @@ def check_fat_route_handlers() -> list[DoctorIssue]:
                         check="architecture/fat-route-handler",
                         severity="warning",
                         message=f"Route handler '{node.name}' is {func_len} lines — extract business logic to services/",
-                        path=rel_path,
+                        path=module.rel_path,
                         category="Architecture",
                         help=f"Keep handlers under {project._FAT_ROUTE_HANDLER_THRESHOLD} lines. Move logic to a service function.",
                         line=node.lineno,

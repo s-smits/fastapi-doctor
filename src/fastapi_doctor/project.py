@@ -45,6 +45,7 @@ _PROJECT_LAYOUT = ProjectLayout(
 )
 _CONFIG_SIGNATURE: tuple[str | None, str | None, str | None, str | None, str] | None = None
 _PARSED_MODULE_CACHE: tuple[tuple[str | None, str | None, str | None, str | None, str], list[ParsedModule]] | None = None
+_LIBRARY_INFO_CACHE: LibraryInfo | None = None
 
 def _load_doctor_config() -> dict[str, Any]:
     """Load .fastapi-doctor.yml from REPO_ROOT, with a fallback to .python-doctor.yml."""
@@ -173,7 +174,14 @@ def _discover_app_candidate(repo_root: Path) -> tuple[Path, str, str] | None:
     best: tuple[int, Path, str, str] | None = None
     for file_path in _iter_repo_python_files(repo_root):
         try:
-            tree = ast.parse(file_path.read_text())
+            source = file_path.read_text()
+        except Exception:
+            continue
+        # Quick text pre-filter: skip files that can't define a FastAPI app
+        if "FastAPI" not in source and not any(name in source for name in _APP_FACTORY_NAMES):
+            continue
+        try:
+            tree = ast.parse(source)
         except Exception:
             continue
 
@@ -322,7 +330,7 @@ def refresh_runtime_config() -> ProjectLayout:
     global _FAT_ROUTE_HANDLER_THRESHOLD, SHOULD_BE_MODEL_MODE
     global FORBIDDEN_WRITE_PARAMS, POST_CREATE_PREFIXES, TAG_REQUIRED_PREFIXES, SCAN_EXCLUDED_DIRS
 
-    global _CONFIG_SIGNATURE, _PARSED_MODULE_CACHE
+    global _CONFIG_SIGNATURE, _PARSED_MODULE_CACHE, _LIBRARY_INFO_CACHE
 
     layout = _discover_project_layout()
     REPO_ROOT = layout.repo_root
@@ -353,6 +361,7 @@ def refresh_runtime_config() -> ProjectLayout:
     SCAN_EXCLUDED_DIRS = frozenset(_SCAN_CONFIG.get("exclude_dirs", ["lib", "vendor", "vendored", "third_party"]))
     _CONFIG_SIGNATURE = _current_config_signature()
     _PARSED_MODULE_CACHE = None
+    _LIBRARY_INFO_CACHE = None
 
     return layout
 
@@ -425,7 +434,10 @@ class LibraryInfo:
 
 def discover_libraries() -> LibraryInfo:
     """Detect libraries from the target project, not the doctor's own environment."""
+    global _LIBRARY_INFO_CACHE
     ensure_runtime_config()
+    if _LIBRARY_INFO_CACHE is not None:
+        return _LIBRARY_INFO_CACHE
     info = LibraryInfo()
     search_paths = [
         REPO_ROOT / "pyproject.toml",
@@ -465,6 +477,7 @@ def discover_libraries() -> LibraryInfo:
             setattr(info, attr, True)
 
     if any(getattr(info, attr) for attr in keywords):
+        _LIBRARY_INFO_CACHE = info
         return info
 
     import_markers = {attr: False for attr in keywords}
@@ -490,6 +503,7 @@ def discover_libraries() -> LibraryInfo:
         if present:
             setattr(info, attr, True)
 
+    _LIBRARY_INFO_CACHE = info
     return info
 
 def own_python_files() -> list[Path]:

@@ -13,11 +13,10 @@ def check_unsafe_hash_usage() -> list[DoctorIssue]:
     issues: list[DoctorIssue] = []
     pattern = re.compile(r"\b(sha1|md5)\(.*\)\.hexdigest\(\)")
     safe_pattern = re.compile(r"usedforsecurity\s*=\s*False")
-    for filepath in project.own_python_files():
-        try:
-            lines = filepath.read_text().splitlines()
-        except Exception:
+    for module in project.parsed_python_modules():
+        if "sha1" not in module.source and "md5" not in module.source:
             continue
+        lines = module.source.splitlines()
         for i, line in enumerate(lines, 1):
             if pattern.search(line) and not safe_pattern.search(line) and "nosec" not in line:
                 issues.append(
@@ -25,7 +24,7 @@ def check_unsafe_hash_usage() -> list[DoctorIssue]:
                         check="security/weak-hash-without-flag",
                         severity="error",
                         message="SHA1/MD5 used without usedforsecurity=False",
-                        path=str(filepath.relative_to(project.REPO_ROOT)),
+                        path=module.rel_path,
                         category="Security",
                         help="Add usedforsecurity=False to signal this is not for security purposes.",
                         line=i,
@@ -36,11 +35,10 @@ def check_unsafe_hash_usage() -> list[DoctorIssue]:
 def check_unsafe_yaml_load() -> list[DoctorIssue]:
     """yaml.load() without SafeLoader/BaseLoader is arbitrary code execution."""
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            lines = filepath.read_text().splitlines()
-        except Exception:
+    for module in project.parsed_python_modules():
+        if "yaml.load(" not in module.source:
             continue
+        lines = module.source.splitlines()
         for i, line in enumerate(lines, 1):
             if "yaml.load(" in line and "nosec" not in line:
                 # Check it uses a safe loader
@@ -50,7 +48,7 @@ def check_unsafe_yaml_load() -> list[DoctorIssue]:
                             check="security/unsafe-yaml-load",
                             severity="error",
                             message="yaml.load() without SafeLoader/BaseLoader allows arbitrary code execution",
-                            path=str(filepath.relative_to(project.REPO_ROOT)),
+                            path=module.rel_path,
                             category="Security",
                             help="Use yaml.safe_load() or pass Loader=yaml.SafeLoader.",
                             line=i,
@@ -70,16 +68,12 @@ def check_sql_fstring_interpolation() -> list[DoctorIssue]:
     """
     _NOQA_SQL = re.compile(r"#\s*noqa\s*:\s*(sql-safe|security)", re.IGNORECASE)
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
+    for module in project.parsed_python_modules():
+        if "text(" not in module.source:
             continue
-        rel_path = str(filepath.relative_to(project.REPO_ROOT))
-        lines = source.splitlines()
+        lines = module.source.splitlines()
 
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
@@ -101,7 +95,7 @@ def check_sql_fstring_interpolation() -> list[DoctorIssue]:
                             check="security/sql-fstring-interpolation",
                             severity="error",
                             message="SQL injection risk: f-string used inside text() call",
-                            path=rel_path,
+                            path=module.rel_path,
                             category="Security",
                             help="Use text('... WHERE id = :id').bindparams(id=val). Suppress with '# noqa: sql-safe' if the interpolation is from trusted internal code.",
                             line=lineno,
@@ -113,15 +107,10 @@ def check_exception_detail_leak() -> list[DoctorIssue]:
     """Detect potential internal error leakage in exception details."""
     issues: list[DoctorIssue] = []
     # Simplified check for HTTPException(..., detail=str(exc))
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
+    for module in project.parsed_python_modules():
+        if "HTTPException" not in module.source:
             continue
-        rel_path = str(filepath.relative_to(project.REPO_ROOT))
-
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if not isinstance(node, ast.Call):
                 continue
 
@@ -144,7 +133,7 @@ def check_exception_detail_leak() -> list[DoctorIssue]:
                                     check="security/exception-detail-leak",
                                     severity="warning",
                                     message="Potential internal error leak in HTTPException detail",
-                                    path=rel_path,
+                                    path=module.rel_path,
                                     category="Security",
                                     help="Use a generic error message. Log the real exception with logger.exception().",
                                     line=node.lineno,
@@ -155,21 +144,18 @@ def check_exception_detail_leak() -> list[DoctorIssue]:
 
 def check_assert_in_production() -> list[DoctorIssue]:
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        if "tests/" in str(filepath):
+    for module in project.parsed_python_modules():
+        if "tests/" in str(module.path):
             continue
-        try:
-            tree = ast.parse(filepath.read_text())
-        except Exception:
+        if "assert " not in module.source and "assert(" not in module.source:
             continue
-            
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if isinstance(node, ast.Assert):
                 issues.append(DoctorIssue(
                     check="security/assert-in-production",
                     severity="error",
                     message="assert statement outside tests — use explicit exception raises",
-                    path=str(filepath.relative_to(project.REPO_ROOT)),
+                    path=module.rel_path,
                     category="Security",
                     help="Asserts are ignored when Python runs with -O. Raise ValueError or custom exceptions instead.",
                     line=node.lineno
@@ -178,13 +164,10 @@ def check_assert_in_production() -> list[DoctorIssue]:
 
 def check_shell_true() -> list[DoctorIssue]:
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            tree = ast.parse(filepath.read_text())
-        except Exception:
+    for module in project.parsed_python_modules():
+        if "subprocess" not in module.source:
             continue
-            
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Attribute) and node.func.attr in ("Popen", "run", "call", "check_call", "check_output"):
                     if isinstance(node.func.value, ast.Name) and node.func.value.id == "subprocess":
@@ -194,7 +177,7 @@ def check_shell_true() -> list[DoctorIssue]:
                                     check="security/subprocess-shell-true",
                                     severity="error",
                                     message="subprocess executed with shell=True — potential shell injection",
-                                    path=str(filepath.relative_to(project.REPO_ROOT)),
+                                    path=module.rel_path,
                                     category="Security",
                                     help="Pass arguments as a list and remove shell=True to avoid injection risks.",
                                     line=node.lineno
@@ -230,18 +213,12 @@ def check_hardcoded_secrets() -> list[DoctorIssue]:
     })
 
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        if "tests/" in str(filepath) or "test_" in filepath.name:
+    for module in project.parsed_python_modules():
+        if "tests/" in str(module.path) or "test_" in module.path.name:
             continue
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
-            continue
-        rel_path = str(filepath.relative_to(project.REPO_ROOT))
-        lines = source.splitlines()
+        lines = module.source.splitlines()
 
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if not isinstance(node, ast.Assign):
                 continue
             if not isinstance(node.value, ast.Constant) or not isinstance(node.value.value, str):
@@ -259,7 +236,7 @@ def check_hardcoded_secrets() -> list[DoctorIssue]:
                     check="security/hardcoded-secret",
                     severity="error",
                     message="Hardcoded secret detected — use environment variables or a secrets manager",
-                    path=rel_path,
+                    path=module.rel_path,
                     category="Security",
                     help="Move secrets to environment variables: os.environ['KEY'] or a secrets manager like AWS SM / Vault.",
                     line=node.lineno,
@@ -280,7 +257,7 @@ def check_hardcoded_secrets() -> list[DoctorIssue]:
                         check="security/hardcoded-secret",
                         severity="error",
                         message=f"Variable '{name}' looks like a secret with a hardcoded string value",
-                        path=rel_path,
+                        path=module.rel_path,
                         category="Security",
                         help="Move secrets to environment variables or a secrets manager. Never commit real credentials.",
                         line=node.lineno,
@@ -296,16 +273,12 @@ def check_cors_wildcard() -> list[DoctorIssue]:
     cookies or tokens. Specify explicit allowed origins instead.
     """
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
+    for module in project.parsed_python_modules():
+        if "CORSMiddleware" not in module.source:
             continue
-        rel_path = str(filepath.relative_to(project.REPO_ROOT))
-        lines = source.splitlines()
+        lines = module.source.splitlines()
 
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if not isinstance(node, ast.Call):
                 continue
             # Match: app.add_middleware(CORSMiddleware, allow_origins=["*"])
@@ -335,7 +308,7 @@ def check_cors_wildcard() -> list[DoctorIssue]:
                             check="security/cors-wildcard",
                             severity="warning",
                             message="CORSMiddleware with allow_origins=['*'] — any site can call your API",
-                            path=rel_path,
+                            path=module.rel_path,
                             category="Security",
                             help="Specify explicit allowed origins: allow_origins=['https://yourdomain.com']",
                             line=node.lineno,

@@ -72,6 +72,11 @@ dev = [
     { name = "pytest" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "fastapi", marker = "extra == 'dev'", specifier = ">=0.116.0" },
@@ -79,6 +84,9 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0.2" },
 ]
 provides-extras = ["dev"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=9.0.2" }]
 
 [[package]]
 name = "idna"

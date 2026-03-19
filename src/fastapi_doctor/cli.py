@@ -64,43 +64,47 @@ def main() -> int:
     pyright_passed = None
     bandit_high_count = None
 
+    # Build list of external tool jobs to run concurrently.
+    from concurrent.futures import ThreadPoolExecutor
+
+    tool_jobs: dict[str, tuple[str, list[str]]] = {}
     if not args.skip_ruff:
-        if not args.json and not args.score:
-            logger.dim("Running ruff...")
-        result = run_command("ruff", ["uv", "run", "ruff", "check", "."], cwd=repo_root)
-        command_results.append(result)
-        ruff_passed = result.passed
-        if not args.json and not args.score:
-            logger.break_line()
-
+        tool_jobs["ruff"] = ("ruff", ["uv", "run", "ruff", "check", "."])
     if not args.skip_pyright:
-        if not args.json and not args.score:
-            logger.dim("Running pyright...")
-        result = run_command("pyright", ["uv", "run", "pyright"], cwd=repo_root)
-        command_results.append(result)
-        pyright_passed = result.passed
-        if not args.json and not args.score:
-            logger.break_line()
-
+        tool_jobs["pyright"] = ("pyright", ["uv", "run", "pyright"])
     if args.with_bandit:
-        if not args.json and not args.score:
-            logger.dim("Running bandit...")
         bandit_cmd = ["uv", "run", "bandit", "-q", "-r", "."]
         if (repo_root / "pyproject.toml").exists():
             bandit_cmd.extend(["-c", "pyproject.toml"])
-        result = run_command("bandit", bandit_cmd, cwd=repo_root)
-        command_results.append(result)
-        bandit_high_count = count_bandit_highs(result.stdout)
-        if not args.json and not args.score:
-            logger.break_line()
-
+        tool_jobs["bandit"] = ("bandit", bandit_cmd)
     if args.with_tests:
-        if not args.json and not args.score:
-            logger.dim("Running pytest...")
-        command_results.append(
-            run_command("pytest", ["uv", "run", "pytest", *args.pytest_args.split()], cwd=repo_root)
-        )
-        if not args.json and not args.score:
+        tool_jobs["pytest"] = ("pytest", ["uv", "run", "pytest", *args.pytest_args.split()])
+
+    if tool_jobs:
+        quiet = args.json or args.score
+        if not quiet:
+            logger.dim(f"Running {', '.join(tool_jobs)}...")
+
+        tool_results: dict[str, CommandResult] = {}
+        with ThreadPoolExecutor(max_workers=len(tool_jobs)) as pool:
+            futures = {
+                key: pool.submit(run_command, name, cmd, cwd=repo_root)
+                for key, (name, cmd) in tool_jobs.items()
+            }
+            for key, future in futures.items():
+                tool_results[key] = future.result()
+
+        # Collect results in display order.
+        for key in ("ruff", "pyright", "bandit", "pytest"):
+            if key in tool_results:
+                command_results.append(tool_results[key])
+
+        ruff_passed = tool_results["ruff"].passed if "ruff" in tool_results else None
+        pyright_passed = tool_results["pyright"].passed if "pyright" in tool_results else None
+        if "bandit" in tool_results:
+            bandit_high_count = count_bandit_highs(tool_results["bandit"].stdout)
+
+        if not quiet:
             logger.break_line()
 
     doctor_report = None

@@ -25,15 +25,12 @@ def check_sync_io_in_async() -> list[DoctorIssue]:
     router_dir = project.OWN_CODE_DIR / "routers"
     if not router_dir.is_dir():
         return issues
-    for filepath in sorted(router_dir.rglob("*.py")):
-        if "__pycache__" in str(filepath):
+    for module in project.parsed_python_modules():
+        if not module.path.is_relative_to(router_dir):
             continue
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
+        if "async " not in module.source:
             continue
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if not isinstance(node, ast.AsyncFunctionDef):
                 continue
             for child in ast.walk(node):
@@ -48,7 +45,7 @@ def check_sync_io_in_async() -> list[DoctorIssue]:
                             check="correctness/sync-io-in-async",
                             severity="error",
                             message=f"Sync I/O call '{func.id}()' inside async handler '{node.name}' blocks the event loop",
-                            path=str(filepath.relative_to(project.REPO_ROOT)),
+                            path=module.rel_path,
                             category="Correctness",
                             help=sync_io_calls[func.id],
                             line=child.lineno,
@@ -63,7 +60,7 @@ def check_sync_io_in_async() -> list[DoctorIssue]:
                                     check="correctness/sync-io-in-async",
                                     severity="error",
                                     message=f"time.sleep() inside async handler '{node.name}' blocks the event loop",
-                                    path=str(filepath.relative_to(project.REPO_ROOT)),
+                                    path=module.rel_path,
                                     category="Correctness",
                                     help="Use asyncio.sleep() instead.",
                                     line=child.lineno,
@@ -75,7 +72,7 @@ def check_sync_io_in_async() -> list[DoctorIssue]:
                                     check="correctness/sync-io-in-async",
                                     severity="error",
                                     message=f"Sync HTTP call 'requests.{func.attr}()' inside async handler '{node.name}' blocks the event loop",
-                                    path=str(filepath.relative_to(project.REPO_ROOT)),
+                                    path=module.rel_path,
                                     category="Correctness",
                                     help="Use httpx.AsyncClient or aiohttp instead of the requests library.",
                                     line=child.lineno,
@@ -89,15 +86,10 @@ def check_naive_datetime() -> list[DoctorIssue]:
     Python 3.12+ deprecates naive datetimes. Use datetime.now(tz=UTC).
     """
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
+    for module in project.parsed_python_modules():
+        if "datetime" not in module.source:
             continue
-        rel_path = str(filepath.relative_to(project.REPO_ROOT))
-
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
@@ -118,7 +110,7 @@ def check_naive_datetime() -> list[DoctorIssue]:
                             check="correctness/naive-datetime",
                             severity="warning",
                             message="datetime.utcnow() is deprecated — use datetime.now(tz=UTC)",
-                            path=rel_path,
+                            path=module.rel_path,
                             category="Correctness",
                             help="from datetime import UTC; datetime.now(tz=UTC)",
                             line=node.lineno,
@@ -130,7 +122,7 @@ def check_naive_datetime() -> list[DoctorIssue]:
                             check="correctness/naive-datetime",
                             severity="warning",
                             message="datetime.now() without timezone — use datetime.now(tz=UTC)",
-                            path=rel_path,
+                            path=module.rel_path,
                             category="Correctness",
                             help="from datetime import UTC; datetime.now(tz=UTC)",
                             line=node.lineno,
@@ -141,20 +133,17 @@ def check_naive_datetime() -> list[DoctorIssue]:
 
 def check_avoid_os_path() -> list[DoctorIssue]:
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            tree = ast.parse(filepath.read_text())
-        except Exception:
+    for module in project.parsed_python_modules():
+        if "os.path" not in module.source:
             continue
-            
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if isinstance(node, ast.Attribute):
                 if isinstance(node.value, ast.Attribute) and getattr(node.value.value, "id", "") == "os" and node.value.attr == "path":
                     issues.append(DoctorIssue(
                         check="correctness/avoid-os-path",
                         severity="warning",
                         message=f"os.path.{node.attr} usage detected — prefer pathlib.Path",
-                        path=str(filepath.relative_to(project.REPO_ROOT)),
+                        path=module.rel_path,
                         category="Correctness",
                         help="pathlib offers a safer, more robust object-oriented API for paths.",
                         line=node.lineno
@@ -172,20 +161,18 @@ def check_asyncio_run_in_async_context() -> list[DoctorIssue]:
     Use ``await`` directly or ``asyncio.create_task()`` instead.
     """
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        if filepath.name in ("__main__.py", "cli.py") or "scripts/" in str(filepath):
+    for module in project.parsed_python_modules():
+        if "asyncio" not in module.source:
             continue
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
+        if module.path.name in ("__main__.py", "cli.py") or "scripts/" in str(module.path):
             continue
 
-        has_async_def = any(isinstance(n, ast.AsyncFunctionDef) for n in ast.walk(tree))
+        has_async_def = any(isinstance(n, ast.AsyncFunctionDef) for n in ast.walk(module.tree))
         if not has_async_def:
             continue
 
-        for node in ast.walk(tree):
+        lines = module.source.splitlines()
+        for node in ast.walk(module.tree):
             if isinstance(node, ast.Call):
                 func = node.func
                 if (isinstance(func, ast.Attribute)
@@ -193,14 +180,13 @@ def check_asyncio_run_in_async_context() -> list[DoctorIssue]:
                     and func.value.id == "asyncio"
                     and func.attr == "run"):
                     # Check noqa
-                    lines = source.splitlines()
                     if node.lineno <= len(lines) and "# noqa" in lines[node.lineno - 1]:
                         continue
                     issues.append(DoctorIssue(
                         check="correctness/asyncio-run-in-async",
                         severity="error",
                         message="asyncio.run() in a module with async functions — use await or create_task instead",
-                        path=str(filepath.relative_to(project.REPO_ROOT)),
+                        path=module.rel_path,
                         category="Correctness",
                         help="asyncio.run() creates a new loop and blocks. In async code, use 'await' directly.",
                         line=node.lineno,
@@ -216,19 +202,15 @@ def check_threading_lock_in_async() -> list[DoctorIssue]:
     a threading lock is intentionally needed (cross-thread sync).
     """
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
+    for module in project.parsed_python_modules():
+        if "Lock" not in module.source:
             continue
-
-        has_async_def = any(isinstance(n, ast.AsyncFunctionDef) for n in ast.walk(tree))
+        has_async_def = any(isinstance(n, ast.AsyncFunctionDef) for n in ast.walk(module.tree))
         if not has_async_def:
             continue
 
-        lines = source.splitlines()
-        for node in ast.walk(tree):
+        lines = module.source.splitlines()
+        for node in ast.walk(module.tree):
             if isinstance(node, ast.Call):
                 func = node.func
                 is_threading_lock = False
@@ -240,7 +222,7 @@ def check_threading_lock_in_async() -> list[DoctorIssue]:
                     is_threading_lock = True
                 # Lock() after 'from threading import Lock'
                 elif isinstance(func, ast.Name) and func.id == "Lock":
-                    for imp_node in ast.walk(tree):
+                    for imp_node in ast.walk(module.tree):
                         if (isinstance(imp_node, ast.ImportFrom)
                             and imp_node.module == "threading"
                             and any(a.name == "Lock" for a in imp_node.names)):
@@ -253,7 +235,7 @@ def check_threading_lock_in_async() -> list[DoctorIssue]:
                         check="correctness/threading-lock-in-async",
                         severity="warning",
                         message="threading.Lock() in async module — blocks event loop; use asyncio.Lock()",
-                        path=str(filepath.relative_to(project.REPO_ROOT)),
+                        path=module.rel_path,
                         category="Correctness",
                         help="threading.Lock blocks the event loop. Use asyncio.Lock for async code, or add '# noqa' if cross-thread sync is intentional.",
                         line=node.lineno,
@@ -270,16 +252,12 @@ def check_deprecated_typing_imports() -> list[DoctorIssue]:
     """
     _DEPRECATED = frozenset({"List", "Dict", "Tuple", "Set", "FrozenSet", "Type", "Optional", "Union"})
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
+    for module in project.parsed_python_modules():
+        if "from typing import" not in module.source:
             continue
-        rel_path = str(filepath.relative_to(project.REPO_ROOT))
-        lines = source.splitlines()
+        lines = module.source.splitlines()
 
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if isinstance(node, ast.ImportFrom) and node.module == "typing":
                 deprecated_names = [a.name for a in node.names if a.name in _DEPRECATED]
                 if deprecated_names:
@@ -289,7 +267,7 @@ def check_deprecated_typing_imports() -> list[DoctorIssue]:
                         check="correctness/deprecated-typing-imports",
                         severity="warning",
                         message=f"Deprecated typing imports: {', '.join(deprecated_names)} — use builtins",
-                        path=rel_path,
+                        path=module.rel_path,
                         category="Correctness",
                         help="Use list, dict, tuple, set, X | None directly. Add 'from __future__ import annotations' for 3.7+ compat.",
                         line=node.lineno,
@@ -305,16 +283,10 @@ def check_mutable_default_arg() -> list[DoctorIssue]:
     Use ``None`` as default and create the mutable inside the function body.
     """
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
-            continue
-        rel_path = str(filepath.relative_to(project.REPO_ROOT))
-        lines = source.splitlines()
+    for module in project.parsed_python_modules():
+        lines = module.source.splitlines()
 
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             for default in node.args.defaults + node.args.kw_defaults:
@@ -338,7 +310,7 @@ def check_mutable_default_arg() -> list[DoctorIssue]:
                         check="correctness/mutable-default-arg",
                         severity="error",
                         message=f"Mutable default argument in {node.name}() — shared across calls",
-                        path=rel_path,
+                        path=module.rel_path,
                         category="Correctness",
                         help="Use None as default: def foo(items=None): items = items or []",
                         line=default.lineno,
@@ -353,16 +325,12 @@ def check_return_in_finally() -> list[DoctorIssue]:
     because the exception vanishes without a trace.
     """
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
+    for module in project.parsed_python_modules():
+        if "finally" not in module.source:
             continue
-        rel_path = str(filepath.relative_to(project.REPO_ROOT))
-        lines = source.splitlines()
+        lines = module.source.splitlines()
 
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if not isinstance(node, ast.Try):
                 continue
             for finally_stmt in node.finalbody:
@@ -374,7 +342,7 @@ def check_return_in_finally() -> list[DoctorIssue]:
                             check="correctness/return-in-finally",
                             severity="error",
                             message="return inside finally block — silently swallows exceptions",
-                            path=rel_path,
+                            path=module.rel_path,
                             category="Correctness",
                             help="Move the return outside the finally block. finally should only do cleanup.",
                             line=child.lineno,
@@ -390,14 +358,8 @@ def check_unreachable_code() -> list[DoctorIssue]:
     """
     _TERMINAL = (ast.Return, ast.Raise, ast.Break, ast.Continue)
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
-            continue
-        rel_path = str(filepath.relative_to(project.REPO_ROOT))
-        lines = source.splitlines()
+    for module in project.parsed_python_modules():
+        lines = module.source.splitlines()
 
         def _check_block(stmts: list[ast.stmt]) -> None:
             for i, stmt in enumerate(stmts):
@@ -412,14 +374,14 @@ def check_unreachable_code() -> list[DoctorIssue]:
                         check="correctness/unreachable-code",
                         severity="warning",
                         message=f"Unreachable code after {type(stmt).__name__.lower()} statement",
-                        path=rel_path,
+                        path=module.rel_path,
                         category="Correctness",
                         help="This code never executes. Remove it or fix the control flow logic.",
                         line=next_stmt.lineno,
                     ))
                     break  # Only flag the first unreachable statement per block
 
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 _check_block(node.body)
             elif isinstance(node, (ast.If, ast.For, ast.While, ast.With, ast.AsyncWith, ast.AsyncFor)):
@@ -468,19 +430,13 @@ def check_get_with_side_effect() -> list[DoctorIssue]:
             return False
         return sql_text.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "ALTER", "DROP", "CREATE", "TRUNCATE"))
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        if "routers/" not in str(filepath) and "routes/" not in str(filepath) and "api/" not in str(filepath):
+    for module in project.parsed_python_modules():
+        if "routers/" not in module.rel_path and "routes/" not in module.rel_path and "api/" not in module.rel_path:
             continue
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
-            continue
-        rel_path = str(filepath.relative_to(project.REPO_ROOT))
-        lines = source.splitlines()
+        lines = module.source.splitlines()
 
         # Find functions decorated with @router.get or @app.get
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             is_get = False
@@ -503,7 +459,7 @@ def check_get_with_side_effect() -> list[DoctorIssue]:
                             check="correctness/get-with-side-effect",
                             severity="warning",
                             message=f"GET endpoint {node.name}() calls .{child.func.attr}() — violates REST semantics",
-                            path=rel_path,
+                            path=module.rel_path,
                             category="Correctness",
                             help="GET must be safe/idempotent. Move mutations to POST/PUT/DELETE endpoints.",
                             line=child.lineno,

@@ -101,6 +101,8 @@ def check_sequential_awaits() -> list[DoctorIssue]:
 
     issues: list[DoctorIssue] = []
     for module in project.parsed_python_modules():
+        if "await " not in module.source:
+            continue
         lines = module.source.splitlines()
 
         for node in ast.walk(module.tree):
@@ -165,6 +167,8 @@ def check_regex_in_loop() -> list[DoctorIssue]:
     _RE_FUNCS = frozenset({"compile", "match", "search", "findall", "fullmatch", "sub", "split"})
     issues: list[DoctorIssue] = []
     for module in project.parsed_python_modules():
+        if "re." not in module.source:
+            continue
         lines = module.source.splitlines()
 
         # Walk AST, tracking loop depth
@@ -222,6 +226,8 @@ def check_n_plus_one_hint() -> list[DoctorIssue]:
     _DB_ATTRS = frozenset({"query", "execute", "get", "filter", "filter_by", "all", "first", "one", "scalars", "scalar"})
     issues: list[DoctorIssue] = []
     for module in project.parsed_python_modules():
+        if not any(hint in module.source.lower() for hint in ("session", "db", "database", "conn", "connection", "cursor")):
+            continue
         lines = module.source.splitlines()
 
         class _LoopDBVisitor(ast.NodeVisitor):

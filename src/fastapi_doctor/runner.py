@@ -89,6 +89,8 @@ def run_python_doctor_checks(
     """Run all opinionated checks and compute a health score."""
     project.refresh_runtime_config()
     libraries = project.discover_libraries()
+    # Pre-warm the parsed modules cache — all static checks share this.
+    project.parsed_python_modules()
     issues: list[DoctorIssue] = []
 
     route_count = 0

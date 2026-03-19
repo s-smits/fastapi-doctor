@@ -121,15 +121,10 @@ def check_should_be_pydantic_model() -> list[DoctorIssue]:
     # ── Main detection loop ──────────────────────────────────────────────────
     issues: list[DoctorIssue] = []
     own_module_name = Path(__file__).stem
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
-            continue
-        rel_path = str(filepath.relative_to(project.REPO_ROOT))
+    for module in project.parsed_python_modules():
+        rel_path = module.rel_path
         # Skip our own checks module
-        if filepath.stem == own_module_name:
+        if module.path.stem == own_module_name:
             continue
 
         at_boundary = _is_api_boundary(rel_path)
@@ -137,15 +132,19 @@ def check_should_be_pydantic_model() -> list[DoctorIssue]:
 
         # Collect classes inside TYPE_CHECKING blocks
         in_type_checking_names: set[str] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.If):
-                test = node.test
-                if isinstance(test, ast.Name) and test.id == "TYPE_CHECKING":
-                    for child in ast.walk(node):
-                        if isinstance(child, ast.ClassDef):
-                            in_type_checking_names.add(child.name)
+        if "TYPE_CHECKING" in module.source:
+            for node in ast.walk(module.tree):
+                if isinstance(node, ast.If):
+                    test = node.test
+                    if isinstance(test, ast.Name) and test.id == "TYPE_CHECKING":
+                        for child in ast.walk(node):
+                            if isinstance(child, ast.ClassDef):
+                                in_type_checking_names.add(child.name)
 
-        for node in ast.walk(tree):
+        if not any(kw in module.source for kw in ("class ", "@dataclass", "return {")):
+            continue
+
+        for node in ast.walk(module.tree):
             if not isinstance(node, ast.ClassDef):
                 continue
             if node.name in in_type_checking_names:
@@ -279,7 +278,7 @@ def check_should_be_pydantic_model() -> list[DoctorIssue]:
         _SERIALIZER_METHOD_NAMES = frozenset(
             {"to_dict", "to_payload", "as_dict", "serialize"}
         )
-        for node in ast.walk(tree):
+        for node in ast.walk(module.tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             # Skip private/internal functions
@@ -327,11 +326,10 @@ def check_deprecated_validators() -> list[DoctorIssue]:
     issues: list[DoctorIssue] = []
     # Match @validator(...) but not @field_validator(...)
     pattern = re.compile(r"@validator\(")
-    for filepath in project.own_python_files():
-        try:
-            lines = filepath.read_text().splitlines()
-        except Exception:
+    for module in project.parsed_python_modules():
+        if "@validator" not in module.source:
             continue
+        lines = module.source.splitlines()
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
             if pattern.search(stripped):
@@ -340,7 +338,7 @@ def check_deprecated_validators() -> list[DoctorIssue]:
                         check="pydantic/deprecated-validator",
                         severity="error",
                         message="@validator is deprecated (Pydantic v1) — use @field_validator",
-                        path=str(filepath.relative_to(project.REPO_ROOT)),
+                        path=module.rel_path,
                         category="Pydantic",
                         help="Replace @validator('field', pre=True) with @field_validator('field', mode='before').",
                         line=i,
@@ -352,14 +350,11 @@ def check_mutable_model_defaults() -> list[DoctorIssue]:
     """Pydantic models with bare mutable defaults (list, dict, set) cause shared-state bugs."""
     issues: list[DoctorIssue] = []
     mutable_defaults = re.compile(r":\s*(?:list|dict|set)\s*(?:\[.*?\])?\s*=\s*(?:\[\]|\{\}|set\(\))")
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-            lines = source.splitlines()
-        except Exception:
+    for module in project.parsed_python_modules():
+        if not any(kw in module.source for kw in ("BaseModel", "list", "dict", "set")):
             continue
-        for node in ast.walk(tree):
+        lines = module.source.splitlines()
+        for node in ast.walk(module.tree):
             if not isinstance(node, ast.ClassDef):
                 continue
             is_model = any(
@@ -378,7 +373,7 @@ def check_mutable_model_defaults() -> list[DoctorIssue]:
                                 check="pydantic/mutable-default",
                                 severity="error",
                                 message=f"Mutable default in model '{node.name}' — use Field(default_factory=...)",
-                                path=str(filepath.relative_to(project.REPO_ROOT)),
+                                path=module.rel_path,
                                 category="Pydantic",
                                 help="Replace `field: list[X] = []` with `field: list[X] = Field(default_factory=list)`.",
                                 line=stmt.lineno,
@@ -396,15 +391,13 @@ def check_extra_allow_on_request_models() -> list[DoctorIssue]:
     issues: list[DoctorIssue] = []
     # Only check router/interface code where request models live
     check_dirs = {"routers", "interfaces"}
-    for filepath in project.own_python_files():
-        parts = filepath.relative_to(project.OWN_CODE_DIR).parts
+    for module in project.parsed_python_modules():
+        if 'extra="allow"' not in module.source and "extra='allow'" not in module.source:
+            continue
+        parts = module.path.relative_to(project.OWN_CODE_DIR).parts
         if not parts or parts[0] not in check_dirs:
             continue
-        try:
-            source = filepath.read_text()
-            lines = source.splitlines()
-        except Exception:
-            continue
+        lines = module.source.splitlines()
         for i, line in enumerate(lines, 1):
             if 'extra="allow"' in line or "extra='allow'" in line:
                 issues.append(
@@ -412,7 +405,7 @@ def check_extra_allow_on_request_models() -> list[DoctorIssue]:
                         check="pydantic/extra-allow-on-request",
                         severity="warning",
                         message="Model in request path uses extra='allow' — accepts arbitrary user input",
-                        path=str(filepath.relative_to(project.REPO_ROOT)),
+                        path=module.rel_path,
                         category="Pydantic",
                         help="Use extra='ignore' (drop unknown fields) or extra='forbid' (reject them).",
                         line=i,
