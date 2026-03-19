@@ -54,6 +54,15 @@ def check_sequential_awaits() -> list[DoctorIssue]:
                     names.add(child.id)
         return names
 
+    # Variable names that indicate a stateful DB session/connection.
+    # SQLAlchemy's AsyncSession (and most DB drivers) cannot run concurrent
+    # queries on the same session — asyncio.gather() would cause race conditions.
+    # See: https://docs.sqlalchemy.org/en/20/orm/extensions/asyncio.html
+    _session_hints = frozenset({
+        "session", "db", "database", "conn", "connection", "cursor",
+        "async_session", "db_session",
+    })
+
     def looks_parallelisable(call: ast.Call) -> bool:
         func = call.func
         if isinstance(func, ast.Attribute):
@@ -66,17 +75,35 @@ def check_sequential_awaits() -> list[DoctorIssue]:
                 return False
         return True
 
-    issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
-            continue
-        rel_path = str(filepath.relative_to(project.REPO_ROOT))
-        lines = source.splitlines()
+    def _shared_session_arg(call: ast.Call) -> str | None:
+        """Return the session-like variable name if the call is bound to one.
 
-        for node in ast.walk(tree):
+        Detects two patterns:
+        - Method call: ``session.execute(...)`` → returns "session"
+        - Function call with session first arg: ``helper(session, ...)`` → returns "session"
+        """
+        func = call.func
+        # Method call on a session object: session.execute(...)
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+            if func.value.id.lower() in _session_hints:
+                return func.value.id
+        # Function call with session as first positional arg: helper(session, ...)
+        if call.args:
+            first = call.args[0]
+            if isinstance(first, ast.Name) and first.id.lower() in _session_hints:
+                return first.id
+        return None
+
+    def _all_share_session(run_calls: list[ast.Call]) -> bool:
+        """True when every call in the run operates on the same session variable."""
+        names = [_shared_session_arg(c) for c in run_calls]
+        return bool(names) and all(n == names[0] and n is not None for n in names)
+
+    issues: list[DoctorIssue] = []
+    for module in project.parsed_python_modules():
+        lines = module.source.splitlines()
+
+        for node in ast.walk(module.tree):
             if not isinstance(node, ast.AsyncFunctionDef):
                 continue
             body = node.body
@@ -110,11 +137,17 @@ def check_sequential_awaits() -> list[DoctorIssue]:
                     if lineno <= len(lines) and "# noqa" in lines[lineno - 1]:
                         i = run_start + len(run)
                         continue
+                    # Skip when all calls share the same DB session — they
+                    # can't be gathered (AsyncSession is not concurrency-safe).
+                    run_calls = [await_call(s) for s in run]
+                    if all(c is not None for c in run_calls) and _all_share_session(run_calls):  # type: ignore[arg-type]
+                        i = run_start + len(run)
+                        continue
                     issues.append(DoctorIssue(
                         check="performance/sequential-awaits",
                         severity="warning",
                         message=f"{len(run)} sequential awaits in {node.name}() could use asyncio.gather()",
-                        path=rel_path,
+                        path=module.rel_path,
                         category="Performance",
                         help="Independent awaits can run concurrently: results = await asyncio.gather(coro1(), coro2())",
                         line=lineno,
@@ -131,14 +164,8 @@ def check_regex_in_loop() -> list[DoctorIssue]:
     """
     _RE_FUNCS = frozenset({"compile", "match", "search", "findall", "fullmatch", "sub", "split"})
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
-            continue
-        rel_path = str(filepath.relative_to(project.REPO_ROOT))
-        lines = source.splitlines()
+    for module in project.parsed_python_modules():
+        lines = module.source.splitlines()
 
         # Walk AST, tracking loop depth
         class _LoopVisitor(ast.NodeVisitor):
@@ -175,14 +202,14 @@ def check_regex_in_loop() -> list[DoctorIssue]:
                                 check="performance/regex-in-loop",
                                 severity="warning",
                                 message=f"re.{func.attr}() with literal pattern inside loop — hoist to module level",
-                                path=rel_path,
+                                path=module.rel_path,
                                 category="Performance",
                                 help="Compile regex patterns outside loops: PATTERN = re.compile('...') at module level.",
                                 line=node.lineno,
                             ))
                 self.generic_visit(node)
 
-        _LoopVisitor().visit(tree)
+        _LoopVisitor().visit(module.tree)
     return issues
 
 def check_n_plus_one_hint() -> list[DoctorIssue]:
@@ -194,14 +221,8 @@ def check_n_plus_one_hint() -> list[DoctorIssue]:
     """
     _DB_ATTRS = frozenset({"query", "execute", "get", "filter", "filter_by", "all", "first", "one", "scalars", "scalar"})
     issues: list[DoctorIssue] = []
-    for filepath in project.own_python_files():
-        try:
-            source = filepath.read_text()
-            tree = ast.parse(source)
-        except Exception:
-            continue
-        rel_path = str(filepath.relative_to(project.REPO_ROOT))
-        lines = source.splitlines()
+    for module in project.parsed_python_modules():
+        lines = module.source.splitlines()
 
         class _LoopDBVisitor(ast.NodeVisitor):
             def __init__(self) -> None:
@@ -255,14 +276,14 @@ def check_n_plus_one_hint() -> list[DoctorIssue]:
                                     check="performance/n-plus-one-hint",
                                     severity="warning",
                                     message=f"Potential N+1: {obj.id}.{func.attr}() inside loop — batch with IN clause or join",
-                                    path=rel_path,
+                                    path=module.rel_path,
                                     category="Performance",
                                     help="Collect IDs first, then query in batch: session.query(M).filter(M.id.in_(ids))",
                                     line=node.lineno,
                                 ))
                 self.generic_visit(node)
 
-        _LoopDBVisitor().visit(tree)
+        _LoopDBVisitor().visit(module.tree)
     return issues
 
 
