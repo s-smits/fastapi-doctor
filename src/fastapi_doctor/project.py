@@ -122,22 +122,25 @@ def _should_skip_path(path: Path, *, repo_root: Path) -> bool:
     return any(part in _EXCLUDED_DISCOVERY_DIRS or part.startswith(".") for part in rel_parts)
 
 def _iter_repo_python_files(repo_root: Path) -> list[Path]:
-    """Iterate Python files in the repo, skipping ignored directories early."""
+    """Iterate Python files in the repo, using os.scandir for speed."""
+    repo_root_str = str(repo_root)
     results: list[Path] = []
     
-    def _walk(current: Path):
+    def _walk(current_path: str):
         try:
-            for child in current.iterdir():
-                if child.is_dir():
-                    if child.name in _EXCLUDED_DISCOVERY_DIRS or child.name.startswith("."):
-                        continue
-                    _walk(child)
-                elif child.suffix == ".py":
-                    results.append(child)
-        except PermissionError:
+            with os.scandir(current_path) as entries:
+                for entry in entries:
+                    if entry.is_dir(follow_symlinks=False):
+                        name = entry.name
+                        if name in _EXCLUDED_DISCOVERY_DIRS or name.startswith("."):
+                            continue
+                        _walk(entry.path)
+                    elif entry.is_file(follow_symlinks=False) and entry.name.endswith(".py"):
+                        results.append(Path(entry.path))
+        except (PermissionError, OSError):
             pass
 
-    _walk(repo_root)
+    _walk(repo_root_str)
     return sorted(results)
 
 def _looks_like_fastapi_call(node: ast.AST | None) -> bool:
