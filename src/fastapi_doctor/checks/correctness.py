@@ -468,14 +468,137 @@ def check_get_with_side_effect() -> list[DoctorIssue]:
     return issues
 
 
+def check_serverless_filesystem_writes() -> list[DoctorIssue]:
+    """Detect local filesystem writes that fail in serverless environments.
+
+    Most serverless platforms (Vercel, AWS Lambda) have a read-only filesystem,
+    except for the /tmp directory. Writing to other paths will raise OSError.
+    """
+    issues: list[DoctorIssue] = []
+    # Patterns that indicate a write operation
+    write_methods = {"write_text", "write_bytes", "mkdir", "touch", "rename", "replace"}
+
+    for module in project.parsed_python_modules():
+        # Skip scripts and tests as they usually run in mutable environments
+        if any(p in module.rel_path for p in ("scripts/", "tests/")):
+            continue
+
+        for node in ast.walk(module.tree):
+            is_write = False
+            path_val = None
+
+            if isinstance(node, ast.Call):
+                func = node.func
+                # Case 1: open(path, "w") or open(path, "wb")
+                if isinstance(func, ast.Name) and func.id == "open":
+                    mode_idx = 1
+                    if len(node.args) > mode_idx:
+                        mode_arg = node.args[mode_idx]
+                        if isinstance(mode_arg, ast.Constant) and any(
+                            m in str(mode_arg.value) for m in ("w", "a", "x")
+                        ):
+                            is_write = True
+                            if len(node.args) > 0:
+                                path_val = node.args[0]
+                    for kw in node.keywords:
+                        if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+                            if any(m in str(kw.value.value) for m in ("w", "a", "x")):
+                                is_write = True
+                                if len(node.args) > 0:
+                                    path_val = node.args[0]
+
+                # Case 2: Path("...").write_text()
+                elif isinstance(func, ast.Attribute) and func.attr in write_methods:
+                    is_write = True
+                    path_val = func.value
+
+            if is_write:
+                # Heuristic: try to see if the path is obviously safe (/tmp or tempfile)
+                safe = False
+                if path_val:
+                    path_str = ""
+                    if isinstance(path_val, ast.Constant):
+                        path_str = str(path_val.value)
+                    elif isinstance(path_val, ast.JoinedStr):
+                        # Simple f-string check for /tmp
+                        path_str = ast.dump(path_val)
+
+                    if "/tmp" in path_str or "tempfile" in path_str.lower():
+                        safe = True
+
+                if not safe:
+                    issues.append(
+                        DoctorIssue(
+                            check="correctness/serverless-filesystem-write",
+                            severity="warning",
+                            message="Potential filesystem write outside /tmp — will fail in serverless environments",
+                            path=module.rel_path,
+                            category="Correctness",
+                            help="Use /tmp for temporary storage or an external object store (S3/GCS) for persistence.",
+                            line=node.lineno,
+                        )
+                    )
+    return issues
+
+
+def check_missing_http_timeouts() -> list[DoctorIssue]:
+    """Detect HTTP client calls (httpx, requests) missing a timeout.
+
+    In serverless environments, hanging HTTP requests can lead to function timeouts
+     and unexpected costs. Always specify a timeout.
+    """
+    issues: list[DoctorIssue] = []
+    http_libs = {"requests", "httpx"}
+    http_methods = {"get", "post", "put", "patch", "delete", "head", "request"}
+
+    for module in project.parsed_python_modules():
+        if not any(lib in module.source for lib in http_libs):
+            continue
+
+        for node in ast.walk(module.tree):
+            if not isinstance(node, ast.Call):
+                continue
+
+            is_http_call = False
+            func = node.func
+
+            # requests.get() or httpx.get()
+            if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                if func.value.id in http_libs and func.attr in http_methods:
+                    is_http_call = True
+            # Client.get() where Client is httpx.Client or httpx.AsyncClient
+            elif isinstance(func, ast.Attribute) and func.attr in http_methods:
+                # Heuristic: if we see 'client' in the variable name or it's a common pattern
+                if "client" in str(ast.dump(func.value)).lower():
+                    is_http_call = True
+
+            if is_http_call:
+                has_timeout = any(kw.arg == "timeout" for kw in node.keywords)
+                if not has_timeout:
+                    issues.append(
+                        DoctorIssue(
+                            check="correctness/missing-http-timeout",
+                            severity="warning",
+                            message=f"HTTP call '{module.source.splitlines()[node.lineno-1].strip()}' missing timeout",
+                            path=module.rel_path,
+                            category="Correctness",
+                            help="Always specify a timeout for HTTP calls to avoid hanging requests.",
+                            line=node.lineno,
+                        )
+                    )
+    return issues
+
+
 __all__ = [
     "check_asyncio_run_in_async_context",
     "check_avoid_os_path",
     "check_deprecated_typing_imports",
     "check_get_with_side_effect",
+    "check_missing_http_timeouts",
     "check_mutable_default_arg",
     "check_naive_datetime",
     "check_return_in_finally",
+    "check_serverless_filesystem_writes",
     "check_sync_io_in_async",
     "check_threading_lock_in_async",
     "check_unreachable_code",

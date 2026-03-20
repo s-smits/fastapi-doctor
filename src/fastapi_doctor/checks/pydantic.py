@@ -414,9 +414,59 @@ def check_extra_allow_on_request_models() -> list[DoctorIssue]:
     return issues
 
 
+def check_sensitive_fields_in_models() -> list[DoctorIssue]:
+    """Detect sensitive fields in Pydantic models that aren't using SecretStr.
+
+    Fields like api_key, password, token, and secret should use Pydantic's
+    SecretStr type to prevent accidental leakage in logs or JSON responses.
+    """
+    sensitive_names = re.compile(
+        r"(?:api_?key|password|secret|auth_?token|credential|private_?key)",
+        re.IGNORECASE,
+    )
+    issues: list[DoctorIssue] = []
+
+    for module in project.parsed_python_modules():
+        if "BaseModel" not in module.source:
+            continue
+
+        for node in ast.walk(module.tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+
+            is_model = any(
+                (isinstance(base, ast.Name) and base.id == "BaseModel")
+                or (isinstance(base, ast.Attribute) and base.attr == "BaseModel")
+                for base in node.bases
+            )
+            if not is_model:
+                continue
+
+            for stmt in node.body:
+                if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                    field_name = stmt.target.id
+                    if sensitive_names.search(field_name):
+                        # Check if the type is SecretStr or similar
+                        type_str = ast.dump(stmt.annotation)
+                        if "SecretStr" not in type_str:
+                            issues.append(
+                                DoctorIssue(
+                                    check="pydantic/sensitive-field-type",
+                                    severity="warning",
+                                    message=f"Sensitive field '{field_name}' in model '{node.name}' should use SecretStr",
+                                    path=module.rel_path,
+                                    category="Pydantic",
+                                    help="Use pydantic.SecretStr to prevent accidental leakage in logs or JSON.",
+                                    line=stmt.lineno,
+                                )
+                            )
+    return issues
+
+
 __all__ = [
     "check_deprecated_validators",
     "check_extra_allow_on_request_models",
     "check_mutable_model_defaults",
+    "check_sensitive_fields_in_models",
     "check_should_be_pydantic_model",
 ]

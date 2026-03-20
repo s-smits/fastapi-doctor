@@ -293,6 +293,50 @@ def check_fat_route_handlers() -> list[DoctorIssue]:
                 )
     return issues
 
+def check_missing_pagination(routes: list[APIRoute]) -> list[DoctorIssue]:
+    """Detect list endpoints missing pagination (limit/offset).
+
+    Endpoints returning lists should support pagination to avoid memory
+    exhaustion and slow responses as datasets grow.
+    """
+    issues: list[DoctorIssue] = []
+    pagination_params = {"limit", "offset", "page", "per_page", "cursor"}
+    exempt_patterns = ("/stream", "/export", "-export", "/download", "/webhook")
+
+    for route in routes:
+        if "GET" not in _sorted_methods(route):
+            continue
+        if not route.path.startswith("/api/"):
+            continue
+        if any(p in route.path for p in exempt_patterns):
+            continue
+
+        # Check if the response model is a list or contains a list
+        is_list_response = False
+        res_model = route.response_model
+        if res_model:
+            model_str = str(res_model).lower()
+            if "list[" in model_str or "paginated" in model_str:
+                is_list_response = True
+
+        if is_list_response:
+            params = inspect.signature(route.endpoint).parameters
+            has_pagination = any(p in params for p in pagination_params)
+            if not has_pagination:
+                issues.append(
+                    DoctorIssue(
+                        check="api-surface/missing-pagination",
+                        severity="warning",
+                        message=f"List endpoint '{route.path}' has no pagination — risks memory exhaustion",
+                        path=route.path,
+                        category="API Surface",
+                        help="Add limit and offset Query parameters to support pagination.",
+                        methods=_sorted_methods(route),
+                    )
+                )
+    return issues
+
+
 __all__ = [
     "check_route_dependency_policies",
     "check_write_route_parameters",
@@ -303,4 +347,5 @@ __all__ = [
     "check_openapi_schema",
     "check_endpoint_docstrings",
     "check_fat_route_handlers",
+    "check_missing_pagination",
 ]

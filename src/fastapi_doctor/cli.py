@@ -128,6 +128,7 @@ def main() -> int:
         doctor_report = run_python_doctor_checks(
             only_rules=only_rules if only_rules else None,
             ignore_rules=ignore_rules if ignore_rules else None,
+            profile=args.profile,
         )
 
     base_score = doctor_report.score if doctor_report else PERFECT_SCORE
@@ -182,6 +183,12 @@ def parse_args() -> argparse.Namespace:
         default="none",
         help="Exit with error code on diagnostics: error, warning, none.",
     )
+    parser.add_argument(
+        "--profile",
+        choices=["security", "medium", "strict"],
+        default="medium",
+        help="Audit intensity profile: security (only security checks), medium (balanced), strict (all checks).",
+    )
     parser.add_argument("--ignore-rules", help="Comma-separated list of rule IDs or prefixes to ignore.")
     parser.add_argument("--only-rules", help="Comma-separated list of rule IDs or prefixes to run.")
     parser.add_argument("--repo-root", help="Project root to scan. Defaults to $DOCTOR_REPO_ROOT or the current working directory.")
@@ -232,6 +239,7 @@ def build_json_payload(
             "app_module": args.app_module,
             "only_rules": args.only_rules,
             "ignore_rules": args.ignore_rules,
+            "profile": args.profile,
             "fail_on": args.fail_on,
             "with_bandit": args.with_bandit,
             "with_tests": args.with_tests,

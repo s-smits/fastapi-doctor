@@ -316,11 +316,57 @@ def check_cors_wildcard() -> list[DoctorIssue]:
     return issues
 
 
+def check_missing_security_headers() -> list[DoctorIssue]:
+    """Detect missing OWASP-recommended security headers.
+
+    Production APIs should include headers like HSTS, X-Content-Type-Options,
+    X-Frame-Options, and Content-Security-Policy to protect against common
+    web vulnerabilities.
+    """
+    issues: list[DoctorIssue] = []
+    # Key security headers to look for in the source code
+    security_headers = {
+        "Strict-Transport-Security",
+        "X-Content-Type-Options",
+        "X-Frame-Options",
+        "Content-Security-Policy",
+    }
+
+    found_headers: set[str] = set()
+    for module in project.parsed_python_modules():
+        for header in security_headers:
+            if header.lower() in module.source.lower():
+                found_headers.add(header)
+
+    missing = security_headers - found_headers
+    if len(missing) > 2:  # If most are missing, it's likely not set up
+        # Find the main entry point to report the issue on
+        main_module = next(
+            (m for m in project.parsed_python_modules() if m.path.name == "main.py"),
+            project.parsed_python_modules()[0] if project.parsed_python_modules() else None,
+        )
+        if main_module:
+            issues.append(
+                DoctorIssue(
+                    check="security/missing-security-headers",
+                    severity="warning",
+                    message=f"Project is missing {len(missing)} recommended security headers",
+                    path=main_module.rel_path,
+                    category="Security",
+                    help=f"Add a middleware to set {', '.join(missing)}. OWASP recommends HSTS, X-Frame-Options, and X-Content-Type-Options.",
+                    line=1,
+                )
+            )
+
+    return issues
+
+
 __all__ = [
     "check_assert_in_production",
     "check_cors_wildcard",
     "check_exception_detail_leak",
     "check_hardcoded_secrets",
+    "check_missing_security_headers",
     "check_shell_true",
     "check_sql_fstring_interpolation",
     "check_unsafe_hash_usage",

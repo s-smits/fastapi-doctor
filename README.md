@@ -81,6 +81,21 @@ For automation, prefer JSON:
 uv run fastapi-doctor --json
 ```
 
+### Audit Profiles
+
+You can choose the audit intensity by passing the `--profile` flag. This allows agents to selectively run checks based on the task (e.g., a security-only audit vs. a strict architectural review).
+
+| Profile | Label | Description |
+| :--- | :--- | :--- |
+| **`security`** | **Security** | Exclusive focus on security-critical findings: CORS wildcards, hardcoded secrets, missing auth dependencies, sensitive PII leakage in Pydantic models, and direct environment access. |
+| **`medium`** | **Balanced** | *(Default)* Combines all security checks with core correctness, resilience, and baseline architectural patterns (async safety, naive datetimes, engine configuration). |
+| **`strict`** | **Strict** | All possible checks, including highly opinionated architectural rules (giant functions, god modules, deep nesting), performance micro-optimizations (heavy imports), and exhaustive API surface documentation requirements. |
+
+Example:
+```bash
+uv run fastapi-doctor --profile security
+```
+
 This returns:
 
 - `schema_version` for contract stability

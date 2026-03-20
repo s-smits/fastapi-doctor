@@ -3,6 +3,7 @@ from __future__ import annotations
 """Architecture-focused static checks."""
 
 import ast
+import re
 
 from .. import project
 from ..models import DoctorIssue
@@ -382,15 +383,89 @@ def check_star_import() -> list[DoctorIssue]:
                     ))
     return issues
 
+def check_engine_pool_pre_ping() -> list[DoctorIssue]:
+    """SQLAlchemy engines should use pool_pre_ping=True for robustness.
+
+    Connection poolers (like Supavisor or PgBouncer) and cloud environments often
+    drop idle connections. Enabling pool_pre_ping ensures the engine checks the
+    connection health before use, avoiding 'server closed the connection' errors.
+    """
+    issues: list[DoctorIssue] = []
+    for module in project.parsed_python_modules():
+        for node in ast.walk(module.tree):
+            if isinstance(node, ast.Call):
+                func_name = ""
+                if isinstance(node.func, ast.Name):
+                    func_name = node.func.id
+                elif isinstance(node.func, ast.Attribute):
+                    func_name = node.func.attr
+
+                if func_name in ("create_engine", "create_async_engine"):
+                    has_pre_ping = any(
+                        kw.arg == "pool_pre_ping"
+                        and isinstance(kw.value, ast.Constant)
+                        and kw.value.value is True
+                        for kw in node.keywords
+                    )
+                    if not has_pre_ping:
+                        issues.append(
+                            DoctorIssue(
+                                check="architecture/engine-pool-pre-ping",
+                                severity="warning",
+                                message=f"{func_name}() called without pool_pre_ping=True",
+                                path=module.rel_path,
+                                category="Architecture",
+                                help="Set pool_pre_ping=True to automatically recover from dropped connections.",
+                                line=node.lineno,
+                            )
+                        )
+    return issues
+
+
+def check_startup_validation() -> list[DoctorIssue]:
+    """Detect presence of startup configuration validation.
+
+    Production apps should 'fail fast' during startup if critical configurations
+    (like database URL, secrets, or CORS) are missing or invalid.
+    """
+    issues: list[DoctorIssue] = []
+    validation_patterns = re.compile(
+        r"(?:validate_.*_startup|settings\.validate|check_config|verify_env)",
+        re.IGNORECASE,
+    )
+
+    for module in project.parsed_python_modules():
+        if module.path.name != "main.py":
+            continue
+
+        has_validation = bool(validation_patterns.search(module.source))
+        if not has_validation:
+            issues.append(
+                DoctorIssue(
+                    check="architecture/missing-startup-validation",
+                    severity="warning",
+                    message="Main app entry point missing explicit startup configuration validation",
+                    path=module.rel_path,
+                    category="Architecture",
+                    help="Add a 'fail-fast' validation step during app startup to verify critical settings.",
+                    line=1,
+                )
+            )
+            break  # Only flag once for the project
+    return issues
+
+
 __all__ = [
     "_max_nesting_depth",
     "check_async_without_await",
     "check_avoid_sys_exit",
     "check_deep_nesting",
+    "check_engine_pool_pre_ping",
     "check_giant_functions",
     "check_god_modules",
     "check_import_bloat",
     "check_passthrough_functions",
     "check_print_statements",
     "check_star_import",
+    "check_startup_validation",
 ]

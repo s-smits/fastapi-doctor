@@ -293,7 +293,42 @@ def check_n_plus_one_hint() -> list[DoctorIssue]:
     return issues
 
 
+def check_heavy_imports() -> list[DoctorIssue]:
+    """Top-level imports of heavy libraries degrade serverless cold-start times.
+
+    Heavy libraries (like agno, openai, pandas, etc.) can add seconds to cold-starts.
+    Importing them inside the function scope where they are needed ensures they
+    are only loaded on-demand.
+    """
+    heavy_libs = {"agno", "openai", "pandas", "numpy", "torch", "transformers", "playwright", "langchain"}
+    issues: list[DoctorIssue] = []
+    for module in project.parsed_python_modules():
+        for node in module.tree.body:
+            # Only check top-level imports in the module body
+            target_libs: set[str] = set()
+            if isinstance(node, ast.Import):
+                target_libs = {alias.name.split(".")[0] for alias in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                target_libs = {node.module.split(".")[0]}
+
+            found = target_libs & heavy_libs
+            if found:
+                issues.append(
+                    DoctorIssue(
+                        check="performance/heavy-imports",
+                        severity="warning",
+                        message=f"Heavy library {found} imported at module level — degrades serverless cold-starts",
+                        path=module.rel_path,
+                        category="Performance",
+                        help="Move the import inside the function or router handler that uses it (lazy loading).",
+                        line=node.lineno,
+                    )
+                )
+    return issues
+
+
 __all__ = [
+    "check_heavy_imports",
     "check_n_plus_one_hint",
     "check_regex_in_loop",
     "check_sequential_awaits",
