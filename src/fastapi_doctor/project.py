@@ -13,6 +13,7 @@ PROTECTED_ROUTE_RULES: tuple[tuple[str, tuple[frozenset[str], ...]], ...] = ()
 FORBIDDEN_WRITE_PARAMS: frozenset[str] = frozenset()
 POST_CREATE_PREFIXES: tuple[str, ...] = ()
 TAG_REQUIRED_PREFIXES: tuple[str, ...] = ("/api/",)
+EXCLUDE_RULES: frozenset[str] = frozenset()
 
 REPO_ROOT = Path.cwd().resolve()
 IMPORT_ROOT = REPO_ROOT
@@ -345,6 +346,7 @@ def refresh_runtime_config() -> ProjectLayout:
     global GOD_MODULE_THRESHOLD, DEEP_NESTING_THRESHOLD, _IMPORT_BLOAT_THRESHOLD
     global _FAT_ROUTE_HANDLER_THRESHOLD, SHOULD_BE_MODEL_MODE
     global FORBIDDEN_WRITE_PARAMS, POST_CREATE_PREFIXES, TAG_REQUIRED_PREFIXES, SCAN_EXCLUDED_DIRS
+    global EXCLUDE_RULES
 
     global _CONFIG_SIGNATURE, _PARSED_MODULE_CACHE, _LIBRARY_INFO_CACHE
 
@@ -375,6 +377,7 @@ def refresh_runtime_config() -> ProjectLayout:
     POST_CREATE_PREFIXES = tuple(_API_CONFIG.get("create_post_prefixes", []))
     TAG_REQUIRED_PREFIXES = tuple(_API_CONFIG.get("tag_required_prefixes", ["/api/"]))
     SCAN_EXCLUDED_DIRS = frozenset(_SCAN_CONFIG.get("exclude_dirs", ["lib", "vendor", "vendored", "third_party"]))
+    EXCLUDE_RULES = frozenset(_SCAN_CONFIG.get("exclude_rules", []))
     _CONFIG_SIGNATURE = _current_config_signature()
     _PARSED_MODULE_CACHE = None
     _LIBRARY_INFO_CACHE = None
@@ -428,6 +431,7 @@ def get_effective_config() -> dict[str, Any]:
         },
         "scan": {
             "exclude_dirs": sorted(SCAN_EXCLUDED_DIRS),
+            "exclude_rules": sorted(EXCLUDE_RULES),
         },
     }
 

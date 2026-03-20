@@ -160,6 +160,10 @@ def run_python_doctor_checks(
         if ignore_rules:
             return not any(selector_matches(rule_id, selector) for selector in ignore_rules)
 
+        # 4. If project.EXCLUDE_RULES is set, filter them out
+        if project.EXCLUDE_RULES:
+            return not any(selector_matches(rule_id, selector) for selector in project.EXCLUDE_RULES)
+
         return True
 
     # ── FastAPI route-level checks (need live app) ────────────────────────────────
