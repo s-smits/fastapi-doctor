@@ -145,7 +145,7 @@ def check_exception_detail_leak() -> list[DoctorIssue]:
 def check_assert_in_production() -> list[DoctorIssue]:
     issues: list[DoctorIssue] = []
     for module in project.parsed_python_modules():
-        if "tests/" in str(module.path):
+        if "tests/" in str(module.path) or "alembic/" in str(module.path):
             continue
         if "assert " not in module.source and "assert(" not in module.source:
             continue
@@ -157,7 +157,7 @@ def check_assert_in_production() -> list[DoctorIssue]:
                     message="assert statement outside tests — use explicit exception raises",
                     path=module.rel_path,
                     category="Security",
-                    help="Asserts are ignored when Python runs with -O. Raise ValueError or custom exceptions instead.",
+                    help="Asserts are ignored when Python runs with -O. Raise ValueError or custom exceptions instead. Do not wrap in 'if condition:' without raising, as that silently skips the check.",
                     line=node.lineno
                 ))
     return issues
@@ -316,57 +316,55 @@ def check_cors_wildcard() -> list[DoctorIssue]:
     return issues
 
 
-def check_missing_security_headers() -> list[DoctorIssue]:
-    """Detect missing OWASP-recommended security headers.
+def check_pydantic_secretstr() -> list[DoctorIssue]:
+    """Detect sensitive fields (password, token) in Pydantic models not using SecretStr.
 
-    Production APIs should include headers like HSTS, X-Content-Type-Options,
-    X-Frame-Options, and Content-Security-Policy to protect against common
-    web vulnerabilities.
+    Using SecretStr prevents accidental leakage of sensitive values in logs,
+    repr, and error messages.
     """
+    _SENSITIVE_VAR_PATTERN = re.compile(r"(?:api_?key|auth_?token|password|secret|credential|private_?key)", re.IGNORECASE)
     issues: list[DoctorIssue] = []
-    # Key security headers to look for in the source code
-    security_headers = {
-        "Strict-Transport-Security",
-        "X-Content-Type-Options",
-        "X-Frame-Options",
-        "Content-Security-Policy",
-    }
-
-    found_headers: set[str] = set()
     for module in project.parsed_python_modules():
-        for header in security_headers:
-            if header.lower() in module.source.lower():
-                found_headers.add(header)
-
-    missing = security_headers - found_headers
-    if len(missing) > 2:  # If most are missing, it's likely not set up
-        # Find the main entry point to report the issue on
-        main_module = next(
-            (m for m in project.parsed_python_modules() if m.path.name == "main.py"),
-            project.parsed_python_modules()[0] if project.parsed_python_modules() else None,
-        )
-        if main_module:
-            issues.append(
-                DoctorIssue(
-                    check="security/missing-security-headers",
-                    severity="warning",
-                    message=f"Project is missing {len(missing)} recommended security headers",
-                    path=main_module.rel_path,
-                    category="Security",
-                    help=f"Add a middleware to set {', '.join(missing)}. OWASP recommends HSTS, X-Frame-Options, and X-Content-Type-Options.",
-                    line=1,
-                )
+        if "BaseModel" not in module.source:
+            continue
+        for node in ast.walk(module.tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            is_model = any(
+                (isinstance(base, ast.Name) and base.id == "BaseModel")
+                or (isinstance(base, ast.Attribute) and base.attr == "BaseModel")
+                for base in node.bases
             )
-
+            if not is_model:
+                continue
+            for stmt in node.body:
+                if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+                    if _SENSITIVE_VAR_PATTERN.search(stmt.target.id):
+                        # Check if it uses SecretStr
+                        ann = stmt.annotation
+                        is_secret_str = False
+                        if isinstance(ann, ast.Name) and ann.id == "SecretStr":
+                            is_secret_str = True
+                        elif isinstance(ann, ast.Attribute) and ann.attr == "SecretStr":
+                            is_secret_str = True
+                        
+                        if not is_secret_str:
+                            issues.append(DoctorIssue(
+                                check="security/pydantic-secretstr",
+                                severity="warning",
+                                message=f"Field '{stmt.target.id}' in model '{node.name}' should use SecretStr",
+                                path=module.rel_path,
+                                category="Security",
+                                help="Use pydantic.SecretStr for sensitive fields to prevent leakage. Access the value via .get_secret_value().",
+                                line=stmt.lineno,
+                            ))
     return issues
-
-
 __all__ = [
     "check_assert_in_production",
     "check_cors_wildcard",
     "check_exception_detail_leak",
     "check_hardcoded_secrets",
-    "check_missing_security_headers",
+    "check_pydantic_secretstr",
     "check_shell_true",
     "check_sql_fstring_interpolation",
     "check_unsafe_hash_usage",

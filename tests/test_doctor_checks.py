@@ -250,6 +250,7 @@ def test_build_json_payload_includes_effective_config(monkeypatch, tmp_path: Pat
         only_rules=None,
         ignore_rules=None,
         fail_on="none",
+        profile="strict",
         with_bandit=False,
         with_tests=False,
         skip_ruff=True,
@@ -428,7 +429,6 @@ def test_alembic_best_practice_checks_flag_missing_hooks(monkeypatch, tmp_path: 
     report = module.run_python_doctor_checks(only_rules={"config/alembic", "config/sqlalchemy-naming-convention"})
 
     assert {issue.check for issue in report.issues} == {
-        "config/alembic-autogenerate-scope",
         "config/alembic-empty-autogen-revision",
         "config/sqlalchemy-naming-convention",
     }

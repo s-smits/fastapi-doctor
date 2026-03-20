@@ -214,30 +214,6 @@ def check_alembic_target_metadata() -> list[DoctorIssue]:
     return issues
 
 
-def check_alembic_autogenerate_scope() -> list[DoctorIssue]:
-    """Autogenerate should filter reflected objects to avoid unmanaged drop directives."""
-    if not project.discover_libraries().alembic:
-        return []
-
-    issues: list[DoctorIssue] = []
-    for env in _get_alembic_envs():
-        active_calls = [call for call in env.configure_calls if _has_non_none_target_metadata(call, env.bindings)]
-        if not active_calls:
-            continue
-        if any(_has_keyword(call, "include_name") or _has_keyword(call, "include_object") for call in active_calls):
-            continue
-        issues.append(
-            DoctorIssue(
-                check="config/alembic-autogenerate-scope",
-                severity="warning",
-                message="Alembic autogenerate has no include_name/include_object filter for unmanaged schemas or tables",
-                path=str(env.filepath.relative_to(project.REPO_ROOT)),
-                category="Config",
-                help="Add include_name or include_object in env.py so autogenerate only considers metadata you actually own.",
-                line=_configure_call_line(active_calls[0]),
-            )
-        )
-    return issues
 
 
 def check_alembic_empty_autogen_revision() -> list[DoctorIssue]:
@@ -293,7 +269,6 @@ def check_sqlalchemy_naming_convention() -> list[DoctorIssue]:
 
 
 __all__ = [
-    "check_alembic_autogenerate_scope",
     "check_alembic_empty_autogen_revision",
     "check_alembic_target_metadata",
     "check_direct_env_access",

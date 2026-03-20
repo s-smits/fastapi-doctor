@@ -250,9 +250,51 @@ def check_broad_except_no_context() -> list[DoctorIssue]:
     return issues
 
 
+def check_sqlalchemy_pool_pre_ping() -> list[DoctorIssue]:
+    """Detect SQLAlchemy engines without pool_pre_ping=True.
+
+    Without pool_pre_ping=True, the engine can't automatically recover from
+    dropped database connections (e.g. database restart, network timeout).
+    This leads to 'OperationalError' on the first request after a disconnect.
+    """
+    issues: list[DoctorIssue] = []
+    for module in project.parsed_python_modules():
+        if "create_engine" not in module.source:
+            continue
+        for node in ast.walk(module.tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            is_create_engine = (isinstance(func, ast.Name) and func.id == "create_engine") or (
+                isinstance(func, ast.Attribute) and func.attr == "create_engine"
+            )
+            if not is_create_engine:
+                continue
+
+            # Check for pool_pre_ping=True
+            has_pre_ping = any(
+                kw.arg == "pool_pre_ping" and isinstance(kw.value, ast.Constant) and kw.value.value is True
+                for kw in node.keywords
+            )
+            if not has_pre_ping:
+                issues.append(
+                    DoctorIssue(
+                        check="resilience/sqlalchemy-pool-pre-ping",
+                        severity="warning",
+                        message="SQLAlchemy engine without pool_pre_ping=True",
+                        path=module.rel_path,
+                        category="Resilience",
+                        help="Add pool_pre_ping=True to create_engine() to ensure automatic recovery from dropped connections.",
+                        line=node.lineno,
+                    )
+                )
+    return issues
+
+
 __all__ = [
     "check_bare_except_pass",
     "check_broad_except_no_context",
     "check_exception_swallowed_silently",
     "check_reraise_without_context",
+    "check_sqlalchemy_pool_pre_ping",
 ]

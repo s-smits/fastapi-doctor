@@ -30,6 +30,14 @@ Without this flag, Bandit reports high-severity CWE-327 violations.
 `yaml.load()` without SafeLoader or BaseLoader enables arbitrary code execution.
 Use `yaml.safe_load()` or explicit `Loader=yaml.SafeLoader`.
 
+### `security/assert-in-production` (error)
+`assert` statements are stripped by Python when running with optimization (`-O`).
+In production paths, use explicit `raise` statements instead.
+
+### `security/pydantic-secretstr` (warning)
+Sensitive fields in Pydantic models (passwords, tokens, keys) should use `SecretStr`.
+This prevents accidental leakage in logs, `repr()`, and error messages.
+
 ## Correctness Rules
 
 ### `correctness/duplicate-route` (error)
@@ -136,11 +144,26 @@ schemas/, endpoints/) or with API-suggestive names (*Request, *Response, *Schema
 `except Exception: pass` without any logging or explanatory comment silently swallows errors.
 At minimum, add a `# reason` comment or `logger.debug()` call.
 
+### `resilience/sqlalchemy-pool-pre-ping` (warning)
+SQLAlchemy engine without `pool_pre_ping=True` can't automatically recover from dropped
+database connections, leading to `OperationalError` on subsequent requests.
+
 ## Config Rules
 
 ### `config/direct-env-access` (warning)
 Router and service code should use a typed settings/config layer, not raw
 `os.environ` access. Direct env access bypasses validation, typing, and defaults.
+
+### `config/alembic-target-metadata` (warning)
+Alembic `env.py` should be wired to your SQLAlchemy/SQLModel metadata object
+for reliable autogeneration.
+
+### `config/alembic-empty-autogen-revision` (warning)
+Configure `process_revision_directives` in `env.py` to skip generating empty migration files.
+
+### `config/sqlalchemy-naming-convention` (warning)
+Database metadata should use a naming convention for constraints to ensure
+deterministic migration names across environments.
 
 ## Extension Guidance
 

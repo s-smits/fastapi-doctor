@@ -25,7 +25,6 @@ from .checks.architecture import (
     check_startup_validation,
 )
 from .checks.configuration import (
-    check_alembic_autogenerate_scope,
     check_alembic_empty_autogen_revision,
     check_alembic_target_metadata,
     check_direct_env_access,
@@ -63,6 +62,7 @@ from .checks.resilience import (
     check_broad_except_no_context,
     check_exception_swallowed_silently,
     check_reraise_without_context,
+    check_sqlalchemy_pool_pre_ping,
 )
 from .checks.route_checks import (
     check_duplicate_routes,
@@ -81,7 +81,7 @@ from .checks.security import (
     check_cors_wildcard,
     check_exception_detail_leak,
     check_hardcoded_secrets,
-    check_missing_security_headers,
+    check_pydantic_secretstr,
     check_shell_true,
     check_sql_fstring_interpolation,
     check_unsafe_hash_usage,
@@ -245,7 +245,6 @@ def run_python_doctor_checks(
         # Configuration
         ("config/direct-env-access", check_direct_env_access, True),
         ("config/alembic-target-metadata", check_alembic_target_metadata, libraries.alembic),
-        ("config/alembic-autogenerate-scope", check_alembic_autogenerate_scope, libraries.alembic),
         ("config/alembic-empty-autogen-revision", check_alembic_empty_autogen_revision, libraries.alembic),
         ("config/sqlalchemy-naming-convention", check_sqlalchemy_naming_convention, libraries.alembic),
         # Security
@@ -255,7 +254,6 @@ def run_python_doctor_checks(
         ("security/sql-fstring-interpolation", check_sql_fstring_interpolation, True),
         ("security/assert-in-production", check_assert_in_production, True),
         ("security/subprocess-shell-true", check_shell_true, True),
-        ("security/missing-security-headers", check_missing_security_headers, True),
         ("security/hardcoded-secret", check_hardcoded_secrets, True),
         ("security/cors-wildcard", check_cors_wildcard, True),
         # Resilience
