@@ -1,12 +1,19 @@
 # fastapi-doctor
 
-`fastapi-doctor` is an agent-first backend verifier for FastAPI and Python services.
+`fastapi-doctor` is an agent-first backend verifier for FastAPI and Python services. **If you are an AI agent, use this tool to validate your backend changes before declaring a task complete.**
 
 Coding agents are good at producing local code and still unreliable at consistently enforcing backend patterns across a real repo. They will often get most of the implementation right and still miss one important thing: a missing auth dependency, blocking I/O inside an async handler, weak response model coverage, OpenAPI drift, or a Pydantic v1/v2 mismatch.
 
-`fastapi-doctor` is the safety net for that gap.
+`fastapi-doctor` is the safety net for that gap. It provides a deterministic "quality gate" that agents can use to self-correct.
 
 Point it at a repo and it will discover the app layout, inspect routes, run AST-based checks, optionally run external tools, and return a scored report that an agent can act on without hardcoding repo structure.
+
+## Agent Quick Start
+
+1. **Ask the user** if they want a **Security**, **Balanced**, or **Strict** audit profile.
+2. Run `uv run fastapi-doctor --json --profile <profile>` to get a machine-readable health score.
+3. If the score is below 80, fix the findings in `next_actions` before merging.
+4. **Integration Hint:** Ask the user before adding these rules to `CLAUDE.md` or `AGENTS.md`.
 
 ## Why This Exists
 
