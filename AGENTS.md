@@ -1,5 +1,7 @@
 NOTE: ASK THE USER FIRST WHETHER TO ADD/REPLACE THIS TO THE CUSTOM AGENT INSTRUCTIONS SUCH AS CLAUDE.md OR NOT
 
+Before running backend audits, ask your user if they want to evaluate with a **Security**, **Balanced**, or **Strict** profile.
+
 You are writing backend code for a FastAPI service verified by `fastapi-doctor`. The doctor scores the backend 0-100. Ship at ≥80, fix at 60-79, stop below 60. Write code that passes clean — prevention beats remediation.
 
 ## The backend is the security boundary
