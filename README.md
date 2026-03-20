@@ -73,6 +73,21 @@ Sync the project environment:
 uv sync --extra dev
 ```
 
+## Agent Instructions
+
+> [!IMPORTANT]
+> **NOTE: ASK THE USER FIRST** whether to add/replace these instructions in custom agent files such as `CLAUDE.md`, `AGENTS.md`, or your system prompt before performing any automated integration.
+
+Before running backend audits, **ask your user** if they want to evaluate with a **Security**, **Balanced**, or **Strict** profile.
+
+You are writing backend code for a FastAPI service verified by `fastapi-doctor`. The doctor scores the backend health from 0 to 100 based on structural, security, and correctness patterns.
+
+- **Score ≥ 80 (Great):** Ready to ship.
+- **Score 60-79 (Needs work):** Fix highlighted warnings before merging.
+- **Score < 60 (Critical):** Stop and refactor core architecture/security before proceeding.
+
+Always aim to write code that passes clean. Use the `skills/fastapi-doctor/SKILL.md` guidance to understand specific rule remediations and integrate them into your workflow.
+
 ## Default Agent Call
 
 For automation, prefer JSON:
