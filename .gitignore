@@ -11,3 +11,6 @@ dist/
 *.pyc
 *.pyo
 .DS_Store
+
+.pytest_setup_done
+state/
