@@ -185,15 +185,64 @@ def check_shell_true() -> list[DoctorIssue]:
     return issues
 
 
+def _value_looks_like_identifier_or_label(val: str) -> bool:
+    """Return True if value looks like a name, label, or enum — not a real secret."""
+    # snake_case or UPPER_SNAKE identifiers (e.g. "oauth_token", "API_KEY_HEADER")
+    if re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", val):
+        return True
+    # kebab-case identifiers (e.g. "auth-token", "api-key")
+    if re.fullmatch(r"[a-zA-Z][a-zA-Z0-9-]*", val):
+        return True
+    return False
+
+
+def _value_looks_like_placeholder(val: str) -> bool:
+    """Return True if value is a test/placeholder/encrypted pattern."""
+    return bool(
+        re.search(
+            r"(?:fake|test|example|dummy|mock|placeholder|encrypted|sample|your[-_]|change[-_]?me)",
+            val,
+            re.IGNORECASE,
+        )
+    )
+
+
+def _value_looks_like_real_secret(val: str) -> bool:
+    """Return True if the string value has characteristics of a real secret.
+
+    Real secrets tend to have high entropy: mixed case, digits, and special
+    characters.  Plain identifiers, labels, HTTP headers, and URL-like values
+    are excluded.
+    """
+    if _value_looks_like_identifier_or_label(val):
+        return False
+    if _value_looks_like_placeholder(val):
+        return False
+    # URL-like / protocol prefixes are not secrets
+    if val.startswith(("http://", "https://", "ws://", "wss://", "ftp://")):
+        return False
+    # Check character-class entropy
+    has_upper = bool(re.search(r"[A-Z]", val))
+    has_lower = bool(re.search(r"[a-z]", val))
+    has_digit = bool(re.search(r"[0-9]", val))
+    has_special = bool(re.search(r"[^a-zA-Z0-9_\-]", val))
+    char_classes = sum([has_upper, has_lower, has_digit, has_special])
+    # Real secrets typically mix 3+ character classes, or are long with 2+
+    return char_classes >= 3 or (char_classes >= 2 and len(val) >= 24)
+
+
 def check_hardcoded_secrets() -> list[DoctorIssue]:
     """Detect hardcoded API keys, tokens, and passwords in source code.
 
     Inspired by react-doctor's ``no-secrets-in-client-code`` rule. Checks:
     1. String literals matching known secret patterns (Stripe, AWS, GitHub, OpenAI, etc.)
-    2. Variable assignments where the name suggests a secret and the value is a non-empty string.
+    2. Variable assignments where the name suggests a secret **and** the value
+       looks like a real secret (not a label, identifier, or placeholder).
 
     Skips test files, config defaults, and environment variable fallback patterns.
     """
+    from ..suppression import is_suppressed
+
     _SECRET_PATTERNS: list[re.Pattern[str]] = [
         re.compile(r"^sk_live_"),              # Stripe live key
         re.compile(r"^sk_test_"),              # Stripe test key
@@ -210,6 +259,7 @@ def check_hardcoded_secrets() -> list[DoctorIssue]:
     _FALSE_POSITIVE_VALUES = frozenset({
         "", "changeme", "xxx", "your-api-key", "CHANGE_ME", "TODO",
         "placeholder", "test", "dummy", "fake", "mock", "example",
+        "none", "null", "undefined", "n/a", "na",
     })
 
     issues: list[DoctorIssue] = []
@@ -226,7 +276,7 @@ def check_hardcoded_secrets() -> list[DoctorIssue]:
             val = node.value.value
             if not val or val.lower() in _FALSE_POSITIVE_VALUES or len(val) < 8:
                 continue
-            if node.lineno <= len(lines) and "# noqa" in lines[node.lineno - 1]:
+            if node.lineno <= len(lines) and is_suppressed(lines[node.lineno - 1], "security/hardcoded-secret"):
                 continue
 
             # Check 1: Does the value match a known secret pattern?
@@ -243,16 +293,15 @@ def check_hardcoded_secrets() -> list[DoctorIssue]:
                 ))
                 continue
 
-            # Check 2: Variable name suggests a secret?
+            # Check 2: Variable name suggests a secret — require value evidence.
+            # Plain identifiers, labels, enum members, and placeholders are NOT flagged.
             for target in node.targets:
                 name = ""
                 if isinstance(target, ast.Name):
                     name = target.id
                 elif isinstance(target, ast.Attribute):
                     name = target.attr
-                if name and _SECRET_VAR_PATTERN.search(name):
-                    # Skip os.environ.get() patterns — those are fine as defaults
-                    # But a plain string assignment to SECRET_KEY = "actualvalue" is suspicious
+                if name and _SECRET_VAR_PATTERN.search(name) and _value_looks_like_real_secret(val):
                     issues.append(DoctorIssue(
                         check="security/hardcoded-secret",
                         severity="error",

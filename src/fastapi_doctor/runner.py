@@ -101,6 +101,7 @@ def run_python_doctor_checks(
     # Pre-warm the parsed modules cache — all static checks share this.
     project.parsed_python_modules()
     issues: list[DoctorIssue] = []
+    checks_not_evaluated: list[str] = []
 
     route_count = 0
     openapi_path_count = 0
@@ -203,10 +204,27 @@ def run_python_doctor_checks(
         except Exception as e:
             import traceback
 
-            print(f"Failed to boot FastAPI app for route checks: {e}")
-            traceback.print_exc()
-            # Skip route checks if bootstrapping fails
-            pass
+            tb_str = traceback.format_exc()
+            issues.append(
+                DoctorIssue(
+                    check="doctor/app-bootstrap-failed",
+                    severity="error",
+                    message=f"FastAPI app failed to boot — route-level checks were skipped: {e}",
+                    path=str(project.APP_MODULE or "unknown"),
+                    category="Doctor",
+                    help="Fix the import/startup error so route, auth, and OpenAPI checks can run. "
+                    "The score may appear clean but route-level checks were not evaluated.",
+                    detail=tb_str,
+                )
+            )
+            checks_not_evaluated = [
+                "security/missing-auth-dep",
+                "security/forbidden-write-param",
+                "correctness/duplicate-route",
+                "correctness/missing-response-model",
+                "correctness/post-status-code",
+                "api-surface/*",
+            ]
 
     # ── Static Checks (No arguments) ──────────────────────────────────────────
     # Most checks are static AST-based and can be run without booting the app.
@@ -286,10 +304,19 @@ def run_python_doctor_checks(
             issue for issue in issues if not any(selector_matches(issue.check, selector) for selector in ignore_rules)
         ]
 
+    # Collect structured suppressions for the JSON report.
+    from .suppression import collect_suppressions
+
+    all_suppressions: list[dict[str, object]] = []
+    for module in project.parsed_python_modules():
+        all_suppressions.extend(collect_suppressions(module.source, module.rel_path))
+
     return DoctorReport(
         route_count=route_count,
         openapi_path_count=openapi_path_count,
         issues=issues,
+        checks_not_evaluated=checks_not_evaluated,
+        suppressions=all_suppressions,
     )
 
 __all__ = ["run_python_doctor_checks"]

@@ -151,6 +151,32 @@ def check_avoid_os_path() -> list[DoctorIssue]:
     return issues
 
 
+def _name_main_line_ranges(tree: ast.AST) -> list[tuple[int, int]]:
+    """Return (start, end) line ranges for ``if __name__ == "__main__"`` blocks."""
+    ranges: list[tuple[int, int]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if not isinstance(test, ast.Compare):
+            continue
+        if len(test.ops) != 1 or not isinstance(test.ops[0], ast.Eq):
+            continue
+        if len(test.comparators) != 1:
+            continue
+        left, comp = test.left, test.comparators[0]
+        is_name_main = (
+            (isinstance(left, ast.Name) and left.id == "__name__"
+             and isinstance(comp, ast.Constant) and comp.value == "__main__")
+            or
+            (isinstance(left, ast.Constant) and left.value == "__main__"
+             and isinstance(comp, ast.Name) and comp.id == "__name__")
+        )
+        if is_name_main:
+            ranges.append((node.lineno, node.end_lineno or node.lineno))
+    return ranges
+
+
 def check_asyncio_run_in_async_context() -> list[DoctorIssue]:
     """Detect asyncio.run() in files that define async functions.
 
@@ -159,7 +185,12 @@ def check_asyncio_run_in_async_context() -> list[DoctorIssue]:
     async execution) will either raise RuntimeError('This event loop is
     already running') or cause deadlocks when called from executor threads.
     Use ``await`` directly or ``asyncio.create_task()`` instead.
+
+    Exempts ``if __name__ == "__main__"`` entrypoints, ``__main__.py``,
+    ``cli.py``, and ``scripts/`` files.
     """
+    from ..suppression import is_suppressed
+
     issues: list[DoctorIssue] = []
     for module in project.parsed_python_modules():
         if "asyncio" not in module.source:
@@ -172,6 +203,8 @@ def check_asyncio_run_in_async_context() -> list[DoctorIssue]:
             continue
 
         lines = module.source.splitlines()
+        main_ranges = _name_main_line_ranges(module.tree)
+
         for node in ast.walk(module.tree):
             if isinstance(node, ast.Call):
                 func = node.func
@@ -179,8 +212,13 @@ def check_asyncio_run_in_async_context() -> list[DoctorIssue]:
                     and isinstance(func.value, ast.Name)
                     and func.value.id == "asyncio"
                     and func.attr == "run"):
-                    # Check noqa
-                    if node.lineno <= len(lines) and "# noqa" in lines[node.lineno - 1]:
+                    # Exempt calls inside if __name__ == "__main__" blocks
+                    if any(start <= node.lineno <= end for start, end in main_ranges):
+                        continue
+                    # Check suppression
+                    if node.lineno <= len(lines) and is_suppressed(
+                        lines[node.lineno - 1], "correctness/asyncio-run-in-async"
+                    ):
                         continue
                     issues.append(DoctorIssue(
                         check="correctness/asyncio-run-in-async",

@@ -1,6 +1,6 @@
 # FastAPI Doctor — Rule Definitions
 
-24 opinionated rules across 7 categories, tuned for Python/FastAPI backends.
+24+ opinionated rules across 8 categories, tuned for Python/FastAPI backends.
 Unique rule violations are counted (not instances), then penalized.
 
 ## Scoring
@@ -10,6 +10,32 @@ score = 100 - (unique_error_rules × 2.0 + unique_warning_rules × 1.0)
 ```
 
 Score bands: **80+ Great** | **60-79 Needs work** | **<60 Critical**
+
+## Issue Classification (v1.1)
+
+Every finding now carries three metadata fields:
+
+| Field | Values | Purpose |
+|-------|--------|---------|
+| `kind` | `blocker` · `risk` · `opinionated` · `hygiene` | Real-world impact class — gate shipping on blocker count, not only score |
+| `confidence` | 0.0–1.0 | How likely this is a true positive |
+| `action_type` | `code_fix` · `config_tune` · `suppress_with_reason` · `review_manually` | Recommended response |
+
+The report also exposes `blocker_count`, `has_ship_blockers`, `checks_not_evaluated`, and `suppressions`.
+
+## Suppression Syntax
+
+Preferred (structured, with audit trail — appears in JSON `suppressions`):
+```python
+x = val  # doctor:ignore security/hardcoded-secret reason="enum label, not a secret"
+```
+
+Legacy (still works, but no reason or JSON trail):
+```python
+x = val  # noqa
+x = val  # noqa: security/hardcoded-secret
+x = val  # noqa: sql-safe
+```
 
 ## Security Rules
 
@@ -29,6 +55,16 @@ Without this flag, Bandit reports high-severity CWE-327 violations.
 ### `security/unsafe-yaml-load` (error)
 `yaml.load()` without SafeLoader or BaseLoader enables arbitrary code execution.
 Use `yaml.safe_load()` or explicit `Loader=yaml.SafeLoader`.
+
+### `security/hardcoded-secret` (error, kind: blocker)
+Detects hardcoded API keys, tokens, and passwords. Two detection paths:
+1. **Value-pattern match** — known prefixes (Stripe `sk_live_`, AWS `AKIA`, GitHub `ghp_`, etc.)
+   are always flagged regardless of variable name.
+2. **Name + value evidence** — variable names matching secret patterns (`api_key`, `password`,
+   `credential`, etc.) are only flagged when the **value** also looks like a real secret
+   (mixed character classes, high entropy). Plain identifiers (`"oauth_token"`),
+   enum labels (`"credential_type"`), placeholders (`"fake-encrypted"`), and URLs
+   are explicitly excluded.
 
 ### `security/assert-in-production` (error)
 `assert` statements are stripped by Python when running with optimization (`-O`).
@@ -164,6 +200,15 @@ Configure `process_revision_directives` in `env.py` to skip generating empty mig
 ### `config/sqlalchemy-naming-convention` (warning)
 Database metadata should use a naming convention for constraints to ensure
 deterministic migration names across environments.
+
+## Doctor Rules
+
+### `doctor/app-bootstrap-failed` (error, kind: blocker)
+The FastAPI app failed to import/start, so all route-level checks (auth deps,
+duplicate routes, OpenAPI schema, response models, pagination, docstrings) were
+skipped. The report lists skipped checks in `checks_not_evaluated`. The score
+may appear clean, but route-level verification did not run. Fix the startup
+error before trusting the report.
 
 ## Extension Guidance
 
