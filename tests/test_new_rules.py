@@ -277,6 +277,7 @@ class TestDoctorReportBlockerGating:
         report = DoctorReport(route_count=0, openapi_path_count=0, issues=issues)
         actions = report.next_actions()
         kinds = [a["kind"] for a in actions]
+        # security (tier 0) blocker first, then strict-tier (tier 2) items
         assert kinds == ["blocker", "opinionated", "hygiene"]
 
     def test_next_actions_include_new_fields(self):
@@ -468,3 +469,113 @@ class TestBootstrapFailureFinding:
         assert d["has_ship_blockers"] is True
         assert "security/missing-auth-dep" in d["checks_not_evaluated"]
         assert d["blocker_count"] == 1
+
+
+# ── Profile tier ordering tests ─────────────────────────────────────────
+
+
+class TestProfileTierOrdering:
+    def test_security_rule_is_tier_0(self):
+        issue = DoctorIssue(
+            check="security/sql-fstring-interpolation", severity="error",
+            message="SQL injection", path="a.py", category="Security",
+        )
+        assert issue.profile_tier == 0
+        assert issue.profile_tier_label == "security"
+
+    def test_pydantic_sensitive_field_is_tier_0(self):
+        issue = DoctorIssue(
+            check="pydantic/sensitive-field-type", severity="warning",
+            message="Use SecretStr", path="a.py", category="Pydantic",
+        )
+        assert issue.profile_tier == 0
+
+    def test_correctness_rule_is_tier_1(self):
+        issue = DoctorIssue(
+            check="correctness/sync-io-in-async", severity="error",
+            message="Blocking I/O", path="a.py", category="Correctness",
+        )
+        assert issue.profile_tier == 1
+        assert issue.profile_tier_label == "balanced"
+
+    def test_resilience_rule_is_tier_1(self):
+        issue = DoctorIssue(
+            check="resilience/bare-except-pass", severity="warning",
+            message="Bare except", path="a.py", category="Resilience",
+        )
+        assert issue.profile_tier == 1
+
+    def test_architecture_balanced_rule_is_tier_1(self):
+        """architecture/async-without-await is in the balanced set."""
+        issue = DoctorIssue(
+            check="architecture/async-without-await", severity="warning",
+            message="Async no await", path="a.py", category="Architecture",
+        )
+        assert issue.profile_tier == 1
+
+    def test_architecture_strict_only_is_tier_2(self):
+        """architecture/giant-function is strict-only."""
+        issue = DoctorIssue(
+            check="architecture/giant-function", severity="warning",
+            message="Giant function", path="a.py", category="Architecture",
+        )
+        assert issue.profile_tier == 2
+        assert issue.profile_tier_label == "strict"
+
+    def test_performance_is_tier_2(self):
+        issue = DoctorIssue(
+            check="performance/sequential-awaits", severity="warning",
+            message="Sequential awaits", path="a.py", category="Performance",
+        )
+        assert issue.profile_tier == 2
+
+    def test_next_actions_sorts_by_tier_then_kind(self):
+        """Security tier blocker should come before balanced tier blocker,
+        which should come before strict tier issues."""
+        issues = [
+            # strict tier (2), opinionated
+            DoctorIssue(check="architecture/giant-function", severity="warning",
+                        message="Giant", path="a.py", category="Architecture"),
+            # balanced tier (1), blocker
+            DoctorIssue(check="correctness/sync-io-in-async", severity="error",
+                        message="Blocking I/O", path="b.py", category="Correctness"),
+            # security tier (0), blocker
+            DoctorIssue(check="security/sql-fstring-interpolation", severity="error",
+                        message="SQL injection", path="c.py", category="Security"),
+            # balanced tier (1), risk
+            DoctorIssue(check="resilience/bare-except-pass", severity="warning",
+                        message="Bare except", path="d.py", category="Resilience"),
+            # security tier (0), risk
+            DoctorIssue(check="security/cors-wildcard", severity="warning",
+                        message="CORS", path="e.py", category="Security"),
+        ]
+        report = DoctorReport(route_count=0, openapi_path_count=0, issues=issues)
+        actions = report.next_actions()
+        order = [(a["profile_tier_label"], a["kind"], a["rule"]) for a in actions]
+        # Expected: security blockers, security risks, balanced blockers, balanced risks, strict
+        assert order == [
+            ("security", "blocker", "security/sql-fstring-interpolation"),
+            ("security", "risk", "security/cors-wildcard"),
+            ("balanced", "blocker", "correctness/sync-io-in-async"),
+            ("balanced", "risk", "resilience/bare-except-pass"),
+            ("strict", "opinionated", "architecture/giant-function"),
+        ]
+
+    def test_to_dict_includes_profile_tier(self):
+        issue = DoctorIssue(
+            check="security/hardcoded-secret", severity="error",
+            message="Secret", path="a.py", category="Security",
+        )
+        d = issue.to_dict()
+        assert d["profile_tier"] == 0
+        assert d["profile_tier_label"] == "security"
+
+    def test_next_actions_include_profile_tier(self):
+        issues = [
+            DoctorIssue(check="security/sql-fstring-interpolation", severity="error",
+                        message="SQL injection", path="b.py", category="Security"),
+        ]
+        report = DoctorReport(route_count=0, openapi_path_count=0, issues=issues)
+        action = report.next_actions()[0]
+        assert action["profile_tier"] == 0
+        assert action["profile_tier_label"] == "security"

@@ -67,6 +67,51 @@ _ACTION_TYPE_OVERRIDES: dict[str, str] = {
     "architecture/fat-route-handler": "review_manually",
 }
 
+# ── Profile tier: fix priority across profiles ───────────────────────────────
+# Lower tier = fix first.  Mirrors the rule sets in runner.py (keep in sync).
+# Tier 0 (security) — always most urgent
+# Tier 1 (balanced)  — stability / correctness second
+# Tier 2 (strict)   — style / optimization last
+_SECURITY_TIER_SELECTORS = frozenset({
+    "security/",
+    "pydantic/sensitive-field-type",
+    "pydantic/extra-allow-on-request",
+    "config/direct-env-access",
+})
+_BALANCED_TIER_SELECTORS = frozenset({
+    "correctness/",
+    "resilience/",
+    "config/",
+    "pydantic/mutable-default",
+    "pydantic/deprecated-validator",
+    "architecture/async-without-await",
+    "architecture/avoid-sys-exit",
+    "architecture/engine-pool-pre-ping",
+    "architecture/missing-startup-validation",
+    "architecture/passthrough-function",
+    "architecture/print-in-production",
+    "api-surface/missing-pagination",
+    "api-surface/missing-operation-id",
+    "api-surface/duplicate-operation-id",
+    "api-surface/missing-openapi-tags",
+})
+_PROFILE_TIER_LABELS = {0: "security", 1: "balanced", 2: "strict"}
+
+
+def _resolve_profile_tier(rule_id: str) -> int:
+    """Return the profile tier for a rule (0=security, 1=balanced, 2=strict)."""
+    for sel in _SECURITY_TIER_SELECTORS:
+        if sel.endswith("/") and rule_id.startswith(sel):
+            return 0
+        if rule_id == sel:
+            return 0
+    for sel in _BALANCED_TIER_SELECTORS:
+        if sel.endswith("/") and rule_id.startswith(sel):
+            return 1
+        if rule_id == sel:
+            return 1
+    return 2
+
 _KIND_ORDER: dict[str, int] = {"blocker": 0, "risk": 1, "opinionated": 2, "hygiene": 3}
 _DEFAULT_CONFIDENCE: dict[str, float] = {
     "blocker": 0.95,
@@ -139,6 +184,15 @@ class DoctorIssue:
         return self.kind == "blocker"
 
     @property
+    def profile_tier(self) -> int:
+        """Profile tier: 0=security, 1=balanced, 2=strict."""
+        return _resolve_profile_tier(self.check)
+
+    @property
+    def profile_tier_label(self) -> str:
+        return _PROFILE_TIER_LABELS[self.profile_tier]
+
+    @property
     def why_it_matters(self) -> str:
         return _CATEGORY_WHY.get(
             self.category,
@@ -163,6 +217,8 @@ class DoctorIssue:
                 "confidence": self.confidence,
                 "action_type": self.action_type,
                 "is_ship_blocker": self.is_ship_blocker,
+                "profile_tier": self.profile_tier,
+                "profile_tier_label": self.profile_tier_label,
                 "why_it_matters": self.why_it_matters,
                 "suggested_fix": self.suggested_fix,
                 "safe_to_autofix": False,
@@ -244,6 +300,8 @@ class DoctorReport:
                     "blocking": issue.blocking,
                     "confidence": issue.confidence,
                     "action_type": issue.action_type,
+                    "profile_tier": issue.profile_tier,
+                    "profile_tier_label": issue.profile_tier_label,
                     "occurrences": 0,
                     "summary": issue.message,
                     "why_it_matters": issue.why_it_matters,
@@ -258,6 +316,7 @@ class DoctorReport:
         return sorted(
             grouped.values(),
             key=lambda item: (
+                item["profile_tier"],
                 _KIND_ORDER.get(item["kind"], 3),
                 -item["occurrences"],
                 item["rule"],
