@@ -60,7 +60,8 @@ def check_sql_fstring_interpolation() -> list[DoctorIssue]:
     """Detect f-string interpolation inside SQLAlchemy text() calls.
 
     Using ``text(f"SELECT ... WHERE id = {user_id}")`` is a SQL injection risk.
-    Use parameterized queries: ``text("SELECT ... WHERE id = :id").bindparams(id=val)``
+    Use parameterized queries instead. Plain multiline SQL strings are fine; this
+    rule only forbids interpolating values into the SQL text itself.
 
     Honors ``# noqa: sql-safe`` and ``# noqa: security`` pragmas on the text() line
     for cases where f-string fragments are internally generated (e.g. dynamic column
@@ -97,7 +98,7 @@ def check_sql_fstring_interpolation() -> list[DoctorIssue]:
                             message="SQL injection risk: f-string used inside text() call",
                             path=module.rel_path,
                             category="Security",
-                            help="Use text('... WHERE id = :id').bindparams(id=val). Suppress with '# noqa: sql-safe' if the interpolation is from trusted internal code.",
+                            help="Keep SQL parameterized instead of interpolating values into text(). Plain multiline SQL strings are acceptable. Suppress with '# noqa: sql-safe' if a trusted internal SQL fragment must be assembled dynamically.",
                             line=lineno,
                         )
                     )
