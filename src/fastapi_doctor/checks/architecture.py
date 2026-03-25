@@ -7,6 +7,7 @@ import re
 
 from .. import project
 from ..models import DoctorIssue
+from ._async_analysis import build_module_function_index, function_body_nodes, function_has_async_constructs
 
 def check_giant_functions() -> list[DoctorIssue]:
     """Functions exceeding size thresholds are hard to test and maintain."""
@@ -50,41 +51,97 @@ def check_giant_functions() -> list[DoctorIssue]:
     return issues
 
 def check_async_without_await() -> list[DoctorIssue]:
-    """async def that never awaits wastes an event loop slot — use plain def."""
+    """async def that never awaits wastes an event loop slot — use plain def.
+
+    This check is 'transitive': it flags functions that have no async constructs
+    of their own, AND functions that only await other functions already flagged
+    as unnecessary async.
+    """
     issues: list[DoctorIssue] = []
-    router_dir = project.OWN_CODE_DIR / "routers"
-    if not router_dir.is_dir():
-        return issues
     for module in project.parsed_python_modules():
-        if not module.path.is_relative_to(router_dir):
-            continue
-        for node in ast.walk(module.tree):
-            if not isinstance(node, ast.AsyncFunctionDef):
+        function_index = build_module_function_index(module.tree)
+        unnecessary_async: set[str] = set()
+
+        # Phase 1: Direct detection (no async constructs)
+        for function_ctx in function_index.functions:
+            if not function_ctx.is_async:
                 continue
-            if node.name in project.ASYNC_ENDPOINT_NOAWAIT_EXCLUDE:
+            if function_ctx.name in project.ASYNC_ENDPOINT_NOAWAIT_EXCLUDE:
                 continue
-            # Check for any async operation
-            has_async_op = any(
-                isinstance(n, (ast.Await, ast.AsyncFor, ast.AsyncWith, ast.YieldFrom, ast.Yield))
-                for n in ast.walk(node)
-            )
-            if not has_async_op:
-                # Only flag if it looks like a route handler (has decorators)
-                is_route = any(
-                    "router" in ast.dump(d).lower() or "app" in ast.dump(d).lower() for d in node.decorator_list
+            if not function_ctx.has_async_constructs:
+                unnecessary_async.add(function_ctx.qualname)
+
+        # Phase 2: Transitive detection
+        # If an async function ONLY awaits functions in unnecessary_async, it's also unnecessary.
+        changed = True
+        while changed:
+            changed = False
+            for function_ctx in function_index.functions:
+                if not function_ctx.is_async or function_ctx.qualname in unnecessary_async:
+                    continue
+                if function_ctx.name in project.ASYNC_ENDPOINT_NOAWAIT_EXCLUDE:
+                    continue
+
+                # Must only have Await nodes, and all must resolve to unnecessary functions
+                body_nodes = function_body_nodes(function_ctx.node)
+                has_other_async = any(
+                    isinstance(n, (ast.AsyncFor, ast.AsyncWith)) for n in body_nodes
                 )
-                if is_route:
-                    issues.append(
-                        DoctorIssue(
-                            check="architecture/async-without-await",
-                            severity="warning",
-                            message=f"async def '{node.name}' never awaits — use plain def to avoid blocking the event loop",
-                            path=module.rel_path,
-                            category="Architecture",
-                            help="FastAPI runs plain def endpoints in a thread pool, which is safer for sync code.",
-                            line=node.lineno,
-                        )
-                    )
+                if has_other_async:
+                    continue
+
+                awaits = [n for n in body_nodes if isinstance(n, ast.Await)]
+                if not awaits:
+                    continue  # Should have been caught in Phase 1 if it had no awaits at all
+
+                all_awaits_unnecessary = True
+                for await_node in awaits:
+                    if not isinstance(await_node.value, ast.Call):
+                        all_awaits_unnecessary = False
+                        break
+                    resolved = function_index.resolve_call(function_ctx, await_node.value)
+                    if not resolved or resolved.qualname not in unnecessary_async:
+                        all_awaits_unnecessary = False
+                        break
+
+                if all_awaits_unnecessary:
+                    unnecessary_async.add(function_ctx.qualname)
+                    changed = True
+
+        for function_ctx in function_index.functions:
+            if function_ctx.qualname not in unnecessary_async:
+                continue
+
+            if function_ctx.is_route_handler:
+                message = (
+                    f"Async route handler '{function_ctx.qualname}' is effectively synchronous — "
+                    "use plain def to avoid blocking the event loop"
+                )
+                help_text = (
+                    "FastAPI runs plain def endpoints in a thread pool. This handler either has "
+                    "no awaits or only awaits other functions that don't do real async work."
+                )
+            else:
+                message = (
+                    f"async def '{function_ctx.qualname}' is effectively synchronous — convert "
+                    "to plain def unless it must maintain an awaitable interface"
+                )
+                help_text = (
+                    "This function contains no real async work (awaits, async for/with). "
+                    "Reserve async def for truly awaitable operations."
+                )
+
+            issues.append(
+                DoctorIssue(
+                    check="architecture/async-without-await",
+                    severity="warning",
+                    message=message,
+                    path=module.rel_path,
+                    category="Architecture",
+                    help=help_text,
+                    line=function_ctx.node.lineno,
+                )
+            )
     return issues
 
 def check_print_statements() -> list[DoctorIssue]:

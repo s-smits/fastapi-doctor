@@ -36,6 +36,7 @@ from .checks.correctness import (
     check_deprecated_typing_imports,
     check_get_with_side_effect,
     check_missing_http_timeouts,
+    check_misused_async_constructs,
     check_mutable_default_arg,
     check_naive_datetime,
     check_return_in_finally,
@@ -231,7 +232,8 @@ def run_python_doctor_checks(
     # Grouped by enablement flag and library dependency.
     static_checks = [
         # Correctness
-        ("correctness/sync-io-in-async", check_sync_io_in_async, libraries.fastapi),
+        ("correctness/sync-io-in-async", check_sync_io_in_async, True),
+        ("correctness/misused-async-constructs", check_misused_async_constructs, True),
         ("correctness/naive-datetime", check_naive_datetime, True),
         ("correctness/avoid-os-path", check_avoid_os_path, True),
         ("correctness/asyncio-run-in-async", check_asyncio_run_in_async_context, True),
@@ -253,7 +255,7 @@ def run_python_doctor_checks(
         (
             "architecture/async-without-await",
             check_async_without_await,
-            project.ARCHITECTURE_ENABLED and libraries.fastapi,
+            project.ARCHITECTURE_ENABLED,
         ),
         ("architecture/print-in-production", check_print_statements, project.ARCHITECTURE_ENABLED),
         ("architecture/avoid-sys-exit", check_avoid_sys_exit, project.ARCHITECTURE_ENABLED),

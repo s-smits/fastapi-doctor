@@ -2,7 +2,12 @@ import ast
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from fastapi_doctor.checks.correctness import check_asyncio_run_in_async_context
+from fastapi_doctor.checks.architecture import check_async_without_await
+from fastapi_doctor.checks.correctness import (
+    check_asyncio_run_in_async_context,
+    check_misused_async_constructs,
+    check_sync_io_in_async,
+)
 from fastapi_doctor.checks.resilience import check_sqlalchemy_pool_pre_ping
 from fastapi_doctor.checks.security import (
     check_assert_in_production,
@@ -447,6 +452,188 @@ asyncio.run(main())  # doctor:ignore correctness/asyncio-run-in-async
 '''
         issues = self._check(source)
         assert len(issues) == 0
+
+
+# ── Async/sync misuse analysis tests ────────────────────────────────────────
+
+
+class TestAsyncSyncMisuseAnalysis:
+    def _check_sync_io(self, source: str, rel_path: str = "services/worker.py") -> list:
+        module = MockModule(rel_path, source)
+        with patch("fastapi_doctor.project.parsed_python_modules", return_value=[module]):
+            return check_sync_io_in_async()
+
+    def _check_async_without_await(self, source: str, rel_path: str = "services/worker.py") -> list:
+        module = MockModule(rel_path, source)
+        with patch("fastapi_doctor.project.parsed_python_modules", return_value=[module]):
+            return check_async_without_await()
+
+    def test_direct_blocking_call_in_async_non_router_module(self):
+        source = '''
+async def load_data():
+    with open("data.txt") as fh:
+        return fh.read()
+'''
+        issues = self._check_sync_io(source)
+        assert len(issues) == 1
+        assert issues[0].check == "correctness/sync-io-in-async"
+        assert "open()" in issues[0].message
+        assert issues[0].line == 3
+
+    def test_transitive_sync_helper_with_blocking_http_is_flagged(self):
+        source = '''
+import requests
+
+def fetch_profile():
+    return requests.get("https://example.com")
+
+async def load_profile():
+    return fetch_profile()
+'''
+        issues = self._check_sync_io(source)
+        assert len(issues) == 1
+        assert "fetch_profile()" in issues[0].message
+        assert "requests.get()" in issues[0].help
+        assert issues[0].line == 8
+
+    def test_sync_helper_only_used_from_sync_code_is_ignored(self):
+        source = '''
+import requests
+
+def fetch_profile():
+    return requests.get("https://example.com")
+
+def load_profile():
+    return fetch_profile()
+'''
+        issues = self._check_sync_io(source)
+        assert issues == []
+
+    def test_repo_wide_async_without_await_flags_internal_helpers(self):
+        source = '''
+async def helper():
+    return 1
+'''
+        issues = self._check_async_without_await(source)
+        assert len(issues) == 1
+        assert issues[0].check == "architecture/async-without-await"
+        assert "effectively synchronous" in issues[0].message
+        assert "no real async work" in issues[0].help
+
+    def test_async_without_await_keeps_fastapi_route_guidance(self):
+        source = '''
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get("/items")
+async def list_items():
+    return {"ok": True}
+'''
+        issues = self._check_async_without_await(source, rel_path="routers/items.py")
+        assert len(issues) == 1
+        assert issues[0].check == "architecture/async-without-await"
+        assert "route handler" in issues[0].message
+        assert "thread pool" in issues[0].help
+
+    def test_async_function_with_real_async_work_is_not_flagged(self):
+        source = '''
+import asyncio
+
+async def helper():
+    await asyncio.sleep(0)
+    return 1
+'''
+        issues = self._check_async_without_await(source)
+        assert issues == []
+
+    def test_doctor_ignore_on_async_caller_suppresses_transitive_sync_issue(self):
+        source = '''
+import requests
+
+def fetch_profile():
+    return requests.get("https://example.com")
+
+async def load_profile():
+    return fetch_profile()  # doctor:ignore correctness/sync-io-in-async reason="legacy wrapper"
+'''
+        issues = self._check_sync_io(source)
+        assert issues == []
+
+    def test_await_on_sync_function_is_flagged(self):
+        source = '''
+def sync_helper():
+    return 1
+
+async def main():
+    return await sync_helper()
+'''
+        module = MockModule("a.py", source)
+        with patch("fastapi_doctor.project.parsed_python_modules", return_value=[module]):
+            issues = check_misused_async_constructs()
+        assert len(issues) == 1
+        assert issues[0].check == "correctness/await-on-sync"
+        assert "await used on sync function 'sync_helper()'" in issues[0].message
+
+    def test_async_for_on_sync_iterable_is_flagged(self):
+        source = '''
+def get_items():
+    return [1, 2, 3]
+
+async def main():
+    async for item in get_items():
+        print(item)
+'''
+        module = MockModule("a.py", source)
+        with patch("fastapi_doctor.project.parsed_python_modules", return_value=[module]):
+            issues = check_misused_async_constructs()
+        assert len(issues) == 1
+        assert issues[0].check == "correctness/sync-iterable-in-async-for"
+        assert "async for used on sync iterable" in issues[0].message
+
+    def test_async_with_on_sync_context_manager_is_flagged(self):
+        source = '''
+from contextlib import contextmanager
+
+@contextmanager
+def sync_cm():
+    yield "ok"
+
+async def main():
+    async with sync_cm() as res:
+        print(res)
+'''
+        module = MockModule("a.py", source)
+        with patch("fastapi_doctor.project.parsed_python_modules", return_value=[module]):
+            issues = check_misused_async_constructs()
+        assert len(issues) == 1
+        assert issues[0].check == "correctness/sync-cm-in-async-with"
+        assert "async with used on sync context manager" in issues[0].message
+
+    def test_transitive_unnecessary_async_is_flagged(self):
+        source = '''
+async def leaf():
+    return 1  # No awaits
+
+async def intermediate():
+    return await leaf()
+
+async def root():
+    return await intermediate()
+'''
+        issues = self._check_async_without_await(source)
+        # All three should be flagged:
+        # leaf: direct
+        # intermediate: awaits leaf (unnecessary)
+        # root: awaits intermediate (unnecessary)
+        checks = [i.check for i in issues]
+        assert checks.count("architecture/async-without-await") == 3
+        
+        # Verify message for transitive case
+        root_issue = [i for i in issues if "root" in i.message][0]
+        assert "effectively synchronous" in root_issue.message
+        assert "no real async work" in root_issue.help
+
 
 
 # ── Bootstrap failure finding test ───────────────────────────────────────────

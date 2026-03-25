@@ -6,78 +6,221 @@ import ast
 
 from .. import project
 from ..models import DoctorIssue
+from ..suppression import is_suppressed
+from ._async_analysis import ModuleFunctionIndex, build_module_function_index, function_body_nodes
+
+_SYNC_HTTP_ATTRS = frozenset({"get", "post", "put", "patch", "delete", "head", "request"})
+_ASYNC_HELPER_MAX_DEPTH = 5
+
+
+def _blocking_call_details(call: ast.Call) -> tuple[str, str] | None:
+    """Return issue text for a known blocking sync call."""
+    func = call.func
+    if isinstance(func, ast.Name):
+        if func.id == "open":
+            return (
+                "Sync I/O call 'open()'",
+                "Use aiofiles.open() or run the file operation in a thread with asyncio.to_thread().",
+            )
+        if func.id == "sleep":
+            return (
+                "Sync I/O call 'sleep()'",
+                "Use asyncio.sleep() instead of time.sleep() or a sync sleep wrapper.",
+            )
+    elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+        if func.value.id == "time" and func.attr == "sleep":
+            return ("time.sleep()", "Use asyncio.sleep() instead.")
+        if func.value.id == "requests" and func.attr in _SYNC_HTTP_ATTRS:
+            return (
+                f"Sync HTTP call 'requests.{func.attr}()'",
+                "Use httpx.AsyncClient or aiohttp instead of the requests library.",
+            )
+    return None
+
+
+def _find_blocking_call_in_sync_helper(
+    helper_name: str,
+    function_index: ModuleFunctionIndex,
+    *,
+    depth: int = 0,
+    seen: set[str] | None = None,
+) -> tuple[str, str] | None:
+    """Find whether a sync helper directly or transitively performs blocking work."""
+    if depth >= _ASYNC_HELPER_MAX_DEPTH:
+        return None
+
+    seen = seen or set()
+    if helper_name in seen:
+        return None
+    seen.add(helper_name)
+
+    helper_ctx = function_index.get_context(helper_name)
+    if helper_ctx is None:
+        return None
+
+    for node in function_body_nodes(helper_ctx.node):
+        if isinstance(node, ast.Call):
+            direct_blocking = _blocking_call_details(node)
+            if direct_blocking is not None:
+                return direct_blocking
+
+            resolved = function_index.resolve_call(helper_ctx, node)
+            if resolved is None or resolved.is_async:
+                continue
+            nested_blocking = _find_blocking_call_in_sync_helper(
+                resolved.qualname,
+                function_index,
+                depth=depth + 1,
+                seen=seen.copy(),
+            )
+            if nested_blocking is not None:
+                return nested_blocking
+    return None
 
 def check_sync_io_in_async() -> list[DoctorIssue]:
-    """Synchronous I/O in async handlers blocks the event loop — use async alternatives.
+    """Synchronous I/O in async code blocks the event loop — use async alternatives.
 
-    FastAPI runs async handlers on the event loop. Calling open(), time.sleep(),
-    or synchronous HTTP clients (requests.*) blocks all concurrent requests.
-    Use aiofiles, asyncio.sleep(), or httpx.AsyncClient instead.
+    Calling open(), time.sleep(), synchronous HTTP clients (requests.*), or
+    sync helpers that wrap those primitives from async code will block all
+    concurrent requests/tasks sharing the event loop.
     """
     issues: list[DoctorIssue] = []
-    # Sync I/O patterns that block the event loop
-    sync_io_calls = {
-        "open": "Use aiofiles.open() or run in a thread with asyncio.to_thread().",
-        "sleep": "Use asyncio.sleep() instead of time.sleep().",
-    }
-    sync_http_attrs = {"get", "post", "put", "patch", "delete", "head", "request"}
-
-    router_dir = project.OWN_CODE_DIR / "routers"
-    if not router_dir.is_dir():
-        return issues
     for module in project.parsed_python_modules():
-        if not module.path.is_relative_to(router_dir):
-            continue
         if "async " not in module.source:
             continue
-        for node in ast.walk(module.tree):
-            if not isinstance(node, ast.AsyncFunctionDef):
+        lines = module.source.splitlines()
+        function_index = build_module_function_index(module.tree)
+        emitted_transitive: set[tuple[str, int, str]] = set()
+        for function_ctx in function_index.functions:
+            if not function_ctx.is_async:
                 continue
-            for child in ast.walk(node):
+
+            for child in function_body_nodes(function_ctx.node):
                 if not isinstance(child, ast.Call):
                     continue
-                func = child.func
-                # Check bare calls: open(), time.sleep()
-                if isinstance(func, ast.Name) and func.id in sync_io_calls:
-                    # open() is OK if used with Path.read_text() or in non-file contexts
+
+                direct_blocking = _blocking_call_details(child)
+                if direct_blocking is not None:
+                    if child.lineno <= len(lines) and is_suppressed(
+                        lines[child.lineno - 1], "correctness/sync-io-in-async"
+                    ):
+                        continue
                     issues.append(
                         DoctorIssue(
                             check="correctness/sync-io-in-async",
                             severity="error",
-                            message=f"Sync I/O call '{func.id}()' inside async handler '{node.name}' blocks the event loop",
+                            message=(
+                                f"{direct_blocking[0]} inside async function "
+                                f"'{function_ctx.qualname}' blocks the event loop"
+                            ),
                             path=module.rel_path,
                             category="Correctness",
-                            help=sync_io_calls[func.id],
+                            help=direct_blocking[1],
                             line=child.lineno,
                         )
                     )
-                # Check attribute calls: time.sleep(), requests.get()
-                elif isinstance(func, ast.Attribute):
-                    if isinstance(func.value, ast.Name):
-                        if func.value.id == "time" and func.attr == "sleep":
-                            issues.append(
-                                DoctorIssue(
-                                    check="correctness/sync-io-in-async",
-                                    severity="error",
-                                    message=f"time.sleep() inside async handler '{node.name}' blocks the event loop",
-                                    path=module.rel_path,
-                                    category="Correctness",
-                                    help="Use asyncio.sleep() instead.",
-                                    line=child.lineno,
-                                )
+                    continue
+
+                resolved = function_index.resolve_call(function_ctx, child)
+                if resolved is None or resolved.is_async:
+                    continue
+
+                nested_blocking = _find_blocking_call_in_sync_helper(
+                    resolved.qualname,
+                    function_index,
+                )
+                if nested_blocking is None:
+                    continue
+                fingerprint = (function_ctx.qualname, child.lineno, resolved.qualname)
+                if fingerprint in emitted_transitive:
+                    continue
+                if child.lineno <= len(lines) and is_suppressed(
+                    lines[child.lineno - 1], "correctness/sync-io-in-async"
+                ):
+                    continue
+                emitted_transitive.add(fingerprint)
+                issues.append(
+                    DoctorIssue(
+                        check="correctness/sync-io-in-async",
+                        severity="error",
+                        message=(
+                            f"Async function '{function_ctx.qualname}' calls sync helper "
+                            f"'{resolved.qualname}()' that blocks the event loop"
+                        ),
+                        path=module.rel_path,
+                        category="Correctness",
+                        help=(
+                            f"Convert '{resolved.qualname}()' to non-blocking async work or run it in "
+                            f"a thread. Blocking path detected via {nested_blocking[0]}."
+                        ),
+                        line=child.lineno,
+                    )
+                )
+    return issues
+
+
+def check_misused_async_constructs() -> list[DoctorIssue]:
+    """Detect await, async for, and async with misused with sync objects."""
+    issues: list[DoctorIssue] = []
+    for module in project.parsed_python_modules():
+        if "async " not in module.source:
+            continue
+        lines = module.source.splitlines()
+        function_index = build_module_function_index(module.tree)
+        for function_ctx in function_index.functions:
+            if not function_ctx.is_async:
+                continue
+
+            for node in function_body_nodes(function_ctx.node):
+                # 1. await sync_func()
+                if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
+                    resolved = function_index.resolve_call(function_ctx, node.value)
+                    if resolved and not resolved.is_async:
+                        issues.append(
+                            DoctorIssue(
+                                check="correctness/await-on-sync",
+                                severity="error",
+                                message=f"await used on sync function '{resolved.qualname}()'",
+                                path=module.rel_path,
+                                category="Correctness",
+                                help="await only works on coroutines. Remove 'await' or convert the function to 'async def'.",
+                                line=node.lineno,
                             )
-                        elif func.value.id == "requests" and func.attr in sync_http_attrs:
-                            issues.append(
-                                DoctorIssue(
-                                    check="correctness/sync-io-in-async",
-                                    severity="error",
-                                    message=f"Sync HTTP call 'requests.{func.attr}()' inside async handler '{node.name}' blocks the event loop",
-                                    path=module.rel_path,
-                                    category="Correctness",
-                                    help="Use httpx.AsyncClient or aiohttp instead of the requests library.",
-                                    line=child.lineno,
-                                )
+                        )
+
+                # 2. async for x in sync_iterable()
+                elif isinstance(node, ast.AsyncFor) and isinstance(node.iter, ast.Call):
+                    resolved = function_index.resolve_call(function_ctx, node.iter)
+                    if resolved and not resolved.is_async and not resolved.is_generator:
+                        issues.append(
+                            DoctorIssue(
+                                check="correctness/sync-iterable-in-async-for",
+                                severity="error",
+                                message=f"async for used on sync iterable from '{resolved.qualname}()'",
+                                path=module.rel_path,
+                                category="Correctness",
+                                help="async for requires an async iterator. Use plain 'for' or make the helper an async generator.",
+                                line=node.lineno,
                             )
+                        )
+
+                # 3. async with sync_cm()
+                elif isinstance(node, ast.AsyncWith):
+                    for item in node.items:
+                        if isinstance(item.context_expr, ast.Call):
+                            resolved = function_index.resolve_call(function_ctx, item.context_expr)
+                            if resolved and not resolved.is_async and resolved.is_sync_context_manager:
+                                issues.append(
+                                    DoctorIssue(
+                                        check="correctness/sync-cm-in-async-with",
+                                        severity="error",
+                                        message=f"async with used on sync context manager from '{resolved.qualname}()'",
+                                        path=module.rel_path,
+                                        category="Correctness",
+                                        help="async with requires an async context manager. Use plain 'with' or @asynccontextmanager.",
+                                        line=node.lineno,
+                                    )
+                                )
     return issues
 
 def check_naive_datetime() -> list[DoctorIssue]:
@@ -633,6 +776,7 @@ __all__ = [
     "check_deprecated_typing_imports",
     "check_get_with_side_effect",
     "check_missing_http_timeouts",
+    "check_misused_async_constructs",
     "check_mutable_default_arg",
     "check_naive_datetime",
     "check_return_in_finally",
