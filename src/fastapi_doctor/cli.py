@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from importlib.metadata import PackageNotFoundError, version
+from importlib.metadata import PackageNotFoundError, version as metadata_version
 from pathlib import Path
 
 from .console import logger
@@ -214,9 +214,13 @@ def parse_args() -> argparse.Namespace:
 
 def get_cli_version() -> str:
     try:
-        return version("fastapi-doctor")
+        return metadata_version("fastapi-doctor")
     except PackageNotFoundError:
-        return "0.1.1"
+        try:
+            from ._version import version
+        except ImportError:
+            return "0.0.0"
+        return version
 
 
 def build_json_payload(

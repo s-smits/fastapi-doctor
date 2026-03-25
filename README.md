@@ -226,3 +226,7 @@ uv run pytest -q
 ```
 
 The doctor is designed to run inside the target project's environment when importing the FastAPI app requires the target project's dependencies.
+
+## Releases
+
+Package versions are derived from Git tags via `hatch-vcs`, and pushing a `v*` tag now triggers a GitHub release that uploads the built wheel and source distribution. That keeps the package metadata, CLI version output, and GitHub release version aligned instead of drifting from a hardcoded value in `pyproject.toml`.

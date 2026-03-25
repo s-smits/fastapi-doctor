@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Build distribution artifacts
+        run: uv build
+      - name: Verify built version matches tag
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          BUILT_VERSION="$(python - <<'PY'
+          from pathlib import Path
+          import re
+          import zipfile
+
+          wheel = sorted(Path("dist").glob("*.whl"))[-1]
+          with zipfile.ZipFile(wheel) as archive:
+              metadata_name = next(name for name in archive.namelist() if name.endswith("METADATA"))
+              metadata_text = archive.read(metadata_name).decode()
+          match = re.search(r"^Version: (.+)$", metadata_text, re.MULTILINE)
+          if match is None:
+              raise SystemExit("Could not read built package version")
+          print(match.group(1))
+          PY
+          )"
+          test "${BUILT_VERSION}" = "${TAG_VERSION}"
+      - name: Publish GitHub release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --generate-notes

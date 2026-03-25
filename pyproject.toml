@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling>=1.27.0"]
+requires = ["hatchling>=1.27.0", "hatch-vcs>=0.4.0"]
 build-backend = "hatchling.build"
 
 [project]
 name = "fastapi-doctor"
-version = "0.1.1"
+dynamic = ["version"]
 description = "Agent-first FastAPI/Python backend health checker."
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -35,6 +35,12 @@ fastapi-doctor-export-openapi = "fastapi_doctor.export_openapi:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/fastapi_doctor/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fastapi_doctor"]
