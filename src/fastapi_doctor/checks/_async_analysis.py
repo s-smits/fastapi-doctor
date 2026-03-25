@@ -77,11 +77,15 @@ def function_body_nodes(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[as
 
 
 def function_has_async_constructs(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """True when the function body contains async-only constructs."""
+    """True when the function body contains async-only constructs.
+    
+    Yield and YieldFrom in an async function make it an async generator, 
+    which is an async construct.
+    """
     return any(
         isinstance(
             child,
-            (ast.Await, ast.AsyncFor, ast.AsyncWith),
+            (ast.Await, ast.AsyncFor, ast.AsyncWith, ast.Yield, ast.YieldFrom),
         )
         for child in function_body_nodes(node)
     )
