@@ -20,6 +20,7 @@ class FunctionContext:
     is_generator: bool
     is_sync_context_manager: bool
     is_async_context_manager: bool
+    returns_awaitable: bool
 
 
 class ModuleFunctionIndex:
@@ -136,6 +137,7 @@ def _create_function_context(
         is_generator=is_gen,
         is_sync_context_manager=_looks_like_context_manager(node, async_only=False),
         is_async_context_manager=_looks_like_context_manager(node, async_only=True),
+        returns_awaitable=_returns_awaitable(node),
     )
 
 
@@ -170,6 +172,22 @@ def _looks_like_context_manager(node: ast.FunctionDef | ast.AsyncFunctionDef, as
                 return True
     return False
 
+
+def _returns_awaitable(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """Check if the function returns an awaitable (e.g., asyncio.create_task)."""
+    for child in function_body_nodes(node):
+        if not isinstance(child, ast.Return) or child.value is None:
+            continue
+        
+        val = child.value
+        if isinstance(val, ast.Call):
+            if isinstance(val.func, ast.Attribute):
+                if val.func.attr in {"create_task", "ensure_future", "gather", "shield"}:
+                    return True
+            elif isinstance(val.func, ast.Name):
+                if val.func.id in {"create_task", "ensure_future", "gather", "shield"}:
+                    return True
+    return False
 
 
 __all__ = [

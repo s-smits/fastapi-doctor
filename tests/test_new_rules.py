@@ -575,6 +575,21 @@ async def main():
         assert issues[0].check == "correctness/await-on-sync"
         assert "await used on sync function 'sync_helper()'" in issues[0].message
 
+    def test_await_on_sync_function_returning_awaitable_is_ignored(self):
+        source = '''
+import asyncio
+
+def create_task():
+    return asyncio.create_task(asyncio.sleep(1))
+
+async def main():
+    return await create_task()
+'''
+        module = MockModule("a.py", source)
+        with patch("fastapi_doctor.project.parsed_python_modules", return_value=[module]):
+            issues = check_misused_async_constructs()
+        assert issues == []
+
     def test_async_for_on_sync_iterable_is_flagged(self):
         source = '''
 def get_items():

@@ -175,7 +175,7 @@ def check_misused_async_constructs() -> list[DoctorIssue]:
                 # 1. await sync_func()
                 if isinstance(node, ast.Await) and isinstance(node.value, ast.Call):
                     resolved = function_index.resolve_call(function_ctx, node.value)
-                    if resolved and not resolved.is_async:
+                    if resolved and not resolved.is_async and not resolved.returns_awaitable:
                         issues.append(
                             DoctorIssue(
                                 check="correctness/await-on-sync",
