@@ -6,13 +6,13 @@ Coding agents are good at producing local code and still unreliable at consisten
 
 `fastapi-doctor` is the safety net for that gap. It provides a deterministic "quality gate" that agents can use to self-correct.
 
-Point it at a repo and it will discover the app layout, inspect routes, run AST-based checks, optionally run external tools, and return a scored report that an agent can act on without hardcoding repo structure.
+Point it at a repo and it will discover the app layout, inspect routes, run AST-based checks, optionally run external tools, and return a scored report that an agent can act on without hardcoding repo structure. The intended remediation style is minimal and local to the finding, not broad style churn.
 
 ## Agent Quick Start
 
 1. **Ask the user** if they want a **Security**, **Balanced**, or **Strict** audit profile.
 2. Run `uv run fastapi-doctor --json --profile <profile>` to get a machine-readable health score.
-3. If the score is below 80, fix the findings in `next_actions` before merging.
+3. If the score is below 80, fix the findings in `next_actions` before merging, using the smallest semantic diff that resolves the rule.
 4. **Integration Hint:** Ask the user before adding these rules to `CLAUDE.md` or `AGENTS.md`.
 
 ## Agent Instructions (Quality Gate)
@@ -47,6 +47,7 @@ That is useful, but it does not give you a deterministic backend verifier after 
 - It uses AST-based checks instead of relying on prompt memory alone.
 - It scores backend health across multiple categories instead of giving generic advice.
 - It emits stable JSON so another agent can consume the findings automatically.
+- It tells consuming agents to prefer minimal semantic fixes instead of style-only rewrites.
 - It is built for AI-assisted development, where catching the last 10-20% of missed backend patterns matters.
 
 ## What Agents Get
@@ -141,7 +142,7 @@ This returns:
 - discovered `project` metadata such as `repo_root`, `import_root`, `code_dir`, and `app_module`
 - the resolved `effective_config`
 - `commands` results for `ruff`, `pyright`, `bandit`, or `pytest` when enabled
-- `doctor` findings with categorized issues, remediation fields, and ranked `next_actions`
+- `doctor` findings with categorized issues, remediation fields, ranked `next_actions`, and minimal-change guidance
 
 ## Common Agent Invocations
 

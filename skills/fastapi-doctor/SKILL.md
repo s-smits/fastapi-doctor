@@ -12,6 +12,8 @@ last_verified: 2026-03-17
 
 Opinionated backend health checker for FastAPI applications. Scores the backend 0-100 using severity-weighted unique rule violations across 7 categories. All checks use AST-based static analysis — no regex hacks. Configurable via `.fastapi-doctor.yml` in your project root.
 
+When applying findings, prefer the smallest semantic diff that resolves the rule. Do not introduce style-only rewrites such as replacing imported helpers with module-qualified calls unless the finding explicitly requires that change.
+
 ## Configuration
 
 Place `.fastapi-doctor.yml` in your project root. All keys are optional — missing keys use defaults. See `.fastapi-doctor.example.yml` for the full schema.

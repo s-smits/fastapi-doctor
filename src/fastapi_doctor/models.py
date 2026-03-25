@@ -11,7 +11,13 @@ ERROR_RULE_PENALTY = 2.0
 WARNING_RULE_PENALTY = 1.0
 SCORE_GOOD_THRESHOLD = 80
 SCORE_OK_THRESHOLD = 60
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "1.2"
+
+_AUTOFIX_GUIDANCE = (
+    "Apply the smallest semantic change that resolves the finding. "
+    "Avoid namespace rewrites, import-style churn, or abstraction changes "
+    "unless the rule explicitly requires them."
+)
 
 _CATEGORY_WHY: dict[str, str] = {
     "Security": "Security findings can expose the service to unauthorized access, data leaks, or unsafe execution paths.",
@@ -221,6 +227,8 @@ class DoctorIssue:
                 "profile_tier_label": self.profile_tier_label,
                 "why_it_matters": self.why_it_matters,
                 "suggested_fix": self.suggested_fix,
+                "change_scope": "minimal",
+                "autofix_guidance": _AUTOFIX_GUIDANCE,
                 "safe_to_autofix": False,
                 "fingerprint": self.fingerprint,
             }
@@ -306,6 +314,8 @@ class DoctorReport:
                     "summary": issue.message,
                     "why_it_matters": issue.why_it_matters,
                     "suggested_fix": issue.suggested_fix,
+                    "change_scope": "minimal",
+                    "autofix_guidance": _AUTOFIX_GUIDANCE,
                     "sample_paths": [],
                 },
             )

@@ -216,7 +216,7 @@ def get_cli_version() -> str:
     try:
         return version("fastapi-doctor")
     except PackageNotFoundError:
-        return "0.1.0"
+        return "0.1.1"
 
 
 def build_json_payload(

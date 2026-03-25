@@ -198,6 +198,8 @@ def test_issue_dict_exposes_agent_fields() -> None:
     assert payload["safe_to_autofix"] is False
     assert "why_it_matters" in payload
     assert payload["suggested_fix"] == "Add a dependency like Depends(require_auth) to the route."
+    assert payload["change_scope"] == "minimal"
+    assert "Avoid namespace rewrites" in payload["autofix_guidance"]
     assert payload["fingerprint"] == "security/missing-auth-dep:app/api/routes/users.py:12:0"
 
 

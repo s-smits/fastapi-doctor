@@ -227,6 +227,8 @@ class TestDoctorIssueKind:
         assert "confidence" in d
         assert "action_type" in d
         assert "is_ship_blocker" in d
+        assert d["change_scope"] == "minimal"
+        assert "Avoid namespace rewrites" in d["autofix_guidance"]
         assert d["kind"] == "blocker"
 
 
@@ -301,6 +303,8 @@ class TestDoctorReportBlockerGating:
         assert "kind" in action
         assert "confidence" in action
         assert "action_type" in action
+        assert action["change_scope"] == "minimal"
+        assert "Avoid namespace rewrites" in action["autofix_guidance"]
 
 
 # ── Hardcoded secret false-positive tests ────────────────────────────────────
