@@ -3,6 +3,7 @@ from __future__ import annotations
 """FastAPI app loading and route helper utilities."""
 
 import os
+from importlib.util import find_spec
 from typing import Any
 
 try:
@@ -18,6 +19,10 @@ from . import project
 def _ensure_env_defaults() -> None:
     for key, value in project.DEFAULT_ENV.items():
         os.environ.setdefault(key, value)
+
+
+def fastapi_runtime_available() -> bool:
+    return find_spec("fastapi") is not None
 
 
 def build_app_for_doctor() -> FastAPI:
@@ -76,5 +81,6 @@ __all__ = [
     "_sorted_methods",
     "build_app_for_doctor",
     "dependency_names",
+    "fastapi_runtime_available",
     "iter_api_routes",
 ]

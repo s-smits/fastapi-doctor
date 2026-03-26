@@ -44,8 +44,12 @@ _PROJECT_LAYOUT = ProjectLayout(
     app_module=APP_MODULE,
     discovery_source="uninitialized",
 )
-_CONFIG_SIGNATURE: tuple[str | None, str | None, str | None, str | None, str] | None = None
-_PARSED_MODULE_CACHE: tuple[tuple[str | None, str | None, str | None, str | None, str], list[ParsedModule]] | None = None
+_STATIC_ONLY_DISCOVERY = False
+_CONFIG_SIGNATURE: tuple[str | None, str | None, str | None, str | None, str, str] | None = None
+_PARSED_MODULE_CACHE: tuple[
+    tuple[str | None, str | None, str | None, str | None, str, str],
+    list[ParsedModule],
+] | None = None
 _LIBRARY_INFO_CACHE: LibraryInfo | None = None
 
 def _load_doctor_config() -> dict[str, Any]:
@@ -247,7 +251,7 @@ def _discover_code_dir(repo_root: Path) -> Path:
             score += 30
         if (child / "main.py").is_file() or (child / "app.py").is_file():
             score += 25
-        py_count = sum(1 for _ in child.rglob("*.py"))
+        py_count = _count_py_files(child)
         score += min(py_count, 20)
         if score:
             candidates.append((score, child))
@@ -255,6 +259,33 @@ def _discover_code_dir(repo_root: Path) -> Path:
     if candidates:
         return max(candidates, key=lambda item: item[0])[1]
     return repo_root
+
+
+def _count_py_files(directory: Path, *, cap: int = 20) -> int:
+    """Fast .py file count using os.scandir, stopping early at *cap*."""
+    count = 0
+
+    def _walk(current: str) -> None:
+        nonlocal count
+        if count >= cap:
+            return
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    if count >= cap:
+                        return
+                    name = entry.name
+                    if name.startswith(".") or name in _EXCLUDED_DISCOVERY_DIRS:
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        _walk(entry.path)
+                    elif entry.is_file(follow_symlinks=False) and name.endswith(".py"):
+                        count += 1
+        except (PermissionError, OSError):
+            pass
+
+    _walk(str(directory))
+    return count
 
 
 def _infer_layout_from_app_module(repo_root: Path, app_module: str) -> tuple[Path, Path] | None:
@@ -283,7 +314,7 @@ def _infer_layout_from_app_module(repo_root: Path, app_module: str) -> tuple[Pat
             return import_root, code_dir if code_dir.exists() else import_root.joinpath(*module_parts)
     return None
 
-def _discover_project_layout() -> ProjectLayout:
+def _discover_project_layout(*, static_only: bool = False) -> ProjectLayout:
     repo_root = _resolve_path(os.environ.get("DOCTOR_REPO_ROOT"), base=Path.cwd()) or Path.cwd().resolve()
     explicit_code_dir = _resolve_path(os.environ.get("DOCTOR_CODE_DIR"), base=repo_root)
     explicit_import_root = _resolve_path(os.environ.get("DOCTOR_IMPORT_ROOT"), base=repo_root)
@@ -298,7 +329,11 @@ def _discover_project_layout() -> ProjectLayout:
             candidate_import_root, candidate_code_dir = inferred_layout
             candidate_module = explicit_app_module.split(":", 1)[0]
             discovery_source = "explicit app module"
-    if inferred_layout is None and (not explicit_app_module or not explicit_code_dir or not explicit_import_root):
+    if (
+        not static_only
+        and inferred_layout is None
+        and (not explicit_app_module or not explicit_code_dir or not explicit_import_root)
+    ):
         discovered_candidate = _discover_app_candidate(repo_root)
 
     if discovered_candidate is not None:
@@ -324,7 +359,9 @@ def _discover_project_layout() -> ProjectLayout:
             candidate_module = module
         candidate_attr = "app"
         if not explicit_app_module:
-            discovery_source = "auto (package heuristics)"
+            discovery_source = (
+                "static-only heuristics" if static_only else "auto (package heuristics)"
+            )
 
     import_root = explicit_import_root or candidate_import_root
     code_dir = explicit_code_dir or candidate_code_dir
@@ -338,7 +375,7 @@ def _discover_project_layout() -> ProjectLayout:
         discovery_source=discovery_source,
     )
 
-def refresh_runtime_config() -> ProjectLayout:
+def refresh_runtime_config(*, static_only: bool = False) -> ProjectLayout:
     global REPO_ROOT, IMPORT_ROOT, OWN_CODE_DIR, APP_MODULE, VENDORED_LIB
     global _PROJECT_LAYOUT
     global _DOCTOR_CONFIG, _ARCH_CONFIG, _PYDANTIC_CONFIG, _API_CONFIG, _SECURITY_CONFIG, _SCAN_CONFIG
@@ -348,9 +385,9 @@ def refresh_runtime_config() -> ProjectLayout:
     global FORBIDDEN_WRITE_PARAMS, POST_CREATE_PREFIXES, TAG_REQUIRED_PREFIXES, SCAN_EXCLUDED_DIRS
     global EXCLUDE_RULES
 
-    global _CONFIG_SIGNATURE, _PARSED_MODULE_CACHE, _LIBRARY_INFO_CACHE
+    global _CONFIG_SIGNATURE, _PARSED_MODULE_CACHE, _LIBRARY_INFO_CACHE, _STATIC_ONLY_DISCOVERY
 
-    layout = _discover_project_layout()
+    layout = _discover_project_layout(static_only=static_only)
     REPO_ROOT = layout.repo_root
     IMPORT_ROOT = layout.import_root
     OWN_CODE_DIR = layout.code_dir
@@ -378,19 +415,22 @@ def refresh_runtime_config() -> ProjectLayout:
     TAG_REQUIRED_PREFIXES = tuple(_API_CONFIG.get("tag_required_prefixes", ["/api/"]))
     SCAN_EXCLUDED_DIRS = frozenset(_SCAN_CONFIG.get("exclude_dirs", ["lib", "vendor", "vendored", "third_party"]))
     EXCLUDE_RULES = frozenset(_SCAN_CONFIG.get("exclude_rules", []))
-    _CONFIG_SIGNATURE = _current_config_signature()
+    _STATIC_ONLY_DISCOVERY = static_only
+    _CONFIG_SIGNATURE = _current_config_signature(static_only=static_only)
     _PARSED_MODULE_CACHE = None
     _LIBRARY_INFO_CACHE = None
 
     return layout
 
-def _current_config_signature() -> tuple[str | None, str | None, str | None, str | None, str]:
+def _current_config_signature(*, static_only: bool | None = None) -> tuple[str | None, str | None, str | None, str | None, str]:
+    mode = _STATIC_ONLY_DISCOVERY if static_only is None else static_only
     return (
         os.environ.get("DOCTOR_REPO_ROOT"),
         os.environ.get("DOCTOR_CODE_DIR"),
         os.environ.get("DOCTOR_IMPORT_ROOT"),
         os.environ.get("DOCTOR_APP_MODULE"),
         str(Path.cwd().resolve()),
+        "1" if mode else "0",
     )
 
 
@@ -501,12 +541,8 @@ def discover_libraries() -> LibraryInfo:
         return info
 
     import_markers = {attr: False for attr in keywords}
-    for filepath in _iter_repo_python_files(REPO_ROOT):
-        try:
-            tree = ast.parse(filepath.read_text())
-        except Exception:
-            continue
-        for node in ast.walk(tree):
+    for module in parsed_python_modules():
+        for node in ast.walk(module.tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     base_name = alias.name.split(".", 1)[0]
@@ -531,15 +567,27 @@ def own_python_files() -> list[Path]:
     ensure_runtime_config()
     if not OWN_CODE_DIR.exists():
         return []
-    return sorted(
-        p
-        for p in OWN_CODE_DIR.rglob("*.py")
-        if "__pycache__" not in str(p)
-        and (
-            not (parts := p.relative_to(OWN_CODE_DIR).parts)
-            or parts[0] not in SCAN_EXCLUDED_DIRS
-        )
-    )
+    results: list[Path] = []
+
+    def _walk(current_path: str, *, top_level: str | None = None) -> None:
+        try:
+            with os.scandir(current_path) as entries:
+                for entry in entries:
+                    name = entry.name
+                    if name == "__pycache__" or name.startswith("."):
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        next_top_level = top_level or name
+                        if next_top_level in SCAN_EXCLUDED_DIRS:
+                            continue
+                        _walk(entry.path, top_level=next_top_level)
+                    elif entry.is_file(follow_symlinks=False) and name.endswith(".py"):
+                        results.append(Path(entry.path))
+        except (PermissionError, OSError):
+            return
+
+    _walk(str(OWN_CODE_DIR))
+    return sorted(results)
 
 
 def parsed_python_modules() -> list[ParsedModule]:

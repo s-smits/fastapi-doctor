@@ -10,8 +10,9 @@ except ImportError:  # pragma: no cover
     FastAPI = Any  # type: ignore[assignment]
 
 from . import project
-from .app_loader import build_app_for_doctor, iter_api_routes
+from .app_loader import build_app_for_doctor, fastapi_runtime_available, iter_api_routes
 from . import native_core
+from .static_routes import RouteInfo, extract_static_routes, route_info_from_live_route
 from .checks.architecture import (
     check_async_without_await,
     check_avoid_sys_exit,
@@ -96,12 +97,16 @@ def run_python_doctor_checks(
     only_rules: set[str] | None = None,
     ignore_rules: set[str] | None = None,
     profile: str | None = None,
+    skip_app_bootstrap: bool = False,
 ) -> DoctorReport:
     """Run all opinionated checks and compute a health score."""
-    project.refresh_runtime_config()
+    project.refresh_runtime_config(static_only=skip_app_bootstrap)
     libraries = project.discover_libraries()
     # Pre-warm the parsed modules cache — all static checks share this.
     project.parsed_python_modules()
+    # Clear the per-tree function index cache from any prior run.
+    from .checks._async_analysis import clear_index_cache
+    clear_index_cache()
     issues: list[DoctorIssue] = []
     checks_not_evaluated: list[str] = []
 
@@ -169,43 +174,48 @@ def run_python_doctor_checks(
 
         return True
 
-    # ── FastAPI route-level checks (need live app) ────────────────────────────────
-    if libraries.fastapi:
+    # ── Route-level checks ──────────────────────────────────────────────
+    # Checks that run against a RouteInfo list work in both live and static
+    # mode.  OpenAPI-schema checks require a live app and are skipped in
+    # static mode.
+    route_list_checks = [
+        ("security/missing-auth-dep", check_route_dependency_policies),
+        ("security/forbidden-write-param", check_write_route_parameters),
+        ("correctness/duplicate-route", check_duplicate_routes),
+        ("api-surface/missing-tags", check_route_tags),
+        ("correctness/missing-response-model", check_response_models),
+        ("correctness/post-status-code", check_post_status_codes),
+        ("api-surface/missing-docstring", check_endpoint_docstrings),
+        ("api-surface/missing-pagination", check_missing_pagination),
+    ]
+    openapi_rule_ids = {
+        "api-surface/missing-operation-id",
+        "api-surface/duplicate-operation-id",
+        "api-surface/missing-openapi-tags",
+    }
+    all_route_rule_ids = {rid for rid, _ in route_list_checks} | openapi_rule_ids
+
+    routes: list[RouteInfo] = []
+    live_app = None
+
+    if skip_app_bootstrap:
+        # Static extraction — know the FastAPI components without booting
+        if libraries.fastapi:
+            routes, route_count = extract_static_routes()
+        # OpenAPI checks can't run without the live app
+        checks_not_evaluated = sorted(rid for rid in openapi_rule_ids if should_run(rid))
+    elif not libraries.fastapi or not fastapi_runtime_available():
+        checks_not_evaluated = sorted(rid for rid in all_route_rule_ids if should_run(rid))
+    else:
+        # Live-app path
         try:
-            app = app or build_app_for_doctor()
-            routes = iter_api_routes(app)
+            live_app = app or build_app_for_doctor()
+            live_routes = iter_api_routes(live_app)
+            routes = [route_info_from_live_route(r) for r in live_routes]
             route_count = len(routes)
-            openapi_path_count = len(app.openapi().get("paths", {}))
-
-            # Rules that require the 'routes' list
-            route_level_checks = [
-                ("security/missing-auth-dep", check_route_dependency_policies),
-                ("security/forbidden-write-param", check_write_route_parameters),
-                ("correctness/duplicate-route", check_duplicate_routes),
-                ("api-surface/missing-tags", check_route_tags),
-                ("correctness/missing-response-model", check_response_models),
-                ("correctness/post-status-code", check_post_status_codes),
-                ("api-surface/missing-docstring", check_endpoint_docstrings),
-                ("api-surface/missing-pagination", check_missing_pagination),
-            ]
-            for rule_id, check_func in route_level_checks:
-                if should_run(rule_id):
-                    issues.extend(check_func(routes))
-
-            # Rules that require the 'app' object
-            if any(
-                should_run(r)
-                for r in (
-                    "api-surface/missing-operation-id",
-                    "api-surface/duplicate-operation-id",
-                    "api-surface/missing-openapi-tags",
-                )
-            ):
-                issues.extend(check_openapi_schema(app))
-
+            openapi_path_count = len(live_app.openapi().get("paths", {}))
         except Exception as e:
             import traceback
-
             tb_str = traceback.format_exc()
             issues.append(
                 DoctorIssue(
@@ -219,14 +229,17 @@ def run_python_doctor_checks(
                     detail=tb_str,
                 )
             )
-            checks_not_evaluated = [
-                "security/missing-auth-dep",
-                "security/forbidden-write-param",
-                "correctness/duplicate-route",
-                "correctness/missing-response-model",
-                "correctness/post-status-code",
-                "api-surface/*",
-            ]
+            checks_not_evaluated = sorted(rid for rid in all_route_rule_ids if should_run(rid))
+
+    # Run route-list checks (works with both live and static RouteInfo)
+    if routes:
+        for rule_id, check_func in route_list_checks:
+            if should_run(rule_id):
+                issues.extend(check_func(routes))
+
+    # OpenAPI schema checks (live app only)
+    if live_app is not None and any(should_run(r) for r in openapi_rule_ids):
+        issues.extend(check_openapi_schema(live_app))
 
     # ── Static Checks (No arguments) ──────────────────────────────────────────
     # Most checks are static AST-based and can be run without booting the app.

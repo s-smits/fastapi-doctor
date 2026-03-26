@@ -51,6 +51,8 @@ def compute_combined_score(
 
 def main() -> int:
     args = parse_args()
+    if args.static_only:
+        args.skip_app_bootstrap = True
     configure_environment_from_args(args)
     repo_root = resolve_repo_root()
     cli_version = get_cli_version()
@@ -135,6 +137,7 @@ def main() -> int:
             only_rules=only_rules if only_rules else None,
             ignore_rules=ignore_rules if ignore_rules else None,
             profile=args.profile,
+            skip_app_bootstrap=args.skip_app_bootstrap,
         )
         if doctor_report and ruff_doctor_issues:
             doctor_report = DoctorReport(
@@ -217,6 +220,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-pyright", dest="skip_ty", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--skip-structure", action="store_true")
     parser.add_argument("--skip-openapi", action="store_true")
+    parser.add_argument(
+        "--static-only",
+        action="store_true",
+        help="Run only static analysis. This skips app discovery, import, and live route/OpenAPI checks.",
+    )
+    parser.add_argument(
+        "--skip-app-bootstrap",
+        action="store_true",
+        help="Skip importing/booting the FastAPI app and omit live route/OpenAPI checks.",
+    )
     parser.add_argument("--with-bandit", action="store_true", help="Include Bandit security scan.")
     parser.add_argument("--with-tests", action="store_true", help="Run targeted backend test suites.")
     parser.add_argument(
@@ -267,6 +280,8 @@ def build_json_payload(
             "skip_pyright": args.skip_ty,
             "skip_structure": args.skip_structure,
             "skip_openapi": args.skip_openapi,
+            "static_only": args.static_only,
+            "skip_app_bootstrap": args.skip_app_bootstrap,
         },
         "project": {
             "repo_root": str(project_layout.repo_root),

@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-"""Shared helpers for async/sync static analysis."""
+"""Shared helpers for async/sync static analysis.
+
+Performance: ``build_module_function_index`` is the hot path.  We cache the
+index per ``id(module_tree)`` so that multiple checks sharing the same
+parsed module avoid redundant walks.  ``_create_function_context`` walks the
+function body once and classifies all three properties (async-constructs,
+generator, returns-awaitable) in a single pass.
+"""
 
 import ast
 from dataclasses import dataclass
@@ -40,14 +47,12 @@ class ModuleFunctionIndex:
         }
 
     def get_context(self, qualname: str) -> FunctionContext | None:
-        """Look up a function context by fully qualified name."""
         if "." in qualname:
             owner_class, _, name = qualname.rpartition(".")
             return self._by_method.get((owner_class, name))
         return self._by_name.get(qualname)
 
     def resolve_call(self, caller: FunctionContext, call: ast.Call) -> FunctionContext | None:
-        """Resolve only obvious intra-module calls."""
         func = call.func
         if isinstance(func, ast.Name):
             return self._by_name.get(func.id)
@@ -61,47 +66,81 @@ class ModuleFunctionIndex:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Fast body-node walk — single pass, skips nested defs
+# ---------------------------------------------------------------------------
+
+_SKIP_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+_ASYNC_TYPES = (ast.Await, ast.AsyncFor, ast.AsyncWith, ast.Yield, ast.YieldFrom)
+_YIELD_TYPES = (ast.Yield, ast.YieldFrom)
+_AWAITABLE_RETURN_NAMES = frozenset({"create_task", "ensure_future", "gather", "shield"})
+
+
 def function_body_nodes(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.AST]:
     """Return nodes in a function body, excluding nested defs/classes."""
     nodes: list[ast.AST] = []
-
-    def _visit(current: ast.AST) -> None:
-        if isinstance(current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
-            return
+    stack = list(reversed(node.body))
+    while stack:
+        current = stack.pop()
+        if isinstance(current, _SKIP_TYPES):
+            continue
         nodes.append(current)
-        for child in ast.iter_child_nodes(current):
-            _visit(child)
-
-    for stmt in node.body:
-        _visit(stmt)
+        children = list(ast.iter_child_nodes(current))
+        if children:
+            stack.extend(reversed(children))
     return nodes
 
 
+def _classify_body(node: ast.FunctionDef | ast.AsyncFunctionDef) -> tuple[bool, bool, bool]:
+    """Single pass: (has_async_constructs, is_generator, returns_awaitable)."""
+    has_async = False
+    is_gen = False
+    returns_awaitable = False
+    stack = list(reversed(node.body))
+    while stack:
+        current = stack.pop()
+        if isinstance(current, _SKIP_TYPES):
+            continue
+        if isinstance(current, _ASYNC_TYPES):
+            has_async = True
+            if isinstance(current, _YIELD_TYPES):
+                is_gen = True
+        elif isinstance(current, ast.Return) and current.value is not None:
+            val = current.value
+            if isinstance(val, ast.Call):
+                f = val.func
+                if isinstance(f, ast.Attribute) and f.attr in _AWAITABLE_RETURN_NAMES:
+                    returns_awaitable = True
+                elif isinstance(f, ast.Name) and f.id in _AWAITABLE_RETURN_NAMES:
+                    returns_awaitable = True
+        for child in ast.iter_child_nodes(current):
+            stack.append(child)
+    return has_async, is_gen, returns_awaitable
+
+
 def function_has_async_constructs(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """True when the function body contains async-only constructs.
-    
-    Yield and YieldFrom in an async function make it an async generator, 
-    which is an async construct.
-    """
-    return any(
-        isinstance(
-            child,
-            (ast.Await, ast.AsyncFor, ast.AsyncWith, ast.Yield, ast.YieldFrom),
-        )
-        for child in function_body_nodes(node)
-    )
+    """True when the function body contains async-only constructs."""
+    return _classify_body(node)[0]
 
 
 def function_is_generator(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """True when the function body contains yield or yield from."""
-    return any(
-        isinstance(child, (ast.Yield, ast.YieldFrom))
-        for child in function_body_nodes(node)
-    )
+    return _classify_body(node)[1]
+
+
+# ---------------------------------------------------------------------------
+# Cached module index
+# ---------------------------------------------------------------------------
+
+_INDEX_CACHE: dict[int, ModuleFunctionIndex] = {}
 
 
 def build_module_function_index(module_tree: ast.AST) -> ModuleFunctionIndex:
-    """Index top-level functions and top-level class methods for one module."""
+    """Index top-level functions and class methods — cached by tree identity."""
+    tree_id = id(module_tree)
+    cached = _INDEX_CACHE.get(tree_id)
+    if cached is not None:
+        return cached
     functions: list[FunctionContext] = []
     for stmt in getattr(module_tree, "body", []):
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -110,7 +149,13 @@ def build_module_function_index(module_tree: ast.AST) -> ModuleFunctionIndex:
             for class_stmt in stmt.body:
                 if isinstance(class_stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     functions.append(_create_function_context(class_stmt, owner_class=stmt.name))
-    return ModuleFunctionIndex(functions)
+    index = ModuleFunctionIndex(functions)
+    _INDEX_CACHE[tree_id] = index
+    return index
+
+
+def clear_index_cache() -> None:
+    _INDEX_CACHE.clear()
 
 
 def _create_function_context(
@@ -120,11 +165,8 @@ def _create_function_context(
     name = node.name
     qualname = f"{owner_class}.{name}" if owner_class else name
 
-    has_async = function_has_async_constructs(node)
-    is_gen = function_is_generator(node)
-
-    # In async functions, yield makes it an async generator.
-    # In sync functions, yield makes it a generator.
+    # Single pass over the body for all three classifications
+    has_async, is_gen, returns_awaitable = _classify_body(node)
 
     return FunctionContext(
         node=node,
@@ -137,7 +179,7 @@ def _create_function_context(
         is_generator=is_gen,
         is_sync_context_manager=_looks_like_context_manager(node, async_only=False),
         is_async_context_manager=_looks_like_context_manager(node, async_only=True),
-        returns_awaitable=_returns_awaitable(node),
+        returns_awaitable=returns_awaitable,
     )
 
 
@@ -150,7 +192,6 @@ def _looks_like_route_handler(node: ast.FunctionDef | ast.AsyncFunctionDef) -> b
 
 
 def _looks_like_context_manager(node: ast.FunctionDef | ast.AsyncFunctionDef, async_only: bool = False) -> bool:
-    """Check if function is likely a context manager (via decorator)."""
     for decorator in node.decorator_list:
         dec_name = ""
         if isinstance(decorator, ast.Name):
@@ -162,7 +203,6 @@ def _looks_like_context_manager(node: ast.FunctionDef | ast.AsyncFunctionDef, as
                 dec_name = decorator.func.id
             elif isinstance(decorator.func, ast.Attribute):
                 dec_name = decorator.func.attr
-
         dec_name = dec_name.lower()
         if async_only:
             if "asynccontextmanager" in dec_name:
@@ -173,27 +213,11 @@ def _looks_like_context_manager(node: ast.FunctionDef | ast.AsyncFunctionDef, as
     return False
 
 
-def _returns_awaitable(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
-    """Check if the function returns an awaitable (e.g., asyncio.create_task)."""
-    for child in function_body_nodes(node):
-        if not isinstance(child, ast.Return) or child.value is None:
-            continue
-        
-        val = child.value
-        if isinstance(val, ast.Call):
-            if isinstance(val.func, ast.Attribute):
-                if val.func.attr in {"create_task", "ensure_future", "gather", "shield"}:
-                    return True
-            elif isinstance(val.func, ast.Name):
-                if val.func.id in {"create_task", "ensure_future", "gather", "shield"}:
-                    return True
-    return False
-
-
 __all__ = [
     "FunctionContext",
     "ModuleFunctionIndex",
     "build_module_function_index",
+    "clear_index_cache",
     "function_body_nodes",
     "function_has_async_constructs",
 ]

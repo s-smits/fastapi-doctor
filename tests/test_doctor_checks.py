@@ -148,6 +148,79 @@ def test_only_rules_accepts_prefixes(monkeypatch, tmp_path: Path) -> None:
     assert any(issue.check == "correctness/deprecated-typing-imports" for issue in report.issues)
 
 
+def test_skip_app_bootstrap_avoids_live_app_import(monkeypatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "pkg"
+    _write(package_dir / "__init__.py", "")
+    _write(
+        package_dir / "main.py",
+        "from fastapi import FastAPI\n\napp = FastAPI()\n",
+    )
+    _write(
+        package_dir / "bad.py",
+        (
+            "from typing import List\n\n"
+            "def loud(items: List[int]) -> list[int]:\n"
+            "    print(items)\n"
+            "    return items\n"
+        ),
+    )
+
+    module = _reload_doctor(monkeypatch, tmp_path)
+
+    def _boom():
+        raise AssertionError("app bootstrap should be skipped")
+
+    monkeypatch.setattr(runner_module, "build_app_for_doctor", _boom)
+    report = module.run_python_doctor_checks(profile="strict", skip_app_bootstrap=True)
+
+    assert any(issue.check == "correctness/deprecated-typing-imports" for issue in report.issues)
+    # Route-list checks now run via static extraction — only OpenAPI checks are skipped
+    assert "security/missing-auth-dep" not in report.checks_not_evaluated
+    assert "api-surface/missing-operation-id" in report.checks_not_evaluated
+    assert not any(issue.check == "doctor/app-bootstrap-failed" for issue in report.issues)
+
+
+def test_skip_app_bootstrap_skips_app_discovery(monkeypatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "pkg"
+    _write(package_dir / "__init__.py", "")
+    _write(package_dir / "service.py", "def compute(values=[]):\n    return values\n")
+
+    module = _reload_doctor(monkeypatch, tmp_path)
+
+    def _boom(repo_root: Path):  # type: ignore[unused-argument]
+        raise AssertionError("static-only execution should not scan the repo for a FastAPI app candidate")
+
+    monkeypatch.setattr(project_module, "_discover_app_candidate", _boom)
+
+    report = module.run_python_doctor_checks(profile="strict", skip_app_bootstrap=True)
+
+    assert report.checks_not_evaluated
+    assert module.get_project_layout().discovery_source == "static-only heuristics"
+
+
+def test_missing_fastapi_runtime_skips_live_app_import(monkeypatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "pkg"
+    _write(package_dir / "__init__.py", "")
+    _write(
+        package_dir / "main.py",
+        "from fastapi import FastAPI\n\napp = FastAPI()\n",
+    )
+
+    module = _reload_doctor(monkeypatch, tmp_path)
+
+    def _boom():
+        raise AssertionError("app bootstrap should be skipped when fastapi runtime is unavailable")
+
+    monkeypatch.setattr(runner_module, "build_app_for_doctor", _boom)
+    monkeypatch.setattr(runner_module, "fastapi_runtime_available", lambda: False)
+
+    report = module.run_python_doctor_checks(profile="strict")
+
+    assert "security/missing-auth-dep" in report.checks_not_evaluated
+    assert "api-surface/missing-operation-id" in report.checks_not_evaluated
+    assert not any(issue.check == "doctor/app-bootstrap-failed" for issue in report.issues)
+
+
 def test_get_with_side_effect_ignores_read_only_execute(monkeypatch, tmp_path: Path) -> None:
     package_dir = tmp_path / "pkg"
     _write(package_dir / "__init__.py", "")
@@ -300,6 +373,8 @@ def test_build_json_payload_includes_effective_config(monkeypatch, tmp_path: Pat
         skip_ty=True,
         skip_structure=False,
         skip_openapi=False,
+        static_only=False,
+        skip_app_bootstrap=True,
     )
 
     payload = cli_module.build_json_payload(
@@ -313,6 +388,8 @@ def test_build_json_payload_includes_effective_config(monkeypatch, tmp_path: Pat
     assert payload["schema_version"] == models_module.SCHEMA_VERSION
     assert payload["effective_config"]["architecture"]["enabled"] is True
     assert payload["project"]["app_module"] == "pkg.main:app"
+    assert payload["requested"]["static_only"] is False
+    assert payload["requested"]["skip_app_bootstrap"] is True
 
 
 def test_get_project_layout_refreshes_when_env_changes(monkeypatch, tmp_path: Path) -> None:

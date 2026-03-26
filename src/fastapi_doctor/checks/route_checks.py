@@ -1,34 +1,40 @@
 from __future__ import annotations
 
-"""Route and OpenAPI focused checks."""
+"""Route and OpenAPI focused checks.
+
+All route-list checks accept ``list[RouteInfo]`` so they work identically
+with both live-app and static-AST extraction.  ``check_openapi_schema``
+still requires a live FastAPI app object (only called when the app boots).
+"""
 
 import ast
-import inspect
 from typing import Any
 
 try:
     from fastapi import FastAPI
-    from fastapi.routing import APIRoute
 except ImportError:  # pragma: no cover
     FastAPI = Any  # type: ignore[assignment]
-    APIRoute = Any  # type: ignore[assignment]
 
 from .. import project
-from ..app_loader import _route_matches_prefix, _sorted_methods, dependency_names
 from ..models import DoctorIssue
+from ..static_routes import RouteInfo
 
-def check_route_dependency_policies(routes: list[APIRoute]) -> list[DoctorIssue]:
+
+# ---------------------------------------------------------------------------
+# Route-list checks (work with RouteInfo from either source)
+# ---------------------------------------------------------------------------
+
+def check_route_dependency_policies(routes: list[RouteInfo]) -> list[DoctorIssue]:
     """Configured protected routes must carry the declared auth dependencies."""
     issues: list[DoctorIssue] = []
     for route in routes:
         path = route.path
-        deps = dependency_names(route)
-        methods = _sorted_methods(route)
+        deps = route.dependency_names
         for prefix, rule_options in project.PROTECTED_ROUTE_RULES:
-            if not _route_matches_prefix(path, prefix):
+            if not (path == prefix or path.startswith(f"{prefix}/")):
                 continue
             if not any(required.issubset(deps) for required in rule_options):
-                expected = " OR ".join(", ".join(sorted(required)) for required in rule_options)
+                expected = " OR ".join(", ".join(sorted(req)) for req in rule_options)
                 issues.append(
                     DoctorIssue(
                         check="security/missing-auth-dep",
@@ -38,22 +44,22 @@ def check_route_dependency_policies(routes: list[APIRoute]) -> list[DoctorIssue]
                         category="Security",
                         help="Add the required Depends() to the route decorator or router.",
                         detail=f"Present dependencies: {', '.join(sorted(deps)) or '[none]'}",
-                        methods=methods,
+                        methods=route.methods,
                     )
                 )
             break
     return issues
 
-def check_write_route_parameters(routes: list[APIRoute]) -> list[DoctorIssue]:
+
+def check_write_route_parameters(routes: list[RouteInfo]) -> list[DoctorIssue]:
     """Write endpoints must not accept raw ownership fields — derive from auth."""
     issues: list[DoctorIssue] = []
     write_methods = {"POST", "PUT", "PATCH", "DELETE"}
     for route in routes:
-        methods = set(_sorted_methods(route))
+        methods = set(route.methods)
         if not methods.intersection(write_methods):
             continue
-        params = inspect.signature(route.endpoint).parameters
-        forbidden = sorted(project.FORBIDDEN_WRITE_PARAMS.intersection(params))
+        forbidden = sorted(project.FORBIDDEN_WRITE_PARAMS.intersection(route.param_names))
         if forbidden:
             issues.append(
                 DoctorIssue(
@@ -69,12 +75,13 @@ def check_write_route_parameters(routes: list[APIRoute]) -> list[DoctorIssue]:
             )
     return issues
 
-def check_duplicate_routes(routes: list[APIRoute]) -> list[DoctorIssue]:
+
+def check_duplicate_routes(routes: list[RouteInfo]) -> list[DoctorIssue]:
     """Duplicate route registrations cause silent shadowing."""
-    seen: dict[tuple[str, str], APIRoute] = {}
+    seen: dict[tuple[str, str], RouteInfo] = {}
     issues: list[DoctorIssue] = []
     for route in routes:
-        for method in _sorted_methods(route):
+        for method in route.methods:
             key = (method, route.path)
             if key in seen:
                 issues.append(
@@ -92,24 +99,21 @@ def check_duplicate_routes(routes: list[APIRoute]) -> list[DoctorIssue]:
                 seen[key] = route
     return issues
 
-def check_post_status_codes(routes: list[APIRoute]) -> list[DoctorIssue]:
+
+def check_post_status_codes(routes: list[RouteInfo]) -> list[DoctorIssue]:
     """POST endpoints creating resources should return 201, not default 200."""
     issues: list[DoctorIssue] = []
     create_prefixes = project.POST_CREATE_PREFIXES
     if not create_prefixes:
         return issues
-    # Mutation endpoints that happen to match create prefixes but aren't creation
     mutation_suffixes = ("/undo", "/redo", "/restore", "/refresh", "/clone", "/fork")
     for route in routes:
-        methods = _sorted_methods(route)
-        if "POST" not in methods:
+        if "POST" not in route.methods:
             continue
         if route.status_code and route.status_code != 200:
-            continue  # Already set explicitly — fine
-        # Skip mutation endpoints that aren't resource creation
+            continue
         if any(route.path.endswith(s) for s in mutation_suffixes):
             continue
-        # Only flag routes with clear "create" semantics
         if any(route.path.startswith(p) for p in create_prefixes):
             issues.append(
                 DoctorIssue(
@@ -119,15 +123,15 @@ def check_post_status_codes(routes: list[APIRoute]) -> list[DoctorIssue]:
                     path=route.path,
                     category="Correctness",
                     help="Add status_code=201 to the route decorator.",
-                    methods=methods,
+                    methods=route.methods,
                 )
             )
     return issues
 
-def check_response_models(routes: list[APIRoute]) -> list[DoctorIssue]:
+
+def check_response_models(routes: list[RouteInfo]) -> list[DoctorIssue]:
     """API routes in /api/ should use response_model for type safety and OpenAPI docs."""
     issues: list[DoctorIssue] = []
-    # Routes where raw responses are expected (streaming, files, redirects)
     exempt_patterns = ("/stream", "/export", "-export", "/download", "/webhook", "/oauth", "/callback", "/{")
     for route in routes:
         if not route.path.startswith("/api/"):
@@ -136,7 +140,7 @@ def check_response_models(routes: list[APIRoute]) -> list[DoctorIssue]:
             continue
         if any(p in route.path for p in exempt_patterns):
             continue
-        if route.response_model is None:
+        if not route.has_response_model:
             issues.append(
                 DoctorIssue(
                     check="correctness/missing-response-model",
@@ -145,12 +149,13 @@ def check_response_models(routes: list[APIRoute]) -> list[DoctorIssue]:
                     path=route.path,
                     category="Correctness",
                     help="Add response_model=YourPydanticModel to the route decorator.",
-                    methods=_sorted_methods(route),
+                    methods=route.methods,
                 )
             )
     return issues
 
-def check_route_tags(routes: list[APIRoute]) -> list[DoctorIssue]:
+
+def check_route_tags(routes: list[RouteInfo]) -> list[DoctorIssue]:
     """API routes should have tags for OpenAPI grouping."""
     issues: list[DoctorIssue] = []
     for route in routes:
@@ -165,10 +170,66 @@ def check_route_tags(routes: list[APIRoute]) -> list[DoctorIssue]:
                     path=route.path,
                     category="API Surface",
                     help="Add tags=['your-domain'] to the route decorator.",
-                    methods=_sorted_methods(route),
+                    methods=route.methods,
                 )
             )
     return issues
+
+
+def check_endpoint_docstrings(routes: list[RouteInfo]) -> list[DoctorIssue]:
+    """Public API endpoints should have docstrings for generated docs."""
+    issues: list[DoctorIssue] = []
+    for route in routes:
+        if not route.path.startswith("/api/"):
+            continue
+        if not route.include_in_schema:
+            continue
+        if not route.has_docstring:
+            issues.append(
+                DoctorIssue(
+                    check="api-surface/missing-docstring",
+                    severity="warning",
+                    message=f"Endpoint '{route.endpoint_name}' has no docstring — weakens API docs",
+                    path=route.path,
+                    category="API Surface",
+                    help="Add a docstring to the handler function. FastAPI uses it for OpenAPI descriptions.",
+                    methods=route.methods,
+                )
+            )
+    return issues
+
+
+def check_missing_pagination(routes: list[RouteInfo]) -> list[DoctorIssue]:
+    """List endpoints missing pagination (limit/offset) risk memory exhaustion."""
+    issues: list[DoctorIssue] = []
+    pagination_params = {"limit", "offset", "page", "per_page", "cursor"}
+    exempt_patterns = ("/stream", "/export", "-export", "/download", "/webhook")
+    for route in routes:
+        if "GET" not in route.methods:
+            continue
+        if not route.path.startswith("/api/"):
+            continue
+        if any(p in route.path for p in exempt_patterns):
+            continue
+        if route.response_model_str and ("list[" in route.response_model_str or "paginated" in route.response_model_str):
+            if not route.param_names.intersection(pagination_params):
+                issues.append(
+                    DoctorIssue(
+                        check="api-surface/missing-pagination",
+                        severity="warning",
+                        message=f"List endpoint '{route.path}' has no pagination — risks memory exhaustion",
+                        path=route.path,
+                        category="API Surface",
+                        help="Add limit and offset Query parameters to support pagination.",
+                        methods=route.methods,
+                    )
+                )
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# OpenAPI schema check (live app only — not available in static mode)
+# ---------------------------------------------------------------------------
 
 def check_openapi_schema(app: FastAPI) -> list[DoctorIssue]:
     """Validate OpenAPI schema quality: unique operation IDs, tags present."""
@@ -222,28 +283,10 @@ def check_openapi_schema(app: FastAPI) -> list[DoctorIssue]:
                 )
     return issues
 
-def check_endpoint_docstrings(routes: list[APIRoute]) -> list[DoctorIssue]:
-    """Public API endpoints should have docstrings for generated docs."""
-    issues: list[DoctorIssue] = []
-    for route in routes:
-        if not route.path.startswith("/api/"):
-            continue
-        if not route.include_in_schema:
-            continue
-        endpoint = route.endpoint
-        if not inspect.getdoc(endpoint):
-            issues.append(
-                DoctorIssue(
-                    check="api-surface/missing-docstring",
-                    severity="warning",
-                    message=f"Endpoint '{endpoint.__name__}' has no docstring — weakens API docs",
-                    path=route.path,
-                    category="API Surface",
-                    help="Add a docstring to the handler function. FastAPI uses it for OpenAPI descriptions.",
-                    methods=_sorted_methods(route),
-                )
-            )
-    return issues
+
+# ---------------------------------------------------------------------------
+# Static-only check (no routes needed)
+# ---------------------------------------------------------------------------
 
 def check_fat_route_handlers() -> list[DoctorIssue]:
     """Detect route handlers with too much logic. Business logic belongs in services/."""
@@ -255,12 +298,9 @@ def check_fat_route_handlers() -> list[DoctorIssue]:
     for module in project.parsed_python_modules():
         if not module.path.is_relative_to(router_dir):
             continue
-
         for node in ast.walk(module.tree):
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-
-            # Check if it's a route (has decorators like @router.get)
             is_route = any(
                 isinstance(dec, (ast.Call, ast.Attribute, ast.Name))
                 and ("router" in ast.dump(dec).lower() or "app" in ast.dump(dec).lower())
@@ -268,18 +308,14 @@ def check_fat_route_handlers() -> list[DoctorIssue]:
             )
             if not is_route:
                 continue
-
             func_len = (node.end_lineno or node.lineno) - node.lineno + 1
             if func_len > project._FAT_ROUTE_HANDLER_THRESHOLD:
-                # Check for # noqa: architecture
                 lines = module.source.splitlines()
                 if node.lineno <= len(lines) and "# noqa: architecture" in lines[node.lineno - 1]:
                     continue
-                # Also check decorator lines
                 dec_line = node.decorator_list[0].lineno if node.decorator_list else node.lineno
                 if dec_line <= len(lines) and "# noqa: architecture" in lines[dec_line - 1]:
                     continue
-
                 issues.append(
                     DoctorIssue(
                         check="architecture/fat-route-handler",
@@ -289,49 +325,6 @@ def check_fat_route_handlers() -> list[DoctorIssue]:
                         category="Architecture",
                         help=f"Keep handlers under {project._FAT_ROUTE_HANDLER_THRESHOLD} lines. Move logic to a service function.",
                         line=node.lineno,
-                    )
-                )
-    return issues
-
-def check_missing_pagination(routes: list[APIRoute]) -> list[DoctorIssue]:
-    """Detect list endpoints missing pagination (limit/offset).
-
-    Endpoints returning lists should support pagination to avoid memory
-    exhaustion and slow responses as datasets grow.
-    """
-    issues: list[DoctorIssue] = []
-    pagination_params = {"limit", "offset", "page", "per_page", "cursor"}
-    exempt_patterns = ("/stream", "/export", "-export", "/download", "/webhook")
-
-    for route in routes:
-        if "GET" not in _sorted_methods(route):
-            continue
-        if not route.path.startswith("/api/"):
-            continue
-        if any(p in route.path for p in exempt_patterns):
-            continue
-
-        # Check if the response model is a list or contains a list
-        is_list_response = False
-        res_model = route.response_model
-        if res_model:
-            model_str = str(res_model).lower()
-            if "list[" in model_str or "paginated" in model_str:
-                is_list_response = True
-
-        if is_list_response:
-            params = inspect.signature(route.endpoint).parameters
-            has_pagination = any(p in params for p in pagination_params)
-            if not has_pagination:
-                issues.append(
-                    DoctorIssue(
-                        check="api-surface/missing-pagination",
-                        severity="warning",
-                        message=f"List endpoint '{route.path}' has no pagination — risks memory exhaustion",
-                        path=route.path,
-                        category="API Surface",
-                        help="Add limit and offset Query parameters to support pagination.",
-                        methods=_sorted_methods(route),
                     )
                 )
     return issues

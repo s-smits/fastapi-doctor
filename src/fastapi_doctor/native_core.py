@@ -20,21 +20,55 @@ from .models import DoctorIssue
 
 NATIVE_STATIC_RULES = frozenset(
     {
+        "architecture/giant-function",
+        "architecture/deep-nesting",
+        "architecture/async-without-await",
         "architecture/import-bloat",
         "architecture/print-in-production",
         "architecture/star-import",
+        "architecture/god-module",
+        "architecture/passthrough-function",
+        "architecture/avoid-sys-exit",
+        "architecture/engine-pool-pre-ping",
+        "architecture/missing-startup-validation",
+        "architecture/fat-route-handler",
         "config/direct-env-access",
+        "correctness/asyncio-run-in-async",
+        "correctness/sync-io-in-async",
+        "correctness/misused-async-constructs",
         "correctness/avoid-os-path",
         "correctness/deprecated-typing-imports",
+        "correctness/mutable-default-arg",
         "correctness/naive-datetime",
+        "correctness/return-in-finally",
+        "correctness/threading-lock-in-async",
+        "correctness/unreachable-code",
+        "correctness/get-with-side-effect",
+        "correctness/serverless-filesystem-write",
+        "correctness/missing-http-timeout",
         "performance/heavy-imports",
+        "performance/sequential-awaits",
+        "performance/regex-in-loop",
+        "performance/n-plus-one-hint",
+        "pydantic/deprecated-validator",
+        "pydantic/mutable-default",
+        "pydantic/extra-allow-on-request",
+        "pydantic/should-be-model",
+        "pydantic/sensitive-field-type",
         "security/assert-in-production",
         "security/cors-wildcard",
         "security/exception-detail-leak",
         "security/subprocess-shell-true",
         "security/unsafe-yaml-load",
         "security/weak-hash-without-flag",
+        "security/sql-fstring-interpolation",
+        "security/hardcoded-secret",
+        "security/pydantic-secretstr",
         "resilience/sqlalchemy-pool-pre-ping",
+        "resilience/bare-except-pass",
+        "resilience/reraise-without-context",
+        "resilience/exception-swallowed",
+        "resilience/broad-except-no-context",
     }
 )
 
@@ -214,6 +248,12 @@ def run_native_static_checks(requested_rules: set[str]) -> list[DoctorIssue] | N
         request_path = Path(request_file.name)
         request_file.write("VERSION\t1\n")
         request_file.write(f"CONFIG\tIMPORT_BLOAT_THRESHOLD\t{project._IMPORT_BLOAT_THRESHOLD}\n")
+        request_file.write(f"CONFIG\tGIANT_FUNCTION_THRESHOLD\t{project.GIANT_FUNCTION_THRESHOLD}\n")
+        request_file.write(f"CONFIG\tLARGE_FUNCTION_THRESHOLD\t{project.LARGE_FUNCTION_THRESHOLD}\n")
+        request_file.write(f"CONFIG\tDEEP_NESTING_THRESHOLD\t{project.DEEP_NESTING_THRESHOLD}\n")
+        request_file.write(f"CONFIG\tGOD_MODULE_THRESHOLD\t{project.GOD_MODULE_THRESHOLD}\n")
+        request_file.write(f"CONFIG\tFAT_ROUTE_HANDLER_THRESHOLD\t{project._FAT_ROUTE_HANDLER_THRESHOLD}\n")
+        request_file.write(f"CONFIG\tSHOULD_BE_MODEL_MODE\t{project.SHOULD_BE_MODEL_MODE}\n")
         for rule_id in sorted(requested_rules):
             request_file.write(f"RULE\t{rule_id}\n")
         for module in modules:

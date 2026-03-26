@@ -25,17 +25,33 @@ _NOISY_SCAN_DIRS = frozenset(
 
 
 def _iter_alembic_env_files() -> list[Path]:
+    """Find alembic env.py files via os.scandir (avoids slow rglob)."""
+    import os
+
     env_files: list[Path] = []
-    for filepath in project.REPO_ROOT.rglob("env.py"):
+    skip = _NOISY_SCAN_DIRS
+
+    def _walk(current: str) -> None:
         try:
-            rel_parts = filepath.relative_to(project.REPO_ROOT).parts
-        except ValueError:
-            continue
-        if "alembic" not in rel_parts and "migrations" not in rel_parts:
-            continue
-        if any(part.startswith(".") or part in _NOISY_SCAN_DIRS for part in rel_parts):
-            continue
-        env_files.append(filepath)
+            with os.scandir(current) as it:
+                for entry in it:
+                    name = entry.name
+                    if name.startswith(".") or name in skip:
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        _walk(entry.path)
+                    elif name == "env.py" and entry.is_file(follow_symlinks=False):
+                        p = Path(entry.path)
+                        try:
+                            parts = p.relative_to(project.REPO_ROOT).parts
+                        except ValueError:
+                            continue
+                        if "alembic" in parts or "migrations" in parts:
+                            env_files.append(p)
+        except (PermissionError, OSError):
+            pass
+
+    _walk(str(project.REPO_ROOT))
     return sorted(env_files)
 
 

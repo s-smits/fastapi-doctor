@@ -8,6 +8,8 @@ Coding agents are good at producing local code and still unreliable at consisten
 
 Point it at a repo and it will discover the app layout, inspect routes, run AST-based checks, optionally run external tools, and return a scored report that an agent can act on without hardcoding repo structure. The intended remediation style is minimal and local to the finding, not broad style churn.
 
+The static engine is also usable on its own. If you want the fastest path and do not need live FastAPI route/OpenAPI validation, run the doctor in static-only mode so it skips app discovery, import, and bootstrap entirely.
+
 ## Agent Quick Start
 
 1. **Ask the user** if they want a **Security**, **Balanced**, or **Strict** audit profile.
@@ -194,6 +196,20 @@ Run against the current repo:
 uv run fastapi-doctor --json
 ```
 
+Run static analysis only, without importing or booting the FastAPI app:
+
+```bash
+uv run fastapi-doctor --json --static-only
+```
+
+`--static-only` is the preferred pure-AST mode. It skips:
+
+- repo-wide FastAPI app discovery
+- importing the target application
+- live route and OpenAPI checks
+
+`--skip-app-bootstrap` is still available for compatibility, but `--static-only` is the cleaner first-class entrypoint for CI and large-repo static scans.
+
 Scan another project explicitly:
 
 ```bash
@@ -248,6 +264,11 @@ Useful environment variables:
   Overrides bundled binary discovery for local testing, benchmarking, or staged release validation.
 
 The Python wrapper verifies that the native binary version matches the installed Python package version before using it. On mismatch, it falls back safely to Python.
+
+To avoid importing the target FastAPI app entirely, use the CLI flag:
+
+- `--skip-app-bootstrap`
+  Skips live route and OpenAPI checks and runs only static analysis. This is the fastest mode for large repos and avoids environment-mismatch failures when the target app cannot be imported from the doctor's current environment.
 
 ## Internal Layout
 
