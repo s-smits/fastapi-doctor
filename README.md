@@ -23,11 +23,20 @@ While AI agents excel at local implementation, they often miss system-wide patte
 - **Context Aware:** Works inside the target repo's own environment for accurate importing.
 - **Category Split:** Checks route/OpenAPI, architecture, security, performance, and Pydantic usage.
 
-## Installation
+## Installation & Setup
+
+To install and run `fastapi-doctor` for development or as an agent skill:
+
 ```bash
-pip install fastapi-doctor
+git clone https://github.com/s-smits/fastapi-doctor.git
+cd fastapi-doctor
+uv sync --extra dev
+
+# Run from source
+uv run fastapi-doctor --profile strict --repo-root /path/to/your/project
 ```
-Supported macOS and Linux wheels bundle the PyO3 native extension automatically. Source installs and unsupported platforms fall back to the pure-Python implementation, so users do not need a Rust toolchain just to run the CLI.
+
+*Note: Run `uv run maturin develop --release` if you want to rebuild the high-performance native extension locally. macOS and Linux wheels built from this repo bundle it automatically.*
 
 ## Audit Profiles
 | Profile | Focus |
@@ -54,7 +63,7 @@ uv run fastapi-doctor --app-module my_pkg.main:app
 ## Performance
 Version 0.2.0 replaces the subprocess-based sidecar with a high-performance PyO3 native extension. This eliminates process startup latency and IPC overhead, enabling direct memory access between Python and the Rust engine.
 
-| Engine | Strict Scan (TotoScope) | vs Legacy |
+| Engine | Strict Scan (proprietary codebase) | vs Legacy |
 | :--- | :--- | :--- |
 | **Legacy Python** | **~28.0s** | **1x** |
 | **Rust Subprocess (~0.1.x)** | **~11.7s** | **~2.4x** |

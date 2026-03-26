@@ -140,33 +140,7 @@ fn issue(
 }
 
 
-<<<<<<< HEAD:rust/doctor_core/src/lib.rs
 
-=======
-    let bytes_input = input.as_bytes();
-    let mut bytes = Vec::with_capacity(input.len() / 2);
-    
-    let mut idx = 0;
-    while idx < bytes_input.len() {
-        let high = (bytes_input[idx] as char).to_digit(16).ok_or("invalid hex")?;
-        let low = (bytes_input[idx + 1] as char).to_digit(16).ok_or("invalid hex")?;
-        bytes.push((high << 4 | low) as u8);
-        idx += 2;
-    }
-
-    String::from_utf8(bytes).map_err(|err| err.to_string())
-}
-
-fn encode_hex(input: &str) -> String {
-    const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(input.len() * 2);
-    for byte in input.as_bytes() {
-        out.push(HEX_CHARS[(byte >> 4) as usize] as char);
-        out.push(HEX_CHARS[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
->>>>>>> origin/main:rust/doctor_core/src/main.rs
 
 fn normalized_no_space(line: &str) -> String {
     line.chars().filter(|ch| !ch.is_whitespace()).collect()
