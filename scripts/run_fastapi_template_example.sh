@@ -25,5 +25,5 @@ fi
 uv run fastapi-doctor \
   --repo-root "$EXAMPLE_DIR" \
   --skip-ruff \
-  --skip-pyright \
+  --skip-ty \
   "$@"

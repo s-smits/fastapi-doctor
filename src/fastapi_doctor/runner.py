@@ -11,6 +11,7 @@ except ImportError:  # pragma: no cover
 
 from . import project
 from .app_loader import build_app_for_doctor, iter_api_routes
+from . import native_core
 from .checks.architecture import (
     check_async_without_await,
     check_avoid_sys_exit,
@@ -294,7 +295,19 @@ def run_python_doctor_checks(
         ("pydantic/sensitive-field-type", check_sensitive_fields_in_models, libraries.pydantic or libraries.fastapi),
     ]
 
+    native_requested_rules = {
+        rule_id
+        for rule_id, _, enabled in static_checks
+        if enabled and should_run(rule_id) and rule_id in native_core.NATIVE_STATIC_RULES
+    }
+    native_issues = native_core.run_native_static_checks(native_requested_rules)
+    native_rule_ids = native_requested_rules if native_issues is not None else set()
+    if native_issues:
+        issues.extend(native_issues)
+
     for rule_id, check_func, enabled in static_checks:
+        if rule_id in native_rule_ids:
+            continue
         if enabled and should_run(rule_id):
             issues.extend(check_func())
 

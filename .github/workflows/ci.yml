@@ -21,3 +21,47 @@ jobs:
         run: uv sync --extra dev
       - name: Run tests
         run: uv run pytest -q
+
+  package-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build and install source distribution
+        run: |
+          uv build --sdist
+          python -m pip install dist/*.tar.gz
+          fastapi-doctor --version
+      - name: Build bundled native wheel
+        run: |
+          NATIVE_VERSION="$(python - <<'PY'
+          import fastapi_doctor
+          print(fastapi_doctor.__version__)
+          PY
+          )"
+          rm -rf dist
+          python scripts/stage_native_binary.py --platform-tag linux-x86_64 --version "${NATIVE_VERSION}"
+          uv build --wheel
+      - name: Verify bundled wheel runtime
+        run: |
+          python -m pip install --force-reinstall dist/*.whl
+          python - <<'PY'
+          import zipfile
+          from pathlib import Path
+
+          import fastapi_doctor.native_core as native_core
+
+          wheel = sorted(Path("dist").glob("*.whl"))[-1]
+          with zipfile.ZipFile(wheel) as archive:
+              assert "fastapi_doctor/bin/linux-x86_64/fastapi-doctor-native" in archive.namelist()
+
+          binary = native_core._resolve_binary()
+          assert binary is not None, native_core.last_native_reason()
+          print(binary)
+          PY

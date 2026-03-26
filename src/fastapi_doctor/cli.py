@@ -9,7 +9,8 @@ from importlib.metadata import PackageNotFoundError, version as metadata_version
 from pathlib import Path
 
 from .console import logger
-from .external_tools import CommandResult, count_bandit_highs, run_command
+from .external_tools import CommandResult, count_bandit_highs, map_ruff_findings_to_doctor, run_command
+from .models import DoctorReport
 from .models import PERFECT_SCORE, SCHEMA_VERSION
 from .project import get_effective_config, get_project_layout
 from .reporting import print_report_human
@@ -19,7 +20,7 @@ from .runner import run_python_doctor_checks
 def compute_combined_score(
     base_score: int,
     ruff_passed: bool | None,
-    pyright_passed: bool | None,
+    ty_passed: bool | None,
     bandit_high_count: int | None,
 ) -> tuple[int, str]:
     """Adjust structural score based on external tool signals."""
@@ -29,8 +30,8 @@ def compute_combined_score(
     if ruff_passed is False:
         score -= 5
 
-    # Pyright failure (type errors) is a major signal
-    if pyright_passed is False:
+    # ty failure (type errors) is a major signal
+    if ty_passed is False:
         score -= 5
 
     # Bandit high-severity issues
@@ -61,17 +62,18 @@ def main() -> int:
         logger.break_line()
 
     ruff_passed = None
-    pyright_passed = None
+    ty_passed = None
     bandit_high_count = None
+    tool_results: dict[str, CommandResult] = {}
 
     # Build list of external tool jobs to run concurrently.
     from concurrent.futures import ThreadPoolExecutor
 
     tool_jobs: dict[str, tuple[str, list[str]]] = {}
     if not args.skip_ruff:
-        tool_jobs["ruff"] = ("ruff", ["uv", "run", "ruff", "check", "."])
-    if not args.skip_pyright:
-        tool_jobs["pyright"] = ("pyright", ["uv", "run", "pyright"])
+        tool_jobs["ruff"] = ("ruff", ["uv", "run", "ruff", "check", ".", "--output-format", "json"])
+    if not args.skip_ty:
+        tool_jobs["ty"] = ("ty", ["uvx", "ty", "check", ".", "--output-format", "concise"])
     if args.with_bandit:
         bandit_cmd = ["uv", "run", "bandit", "-q", "-r", "."]
         if (repo_root / "pyproject.toml").exists():
@@ -85,7 +87,6 @@ def main() -> int:
         if not quiet:
             logger.dim(f"Running {', '.join(tool_jobs)}...")
 
-        tool_results: dict[str, CommandResult] = {}
         with ThreadPoolExecutor(max_workers=len(tool_jobs)) as pool:
             futures = {
                 key: pool.submit(run_command, name, cmd, cwd=repo_root)
@@ -95,12 +96,12 @@ def main() -> int:
                 tool_results[key] = future.result()
 
         # Collect results in display order.
-        for key in ("ruff", "pyright", "bandit", "pytest"):
+        for key in ("ruff", "ty", "bandit", "pytest"):
             if key in tool_results:
                 command_results.append(tool_results[key])
 
         ruff_passed = tool_results["ruff"].passed if "ruff" in tool_results else None
-        pyright_passed = tool_results["pyright"].passed if "pyright" in tool_results else None
+        ty_passed = tool_results["ty"].passed if "ty" in tool_results else None
         if "bandit" in tool_results:
             bandit_high_count = count_bandit_highs(tool_results["bandit"].stdout)
 
@@ -108,9 +109,14 @@ def main() -> int:
             logger.break_line()
 
     doctor_report = None
+    ruff_doctor_issues = []
     if not args.skip_structure or not args.skip_openapi:
         only_rules = set(args.only_rules.split(",")) if args.only_rules else set()
         ignore_rules = set(args.ignore_rules.split(",")) if args.ignore_rules else set()
+
+        if "ruff" in tool_results:
+            ruff_doctor_issues = map_ruff_findings_to_doctor(tool_results["ruff"].stdout)
+            ignore_rules.update(issue.check for issue in ruff_doctor_issues)
 
         if args.skip_structure:
             ignore_rules.add("architecture/")
@@ -130,10 +136,18 @@ def main() -> int:
             ignore_rules=ignore_rules if ignore_rules else None,
             profile=args.profile,
         )
+        if doctor_report and ruff_doctor_issues:
+            doctor_report = DoctorReport(
+                route_count=doctor_report.route_count,
+                openapi_path_count=doctor_report.openapi_path_count,
+                issues=doctor_report.issues + ruff_doctor_issues,
+                checks_not_evaluated=doctor_report.checks_not_evaluated,
+                suppressions=doctor_report.suppressions,
+            )
 
     base_score = doctor_report.score if doctor_report else PERFECT_SCORE
     final_score, final_label = compute_combined_score(
-        base_score, ruff_passed, pyright_passed, bandit_high_count
+        base_score, ruff_passed, ty_passed, bandit_high_count
     )
 
     if args.score:
@@ -199,7 +213,8 @@ def parse_args() -> argparse.Namespace:
         help="FastAPI entrypoint as module:attribute or module:function(). Defaults to auto-discovery.",
     )
     parser.add_argument("--skip-ruff", action="store_true")
-    parser.add_argument("--skip-pyright", action="store_true")
+    parser.add_argument("--skip-ty", action="store_true", help="Skip ty type checking.")
+    parser.add_argument("--skip-pyright", dest="skip_ty", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--skip-structure", action="store_true")
     parser.add_argument("--skip-openapi", action="store_true")
     parser.add_argument("--with-bandit", action="store_true", help="Include Bandit security scan.")
@@ -248,7 +263,8 @@ def build_json_payload(
             "with_bandit": args.with_bandit,
             "with_tests": args.with_tests,
             "skip_ruff": args.skip_ruff,
-            "skip_pyright": args.skip_pyright,
+            "skip_ty": args.skip_ty,
+            "skip_pyright": args.skip_ty,
             "skip_structure": args.skip_structure,
             "skip_openapi": args.skip_openapi,
         },

@@ -96,6 +96,48 @@ Sync the project environment:
 uv sync --extra dev
 ```
 
+## Installation
+
+For normal users, install a single package:
+
+```bash
+pip install fastapi-doctor
+```
+
+Supported macOS and Linux wheels bundle the Rust sidecar automatically. Source installs and unsupported platforms fall back to the pure-Python implementation, so users do not need a Rust toolchain just to run the CLI.
+
+### Platform Behavior
+
+`fastapi-doctor` ships as one Python package with one CLI:
+
+- `pip install fastapi-doctor` for normal users
+- bundled native wheels on macOS and Linux for faster static checks
+- pure-Python fallback on unsupported platforms or source installs
+- no separate Rust package, plugin, or manual post-install step
+
+Current native wheel targets:
+
+- macOS `x86_64`
+- macOS `arm64`
+- Linux `x86_64`
+- Linux `arm64`
+
+Windows currently falls back to the pure-Python implementation.
+
+### What End Users Need
+
+For Python users and CI consumers of released wheels:
+
+- Python `3.12+`
+- `pip` or `uv`
+- no Rust toolchain
+
+For maintainers building release wheels locally:
+
+- Python `3.12+`
+- Rust toolchain with `cargo`
+- `uv`
+
 ## Agent Instructions
 
 > [!IMPORTANT]
@@ -141,7 +183,7 @@ This returns:
 - the original `requested` inputs
 - discovered `project` metadata such as `repo_root`, `import_root`, `code_dir`, and `app_module`
 - the resolved `effective_config`
-- `commands` results for `ruff`, `pyright`, `bandit`, or `pytest` when enabled
+- `commands` results for `ruff`, `ty`, `bandit`, or `pytest` when enabled
 - `doctor` findings with categorized issues, remediation fields, ranked `next_actions`, and minimal-change guidance
 
 ## Common Agent Invocations
@@ -184,9 +226,28 @@ To verify the doctor against a clean public repo, use the maintained example scr
 bash scripts/run_fastapi_template_example.sh --json
 ```
 
-It clones [fastapi/full-stack-fastapi-template](https://github.com/fastapi/full-stack-fastapi-template) into `.examples/full-stack-fastapi-template`, exports the template's checked-in `.env`, and runs `fastapi-doctor` against that checkout using the target repo's own `uv` environment. By default it skips `ruff` and `pyright` so the example focuses on doctor behavior rather than extra tool setup.
+It clones [fastapi/full-stack-fastapi-template](https://github.com/fastapi/full-stack-fastapi-template) into `.examples/full-stack-fastapi-template`, exports the template's checked-in `.env`, and runs `fastapi-doctor` against that checkout using the target repo's own `uv` environment. By default it skips `ruff` and `ty` so the example focuses on doctor behavior rather than extra tool setup.
 
 You can override the clone location with `FASTAPI_DOCTOR_EXAMPLE_DIR=/path/to/clone`.
+
+## Native Runtime
+
+The Rust sidecar is an internal implementation detail used for selected static checks. Python still owns repo discovery, FastAPI app loading, and report assembly.
+
+Runtime selection order:
+
+1. `FASTAPI_DOCTOR_NATIVE_BINARY=/abs/path/to/fastapi-doctor-native`
+2. bundled wheel asset under `fastapi_doctor/bin/<platform>/fastapi-doctor-native`
+3. pure-Python fallback
+
+Useful environment variables:
+
+- `FASTAPI_DOCTOR_DISABLE_NATIVE=1`
+  Forces the pure-Python path even if a native binary is available.
+- `FASTAPI_DOCTOR_NATIVE_BINARY=/abs/path/to/fastapi-doctor-native`
+  Overrides bundled binary discovery for local testing, benchmarking, or staged release validation.
+
+The Python wrapper verifies that the native binary version matches the installed Python package version before using it. On mismatch, it falls back safely to Python.
 
 ## Internal Layout
 
@@ -195,6 +256,7 @@ src/fastapi_doctor/
   app_loader.py
   cli.py
   external_tools.py
+  native_core.py
   models.py
   project.py
   reporting.py
@@ -210,11 +272,13 @@ src/fastapi_doctor/
     security.py
     static_checks.py
 scripts/
+rust/doctor_core/
 tests/
 .github/workflows/
 ```
 
 `static_checks.py` re-exports checks from the category modules. New code should import from the category modules directly.
+`native_core.py` is the Python bridge for the Rust sidecar used for selected static checks. Installed wheels look for packaged native binaries under `fastapi_doctor/bin/<platform>/`, and unsupported or source-only installs fall back to Python automatically. Set `FASTAPI_DOCTOR_DISABLE_NATIVE=1` to force the legacy pure-Python path.
 
 ## Development
 
@@ -227,6 +291,95 @@ uv run pytest -q
 
 The doctor is designed to run inside the target project's environment when importing the FastAPI app requires the target project's dependencies.
 
+### Rust Development
+
+The native sidecar lives under [rust/doctor_core/Cargo.toml](/Users/air/Developer/fastapi-doctor/rust/doctor_core/Cargo.toml).
+
+Useful commands:
+
+```bash
+cargo test --manifest-path rust/doctor_core/Cargo.toml
+cargo build --release --manifest-path rust/doctor_core/Cargo.toml
+```
+
+To stage a native binary into the Python package for the current platform:
+
+```bash
+python scripts/stage_native_binary.py \
+  --platform-tag darwin-arm64 \
+  --version "$(uv run python - <<'PY'
+import fastapi_doctor
+print(fastapi_doctor.__version__)
+PY
+)"
+```
+
+Then build a wheel:
+
+```bash
+uv build --wheel
+```
+
+That wheel will contain the platform-specific sidecar under `fastapi_doctor/bin/<platform>/`.
+
+### Local Release Dry Run
+
+For a local release-style validation:
+
+1. Run `cargo test --manifest-path rust/doctor_core/Cargo.toml`.
+2. Run `uv run pytest -q`.
+3. Stage the native binary with `scripts/stage_native_binary.py`.
+4. Run `uv build --wheel`.
+5. Install the wheel into a clean environment and verify:
+   `fastapi-doctor --version`
+6. Optionally force/override native selection with:
+   `FASTAPI_DOCTOR_DISABLE_NATIVE=1` or `FASTAPI_DOCTOR_NATIVE_BINARY=...`
+
+This is the best way to validate the exact artifact shape that Python users and CI pipelines will consume.
+
 ## Releases
 
-Package versions are derived from Git tags via `hatch-vcs`, and pushing a `v*` tag now triggers a GitHub release that uploads the built wheel and source distribution. That keeps the package metadata, CLI version output, and GitHub release version aligned instead of drifting from a hardcoded value in `pyproject.toml`.
+Package versions are derived from Git tags via `hatch-vcs`. Tagging `v*` now builds:
+
+- a pure-Python source distribution
+- macOS wheels with bundled native binaries for `x86_64` and `arm64`
+- Linux wheels with bundled native binaries for `x86_64` and `arm64`
+
+The release workflow verifies that the Python package version matches the tag and that the bundled native binary is present in each platform wheel. Optional PyPI publication can be enabled with the `PUBLISH_TO_PYPI=1` repository variable.
+
+### Best Deployment Model
+
+For maintainers, the recommended deployment model is:
+
+1. Keep `fastapi-doctor` as the only public package name.
+2. Publish platform wheels with the Rust sidecar bundled inside the wheel.
+3. Publish an sdist that still works without Rust at runtime.
+4. Let unsupported platforms fall back to Python rather than failing install.
+
+This keeps CI/CD simple:
+
+- application repos just run `pip install fastapi-doctor`
+- no extra Rust bootstrap in downstream pipelines
+- no second package to version or coordinate
+- one shared release tag for Python metadata and the native binary
+
+### GitHub Actions Flow
+
+The repository CI is split into two concerns:
+
+- regular test matrix:
+  `uv sync --extra dev` then `uv run pytest -q`
+- package smoke validation:
+  build sdist, build staged native wheel, install artifacts, verify the bundled binary is discoverable
+
+The tagged release workflow does the full artifact build matrix and can optionally publish to PyPI.
+
+### PyPI Publishing
+
+To enable PyPI publication from the release workflow:
+
+1. Configure trusted publishing for the repository on PyPI.
+2. Set the repository variable `PUBLISH_TO_PYPI=1`.
+3. Push a tag like `v0.1.5`.
+
+If `PUBLISH_TO_PYPI` is not set, the workflow still builds and attaches release artifacts to GitHub, which is useful for dry runs and internal distribution.

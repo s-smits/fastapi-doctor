@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import types
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ if str(SRC) not in sys.path:
 import fastapi_doctor.app_loader as app_loader_module  # noqa: E402
 import fastapi_doctor.checks.architecture as architecture_module  # noqa: E402
 import fastapi_doctor.cli as cli_module  # noqa: E402
+import fastapi_doctor.external_tools as external_tools_module  # noqa: E402
 import fastapi_doctor.checks.static_checks as static_checks_module  # noqa: E402
 import fastapi_doctor.models as models_module  # noqa: E402
 import fastapi_doctor.project as project_module  # noqa: E402
@@ -92,6 +94,15 @@ def test_auto_detects_app_factory(monkeypatch, tmp_path: Path) -> None:
 
     module = _reload_doctor(monkeypatch, tmp_path)
     layout = module.get_project_layout()
+
+    fake_fastapi = types.ModuleType("fastapi")
+
+    class FakeFastAPI:
+        def __init__(self, title: str = "") -> None:
+            self.title = title
+
+    fake_fastapi.FastAPI = FakeFastAPI
+    monkeypatch.setitem(sys.modules, "fastapi", fake_fastapi)
 
     assert layout.import_root == tmp_path / "backend"
     assert layout.code_dir == package_dir
@@ -203,6 +214,36 @@ def test_issue_dict_exposes_agent_fields() -> None:
     assert payload["fingerprint"] == "security/missing-auth-dep:app/api/routes/users.py:12:0"
 
 
+def test_map_ruff_findings_to_doctor() -> None:
+    stdout = """
+[
+  {
+    "code": "T201",
+    "filename": "app/main.py",
+    "location": {"row": 12, "column": 5},
+    "message": "`print` found"
+  },
+  {
+    "code": "F403",
+    "filename": "app/utils.py",
+    "location": {"row": 3, "column": 1},
+    "message": "`from mod import *` used; unable to detect undefined names"
+  }
+]
+""".strip()
+
+    issues = external_tools_module.map_ruff_findings_to_doctor(stdout)
+
+    assert [issue.check for issue in issues] == [
+        "architecture/print-in-production",
+        "architecture/star-import",
+    ]
+    assert issues[0].path == "app/main.py"
+    assert issues[0].line == 12
+    assert issues[1].path == "app/utils.py"
+    assert issues[1].line == 3
+
+
 def test_report_dict_includes_next_actions() -> None:
     report = models_module.DoctorReport(
         route_count=2,
@@ -256,7 +297,7 @@ def test_build_json_payload_includes_effective_config(monkeypatch, tmp_path: Pat
         with_bandit=False,
         with_tests=False,
         skip_ruff=True,
-        skip_pyright=True,
+        skip_ty=True,
         skip_structure=False,
         skip_openapi=False,
     )
