@@ -339,12 +339,10 @@ uv run maturin develop --release
 cargo test --manifest-path rust/doctor_core/Cargo.toml
 ```
 
-To stage a native binary into the Python package for the current platform:
+To build a wheel for the current platform:
 
 ```bash
-# This builds the shared library and places it in src/fastapi_doctor/
-maturin build --release --interpreter python --out dist/
-# Then copy the .so from the wheel or use maturin develop
+uv run maturin build --release
 ```
 
 Then build a wheel:
