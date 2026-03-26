@@ -250,7 +250,7 @@ You can override the clone location with `FASTAPI_DOCTOR_EXAMPLE_DIR=/path/to/cl
 
 With the introduction of the modularized Rust engine in `v0.2.0`, `fastapi-doctor` is significantly faster than its legacy pure-Python implementation.
 
-On a large, real-world codebase (100+ routes, complex Pydantic models), static analysis execution times dropped dramatically:
+On a large, real-world codebase (270,000+ lines of Python code, 100+ routes, complex Pydantic models), static analysis execution times dropped dramatically:
 
 - **Legacy Python Engine:** ~28.0 seconds
 - **New Rust Engine (Medium Profile):** ~9.9 seconds
