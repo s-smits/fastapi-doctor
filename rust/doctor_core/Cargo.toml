@@ -3,5 +3,11 @@ name = "fastapi-doctor-native"
 version = "0.2.0"
 edition = "2021"
 
+[lib]
+name = "_fastapi_doctor_native"
+crate-type = ["cdylib"]
+
 [dependencies]
 rustpython-parser = "0.4.0"
+rayon = "1.10.0"
+pyo3 = { version = "0.21", features = ["extension-module"] }

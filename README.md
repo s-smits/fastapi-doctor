@@ -106,7 +106,7 @@ For normal users, install a single package:
 pip install fastapi-doctor
 ```
 
-Supported macOS and Linux wheels bundle the Rust sidecar automatically. Source installs and unsupported platforms fall back to the pure-Python implementation, so users do not need a Rust toolchain just to run the CLI.
+Supported macOS and Linux wheels bundle the PyO3 native extension automatically. Source installs and unsupported platforms fall back to the pure-Python implementation, so users do not need a Rust toolchain just to run the CLI.
 
 ### Platform Behavior
 
@@ -246,24 +246,29 @@ It clones [fastapi/full-stack-fastapi-template](https://github.com/fastapi/full-
 
 You can override the clone location with `FASTAPI_DOCTOR_EXAMPLE_DIR=/path/to/clone`.
 
+## Performance
+
+Version 0.2.0 replaces the subprocess-based sidecar with a high-performance PyO3 native extension. This eliminates process startup latency and IPC overhead, enabling direct memory access between Python and the Rust engine.
+
+| Engine | Strict Scan (TotoScope) | vs Legacy |
+| :--- | :--- | :--- |
+| **Legacy Python** | **~28.0s** | **1x** |
+| **Rust Subprocess (~0.1.x)** | **~11.7s** | **~2.4x** |
+| **Rust PyO3 Extension (0.2.0)** | **~5.9s** | **~4.8x** |
+
 ## Native Runtime
 
-Version 0.2.0 introduces a modularized Rust engine and expanded rule coverage. The sidecar is now split into domain-specific modules for better maintenance and performance. It covers more architecture, Pydantic, and security checks previously handled only in Python.
+Version 0.2.0 introduces a modularized Rust engine and expanded rule coverage. The engine is now a compiled C extension (`_fastapi_doctor_native`) rather than a standalone binary.
 
 Runtime selection order:
 
-1. `FASTAPI_DOCTOR_NATIVE_BINARY=/abs/path/to/fastapi-doctor-native`
-2. bundled wheel asset under `fastapi_doctor/bin/<platform>/fastapi-doctor-native`
-3. pure-Python fallback
+1. **Native Extension:** PyO3 module `_fastapi_doctor_native` is imported directly.
+2. **fallback:** pure-Python implementation.
 
 Useful environment variables:
 
 - `FASTAPI_DOCTOR_DISABLE_NATIVE=1`
-  Forces the pure-Python path even if a native binary is available.
-- `FASTAPI_DOCTOR_NATIVE_BINARY=/abs/path/to/fastapi-doctor-native`
-  Overrides bundled binary discovery for local testing, benchmarking, or staged release validation.
-
-The Python wrapper verifies that the native binary version matches the installed Python package version before using it. On mismatch, it falls back safely to Python.
+  Forces the pure-Python path even if the native extension is installed.
 
 To avoid importing the target FastAPI app entirely, use the CLI flag:
 
@@ -307,7 +312,7 @@ tests/
 ```
 
 `static_checks.py` re-exports checks from the category modules. New code should import from the category modules directly.
-`native_core.py` is the Python bridge for the Rust sidecar used for selected static checks. Installed wheels look for packaged native binaries under `fastapi_doctor/bin/<platform>/`, and unsupported or source-only installs fall back to Python automatically. Set `FASTAPI_DOCTOR_DISABLE_NATIVE=1` to force the legacy pure-Python path.
+`native_core.py` is the Python bridge for the Rust native extension used for selected static checks. Installed wheels bundle the extension as a shared library. Set `FASTAPI_DOCTOR_DISABLE_NATIVE=1` to force the legacy pure-Python path.
 
 ## Development
 
@@ -322,25 +327,16 @@ The doctor is designed to run inside the target project's environment when impor
 
 ### Rust Development
 
-The native sidecar lives under [rust/doctor_core/Cargo.toml](/Users/air/Developer/fastapi-doctor/rust/doctor_core/Cargo.toml).
+The native extension lives under [rust/doctor_core/Cargo.toml](/Users/air/Developer/fastapi-doctor/rust/doctor_core/Cargo.toml).
 
 Useful commands:
 
 ```bash
+# Build and install into the current venv for testing
+uv run maturin develop --release
+
+# Run Rust unit tests
 cargo test --manifest-path rust/doctor_core/Cargo.toml
-cargo build --release --manifest-path rust/doctor_core/Cargo.toml
-```
-
-To stage a native binary into the Python package for the current platform:
-
-```bash
-python scripts/stage_native_binary.py \
-  --platform-tag darwin-arm64 \
-  --version "$(uv run python - <<'PY'
-import fastapi_doctor
-print(fastapi_doctor.__version__)
-PY
-)"
 ```
 
 Then build a wheel:
