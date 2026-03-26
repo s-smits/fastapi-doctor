@@ -248,7 +248,7 @@ You can override the clone location with `FASTAPI_DOCTOR_EXAMPLE_DIR=/path/to/cl
 
 ## Native Runtime
 
-The Rust sidecar is an internal implementation detail used for selected static checks. Python still owns repo discovery, FastAPI app loading, and report assembly.
+Version 0.2.0 introduces a modularized Rust engine and expanded rule coverage. The sidecar is now split into domain-specific modules for better maintenance and performance. It covers more architecture, Pydantic, and security checks previously handled only in Python.
 
 Runtime selection order:
 
@@ -294,6 +294,14 @@ src/fastapi_doctor/
     static_checks.py
 scripts/
 rust/doctor_core/
+  src/
+    rules/
+      architecture.rs
+      correctness.rs
+      performance.rs
+      pydantic.rs
+      resilience.rs
+      security.rs
 tests/
 .github/workflows/
 ```
