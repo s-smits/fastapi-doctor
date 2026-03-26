@@ -1,14 +1,7 @@
 mod ast_helpers;
 mod rules;
 
-use std::env;
-use std::fs;
 use std::path::Path;
-
-const NATIVE_VERSION: &str = match option_env!("FASTAPI_DOCTOR_NATIVE_VERSION") {
-    Some(version) => version,
-    None => env!("CARGO_PKG_VERSION"),
-};
 
 #[derive(Clone)]
 struct ModuleRecord {
@@ -146,11 +139,10 @@ fn issue(
     }
 }
 
-fn decode_hex(input: &str) -> Result<String, String> {
-    if input.len() % 2 != 0 {
-        return Err("hex input must have even length".to_string());
-    }
 
+<<<<<<< HEAD:rust/doctor_core/src/lib.rs
+
+=======
     let bytes_input = input.as_bytes();
     let mut bytes = Vec::with_capacity(input.len() / 2);
     
@@ -174,6 +166,7 @@ fn encode_hex(input: &str) -> String {
     }
     out
 }
+>>>>>>> origin/main:rust/doctor_core/src/main.rs
 
 fn normalized_no_space(line: &str) -> String {
     line.chars().filter(|ch| !ch.is_whitespace()).collect()
@@ -859,127 +852,89 @@ fn analyze_module<'a>(
     Ok(issues)
 }
 
-fn parse_request(path: &Path) -> Result<(Config, Vec<String>, Vec<ModuleRecord>), String> {
-    let content = fs::read_to_string(path).map_err(|err| err.to_string())?;
-    let mut config = Config {
-        import_bloat_threshold: 30,
-        giant_function_threshold: 400,
-        large_function_threshold: 200,
-        deep_nesting_threshold: 5,
-        god_module_threshold: 1500,
-        fat_route_handler_threshold: 100,
-        should_be_model_mode: "boundary".to_string(),
+use pyo3::prelude::*;
+
+#[pyfunction]
+#[pyo3(signature = (
+    import_bloat_threshold,
+    giant_function_threshold,
+    large_function_threshold,
+    deep_nesting_threshold,
+    god_module_threshold,
+    fat_route_handler_threshold,
+    should_be_model_mode,
+    active_rules,
+    modules
+))]
+fn analyze_modules(
+    py: Python<'_>,
+    import_bloat_threshold: usize,
+    giant_function_threshold: usize,
+    large_function_threshold: usize,
+    deep_nesting_threshold: usize,
+    god_module_threshold: usize,
+    fat_route_handler_threshold: usize,
+    should_be_model_mode: String,
+    active_rules: Vec<String>,
+    modules: Vec<(String, String)>,
+) -> PyResult<Vec<(String, String, String, usize, String, String, String)>> {
+    let config = Config {
+        import_bloat_threshold,
+        giant_function_threshold,
+        large_function_threshold,
+        deep_nesting_threshold,
+        god_module_threshold,
+        fat_route_handler_threshold,
+        should_be_model_mode,
     };
-    let mut rules = Vec::new();
-    let mut modules = Vec::new();
-
-    for line in content.lines() {
-        if line.is_empty() {
-            continue;
-        }
-        let parts: Vec<&str> = line.split('\t').collect();
-        match parts.first().copied() {
-            Some("VERSION") => {}
-            Some("CONFIG") => {
-                if parts.len() != 3 {
-                    return Err("invalid CONFIG line".to_string());
-                }
-                match parts[1] {
-                    "IMPORT_BLOAT_THRESHOLD" => {
-                        config.import_bloat_threshold =
-                            parts[2].parse::<usize>().map_err(|err| err.to_string())?;
-                    }
-                    "GIANT_FUNCTION_THRESHOLD" => {
-                        config.giant_function_threshold =
-                            parts[2].parse::<usize>().map_err(|err| err.to_string())?;
-                    }
-                    "LARGE_FUNCTION_THRESHOLD" => {
-                        config.large_function_threshold =
-                            parts[2].parse::<usize>().map_err(|err| err.to_string())?;
-                    }
-                    "DEEP_NESTING_THRESHOLD" => {
-                        config.deep_nesting_threshold =
-                            parts[2].parse::<usize>().map_err(|err| err.to_string())?;
-                    }
-                    "GOD_MODULE_THRESHOLD" => {
-                        config.god_module_threshold =
-                            parts[2].parse::<usize>().map_err(|err| err.to_string())?;
-                    }
-                    "FAT_ROUTE_HANDLER_THRESHOLD" => {
-                        config.fat_route_handler_threshold =
-                            parts[2].parse::<usize>().map_err(|err| err.to_string())?;
-                    }
-                    "SHOULD_BE_MODEL_MODE" => {
-                        config.should_be_model_mode = parts[2].to_string();
-                    }
-                    _ => {}
-                }
-            }
-            Some("RULE") => {
-                if parts.len() != 2 {
-                    return Err("invalid RULE line".to_string());
-                }
-                rules.push(parts[1].to_string());
-            }
-            Some("MODULE") => {
-                if parts.len() != 3 {
-                    return Err("invalid MODULE line".to_string());
-                }
-                modules.push(ModuleRecord {
-                    rel_path: decode_hex(parts[1])?,
-                    source: decode_hex(parts[2])?,
-                });
-            }
-            _ => return Err(format!("unknown request line: {line}")),
-        }
-    }
-
-    Ok((config, rules, modules))
-}
-
-fn main() -> Result<(), String> {
-    let mut args = env::args().skip(1);
-    let first_arg = args
-        .next()
-        .ok_or_else(|| "usage: fastapi-doctor-native <request-file>".to_string())?;
-    if first_arg == "--version" {
-        println!("{NATIVE_VERSION}");
-        return Ok(());
-    }
-
-    let request_path = first_arg;
-    let (config, rules, modules) = parse_request(Path::new(&request_path))?;
-    let rule_selection = RuleSelection::from_rules(&rules);
+    let rule_selection = RuleSelection::from_rules(&active_rules);
 
     use rayon::prelude::*;
-    let issues: Vec<Issue> = modules
-        .par_iter()
-        .flat_map(|module| {
-            let index = ModuleIndex::new(module);
-            analyze_module(&index, &rule_selection, &config).unwrap_or_default()
-        })
-        .collect();
 
-    for issue in issues {
-        println!(
-            "ISSUE\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            issue.check,
-            issue.severity,
-            issue.category,
-            issue.line,
-            encode_hex(&issue.path),
-            encode_hex(issue.message),
-            encode_hex(issue.help),
-        );
+    let all_issues: Result<Vec<Vec<Issue>>, String> = py.allow_threads(|| {
+        let parsed_modules: Vec<ModuleRecord> = modules
+            .into_iter()
+            .map(|(rel_path, source)| ModuleRecord { rel_path, source })
+            .collect();
+
+        parsed_modules
+            .par_iter()
+            .map(|module| {
+                let index = ModuleIndex::new(module);
+                analyze_module(&index, &rule_selection, &config)
+            })
+            .collect()
+    });
+
+    let all_issues = all_issues.map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e))?;
+
+    let mut out = Vec::new();
+    for issues in all_issues {
+        for issue in issues {
+            out.push((
+                issue.check.to_string(),
+                issue.severity.to_string(),
+                issue.category.to_string(),
+                issue.line,
+                issue.path,
+                issue.message.to_string(),
+                issue.help.to_string(),
+            ));
+        }
     }
 
+    Ok(out)
+}
+
+#[pymodule]
+fn _fastapi_doctor_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(analyze_modules, m)?)?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     fn module(path: &str, source: &str) -> ModuleRecord {
         ModuleRecord {
@@ -1028,16 +983,8 @@ mod tests {
         analyze_module(&index, &selection, &config).unwrap()
     }
 
-    #[test]
-    fn version_flag_uses_native_version_env_or_package_version() {
-        assert!(!NATIVE_VERSION.is_empty());
-    }
 
-    #[test]
-    fn hex_round_trip_preserves_unicode() {
-        let encoded = encode_hex("hello-æøå");
-        assert_eq!(decode_hex(&encoded).unwrap(), "hello-æøå");
-    }
+
 
     #[test]
     fn assert_rule_skips_tests_and_flags_prod_code() {
@@ -1312,35 +1259,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parse_request_reads_config_rules_and_modules() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let request_path = env::temp_dir().join(format!("fastapi-doctor-native-{unique}.txt"));
-        let module_path = encode_hex("pkg/main.py");
-        let source = encode_hex("print('x')\n");
-        fs::write(
-            &request_path,
-            format!(
-                "VERSION\t1\nCONFIG\tIMPORT_BLOAT_THRESHOLD\t9\nRULE\tarchitecture/print-in-production\nMODULE\t{module_path}\t{source}\n"
-            ),
-        )
-        .unwrap();
 
-        let (config, rules, modules) = parse_request(&request_path).unwrap();
-        fs::remove_file(request_path).unwrap();
-
-        assert_eq!(config.import_bloat_threshold, 9);
-        assert_eq!(config.giant_function_threshold, 400);
-        assert_eq!(config.large_function_threshold, 200);
-        assert_eq!(config.deep_nesting_threshold, 5);
-        assert_eq!(rules, vec!["architecture/print-in-production"]);
-        assert_eq!(modules.len(), 1);
-        assert_eq!(modules[0].rel_path, "pkg/main.py");
-        assert_eq!(modules[0].source, "print('x')\n");
-    }
 
     #[test]
     fn async_without_await_rule_flags_transitive_helpers() {

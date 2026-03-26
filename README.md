@@ -17,13 +17,17 @@ While AI agents excel at local implementation, they often miss system-wide patte
 > [!IMPORTANT]
 > **Integration Hint:** Ask the user before adding these rules to `CLAUDE.md` or `AGENTS.md`.
 
-## Installation & Setup
+## Key Features
+- **Auto-Discovery:** Detects layouts like `repo-root`, `src/<pkg>`, or `backend/<pkg>`.
+- **Hybrid Engine:** Rust-powered static analysis (`v0.2.0+`) with transparent Python fallback.
+- **Context Aware:** Works inside the target repo's own environment for accurate importing.
+- **Category Split:** Checks route/OpenAPI, architecture, security, performance, and Pydantic usage.
+
+## Installation
 ```bash
 pip install fastapi-doctor
-# For development/local testing
-uv sync --extra dev
 ```
-*Note: macOS and Linux wheels bundle a Rust sidecar for 3x faster static checks. Other platforms fall back to pure-Python automatically.*
+Supported macOS and Linux wheels bundle the PyO3 native extension automatically. Source installs and unsupported platforms fall back to the pure-Python implementation, so users do not need a Rust toolchain just to run the CLI.
 
 ## Audit Profiles
 | Profile | Focus |
@@ -47,11 +51,21 @@ uv run fastapi-doctor --json --with-bandit --with-tests
 uv run fastapi-doctor --app-module my_pkg.main:app
 ```
 
-## Key Features
-- **Auto-Discovery:** Detects layouts like `repo-root`, `src/<pkg>`, or `backend/<pkg>`.
-- **Hybrid Engine:** Rust-powered static analysis (`v0.2.0+`) with transparent Python fallback.
-- **Context Aware:** Works inside the target repo's own environment for accurate importing.
-- **Category Split:** Checks route/OpenAPI, architecture, security, performance, and Pydantic usage.
+## Performance
+Version 0.2.0 replaces the subprocess-based sidecar with a high-performance PyO3 native extension. This eliminates process startup latency and IPC overhead, enabling direct memory access between Python and the Rust engine.
+
+| Engine | Strict Scan (TotoScope) | vs Legacy |
+| :--- | :--- | :--- |
+| **Legacy Python** | **~28.0s** | **1x** |
+| **Rust Subprocess (~0.1.x)** | **~11.7s** | **~2.4x** |
+| **Rust PyO3 Extension (0.2.0)** | **~5.9s** | **~4.8x** |
+
+## Native Runtime
+Version 0.2.0 introduces a modularized Rust engine and expanded rule coverage. The engine is now a compiled C extension (`_fastapi_doctor_native`) rather than a standalone binary.
+
+Runtime selection order:
+1. **Native Extension:** PyO3 module `_fastapi_doctor_native` is imported directly.
+2. **fallback:** pure-Python implementation.
 
 ## Internal Layout
 - `src/fastapi_doctor/`: Python wrapper, CLI, and live FastAPI route/OpenAPI checks.
@@ -68,4 +82,19 @@ uv run pytest -q
 cargo test --manifest-path rust/doctor_core/Cargo.toml
 ```
 
-For detailed release workflows and native binary staging, see the `CONTRIBUTING.md`.
+### Rust Development
+The native extension lives under [rust/doctor_core/Cargo.toml](/Users/air/Developer/fastapi-doctor/rust/doctor_core/Cargo.toml).
+
+Useful commands:
+```bash
+# Build and install into the current venv for testing
+uv run maturin develop --release
+
+# Run Rust unit tests
+cargo test --manifest-path rust/doctor_core/Cargo.toml
+```
+
+To build a wheel for the current platform:
+```bash
+uv run maturin build --release
+```
