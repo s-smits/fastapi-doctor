@@ -1,6 +1,6 @@
 [build-system]
-requires = ["maturin>=1.5,<2.0"]
-build-backend = "maturin"
+requires = ["hatchling>=1.27.0", "hatch-vcs>=0.4.0"]
+build-backend = "hatchling.build"
 
 [project]
 name = "fastapi-doctor"
@@ -36,11 +36,38 @@ fastapi-doctor-export-openapi = "fastapi_doctor.export_openapi:main"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
-[tool.maturin]
-features = ["pyo3/extension-module"]
-python-source = "src"
-module-name = "fastapi_doctor._fastapi_doctor_native"
-manifest-path = "rust/doctor_core/Cargo.toml"
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/fastapi_doctor/_version.py"
+
+[tool.hatch.build]
+exclude = [
+    "/rust/doctor_core/target",
+    "/rust/doctor_core/target/**",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fastapi_doctor"]
+artifacts = [
+    "src/fastapi_doctor/_fastapi_doctor_native*",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/tests",
+    "/scripts",
+    "/rust",
+    "/README.md",
+    "/LICENSE",
+    "/pyproject.toml",
+]
+exclude = [
+    "/rust/doctor_core/target",
+    "/rust/doctor_core/target/**",
+]
 
 [dependency-groups]
 dev = [
