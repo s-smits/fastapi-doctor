@@ -77,7 +77,7 @@ pub(crate) fn collect_regex_in_loop_issues(module: &ModuleIndex, suite: &ast::Su
                                             severity: "warning",
                                             category: "Performance",
                                             line,
-                                            path: module.rel_path.clone(),
+                                            path: module.rel_path.to_string(),
                                             message: Box::leak(
                                                 format!("re.{}() with literal pattern inside loop — hoist to module level", func.attr).into_boxed_str(),
                                             ),
@@ -198,7 +198,7 @@ pub(crate) fn collect_n_plus_one_hint_issues(module: &ModuleIndex, suite: &ast::
                                         severity: "warning",
                                         category: "Performance",
                                         line,
-                                        path: module.rel_path.clone(),
+                                        path: module.rel_path.to_string(),
                                         message: Box::leak(
                                             format!("Potential N+1: {}.{}() inside loop — batch with IN clause or join", obj.id, func.attr).into_boxed_str(),
                                         ),
@@ -326,7 +326,7 @@ pub(crate) fn collect_sequential_awaits_issues(module: &ModuleIndex, suite: &ast
                             severity: "warning",
                             category: "Performance",
                             line,
-                            path: module.rel_path.clone(),
+                            path: module.rel_path.to_string(),
                             message: Box::leak(
                                 format!(
                                     "{} sequential awaits in {}() could use asyncio.gather()",

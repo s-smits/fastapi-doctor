@@ -72,7 +72,7 @@ pub(crate) fn collect_async_without_await_issues(
             severity: "warning",
             category: "Architecture",
             line: function.line,
-            path: module.rel_path.clone(),
+            path: module.rel_path.to_string(),
             message: Box::leak(message.into_boxed_str()),
             help: Box::leak(help.into_boxed_str()),
         });
@@ -102,7 +102,7 @@ pub(crate) fn collect_giant_function_issues(
                 severity: "error",
                 category: "Architecture",
                 line,
-                path: module.rel_path.clone(),
+                path: module.rel_path.to_string(),
                 message: Box::leak(
                     format!(
                         "Function '{}' is {} lines (>{}) — extract sub-functions",
@@ -118,7 +118,7 @@ pub(crate) fn collect_giant_function_issues(
                 severity: "warning",
                 category: "Architecture",
                 line,
-                path: module.rel_path.clone(),
+                path: module.rel_path.to_string(),
                 message: Box::leak(
                     format!(
                         "Function '{}' is {} lines (>{}) — consider splitting",
@@ -152,7 +152,7 @@ pub(crate) fn collect_deep_nesting_issues(
                 severity: "warning",
                 category: "Architecture",
                 line: module.line_for_offset(function.range.start().to_usize()),
-                path: module.rel_path.clone(),
+                path: module.rel_path.to_string(),
                 message: Box::leak(
                     format!(
                         "Function '{}' has {} levels of nesting (>{}) — extract inner logic",
@@ -200,7 +200,7 @@ pub(crate) fn collect_avoid_sys_exit_issues(module: &ModuleIndex, suite: &ast::S
                 severity: "warning",
                 category: "Architecture",
                 line,
-                path: module.rel_path.clone(),
+                path: module.rel_path.to_string(),
                 message: "sys.exit() or quit() in library code — raise an Exception instead",
                 help: "Deep application logic should raise exceptions, not abruptly kill the process.",
             });
@@ -234,7 +234,7 @@ pub(crate) fn collect_engine_pool_pre_ping_issues(module: &ModuleIndex, suite: &
                 severity: "warning",
                 category: "Architecture",
                 line,
-                path: module.rel_path.clone(),
+                path: module.rel_path.to_string(),
                 message: Box::leak(
                     format!("{}() called without pool_pre_ping=True", func_name).into_boxed_str(),
                 ),
@@ -287,7 +287,7 @@ pub(crate) fn collect_fat_route_handler_issues(
                 severity: "warning",
                 category: "Architecture",
                 line: func_line,
-                path: module.rel_path.clone(),
+                path: module.rel_path.to_string(),
                 message: Box::leak(
                     format!(
                         "Route handler '{}' is {} lines — extract business logic to services/",
@@ -377,7 +377,7 @@ pub(crate) fn collect_passthrough_function_issues(module: &ModuleIndex, suite: &
                 severity: "warning",
                 category: "Architecture",
                 line,
-                path: module.rel_path.clone(),
+                path: module.rel_path.to_string(),
                 message: Box::leak(
                     format!("Function '{}' is a pure passthrough — consider inlining", name)
                         .into_boxed_str(),

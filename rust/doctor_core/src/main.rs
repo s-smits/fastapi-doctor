@@ -38,18 +38,18 @@ struct Issue {
     help: &'static str,
 }
 
-struct LineRecord {
+struct LineRecord<'a> {
     number: usize,
-    raw: String,
-    trimmed: String,
-    trimmed_start: String,
+    raw: &'a str,
+    trimmed: &'a str,
+    trimmed_start: &'a str,
     compact: String,
 }
 
-struct ModuleIndex {
-    rel_path: String,
-    source: String,
-    lines: Vec<LineRecord>,
+struct ModuleIndex<'a> {
+    rel_path: &'a str,
+    source: &'a str,
+    lines: Vec<LineRecord<'a>>,
     line_starts: Vec<usize>,
     path_parts: Vec<String>,
     file_name: Option<String>,
@@ -57,8 +57,8 @@ struct ModuleIndex {
     has_noqa_architecture: bool,
 }
 
-impl ModuleIndex {
-    fn new(module: &ModuleRecord) -> Self {
+impl<'a> ModuleIndex<'a> {
+    fn new(module: &'a ModuleRecord) -> Self {
         let path = Path::new(&module.rel_path);
         let path_parts: Vec<String> = path
             .components()
@@ -72,14 +72,14 @@ impl ModuleIndex {
         let mut lines = Vec::new();
         let mut import_count = 0;
         for (idx, raw) in module.source.lines().enumerate() {
-            let trimmed_start = raw.trim_start().to_string();
+            let trimmed_start = raw.trim_start();
             if trimmed_start.starts_with("import ") || trimmed_start.starts_with("from ") {
                 import_count += 1;
             }
             lines.push(LineRecord {
                 number: idx + 1,
-                raw: raw.to_string(),
-                trimmed: raw.trim().to_string(),
+                raw,
+                trimmed: raw.trim(),
                 trimmed_start,
                 compact: normalized_no_space(raw),
             });
@@ -91,8 +91,8 @@ impl ModuleIndex {
         }
 
         Self {
-            rel_path: module.rel_path.clone(),
-            source: module.source.clone(),
+            rel_path: &module.rel_path,
+            source: &module.source,
             lines,
             line_starts,
             path_parts,
@@ -151,13 +151,14 @@ fn decode_hex(input: &str) -> Result<String, String> {
         return Err("hex input must have even length".to_string());
     }
 
+    let bytes_input = input.as_bytes();
     let mut bytes = Vec::with_capacity(input.len() / 2);
-    let chars: Vec<char> = input.chars().collect();
+    
     let mut idx = 0;
-    while idx < chars.len() {
-        let pair = format!("{}{}", chars[idx], chars[idx + 1]);
-        let byte = u8::from_str_radix(&pair, 16).map_err(|err| err.to_string())?;
-        bytes.push(byte);
+    while idx < bytes_input.len() {
+        let high = (bytes_input[idx] as char).to_digit(16).ok_or("invalid hex")?;
+        let low = (bytes_input[idx + 1] as char).to_digit(16).ok_or("invalid hex")?;
+        bytes.push((high << 4 | low) as u8);
         idx += 2;
     }
 
@@ -165,9 +166,11 @@ fn decode_hex(input: &str) -> Result<String, String> {
 }
 
 fn encode_hex(input: &str) -> String {
+    const HEX_CHARS: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(input.len() * 2);
     for byte in input.as_bytes() {
-        out.push_str(&format!("{byte:02x}"));
+        out.push(HEX_CHARS[(byte >> 4) as usize] as char);
+        out.push(HEX_CHARS[(byte & 0x0f) as usize] as char);
     }
     out
 }
@@ -410,8 +413,8 @@ impl RuleSelection {
     }
 }
 
-fn analyze_module(
-    module: &ModuleIndex,
+fn analyze_module<'a>(
+    module: &ModuleIndex<'a>,
     rules: &RuleSelection,
     config: &Config,
 ) -> Result<Vec<Issue>, String> {
@@ -433,7 +436,7 @@ fn analyze_module(
             severity: "warning",
             category: "Architecture",
             line: 0,
-            path: module.rel_path.clone(),
+            path: module.rel_path.to_string(),
             message: Box::leak(
                 format!(
                     "File has {} imports (>{}) — consider decomposing",
@@ -456,7 +459,7 @@ fn analyze_module(
             severity: "warning",
             category: "Architecture",
             line: 0,
-            path: module.rel_path.clone(),
+            path: module.rel_path.to_string(),
             message: Box::leak(
                 format!(
                     "File is {} lines (>{}) — decompose into focused modules",
@@ -564,7 +567,7 @@ fn analyze_module(
                 severity: "warning",
                 category: "Architecture",
                 line: line.number,
-                path: module.rel_path.clone(),
+                path: module.rel_path.to_string(),
                 message: Box::leak(
                     format!(
                         "from {} import * — pollutes namespace and breaks static analysis",
@@ -641,7 +644,7 @@ fn analyze_module(
                         severity: "warning",
                         category: "Correctness",
                         line: line.number,
-                        path: module.rel_path.clone(),
+                        path: module.rel_path.to_string(),
                         message: Box::leak(
                             format!("os.path.{} usage detected — prefer pathlib.Path", attr)
                                 .into_boxed_str(),
@@ -672,7 +675,7 @@ fn analyze_module(
                         severity: "warning",
                         category: "Correctness",
                         line: line.number,
-                        path: module.rel_path.clone(),
+                        path: module.rel_path.to_string(),
                         message: Box::leak(
                             format!("Deprecated typing imports: {} — use builtins", found.join(", "))
                                 .into_boxed_str(),
@@ -721,7 +724,7 @@ fn analyze_module(
                         severity: "warning",
                         category: "Performance",
                         line: line.number,
-                        path: module.rel_path.clone(),
+                        path: module.rel_path.to_string(),
                         message: Box::leak(
                             format!(
                                 "Heavy library {{'{}'}} imported at module level — degrades serverless cold-starts",
@@ -948,11 +951,14 @@ fn main() -> Result<(), String> {
     let (config, rules, modules) = parse_request(Path::new(&request_path))?;
     let rule_selection = RuleSelection::from_rules(&rules);
 
-    let mut issues = Vec::new();
-    for module in &modules {
-        let index = ModuleIndex::new(module);
-        issues.extend(analyze_module(&index, &rule_selection, &config)?);
-    }
+    use rayon::prelude::*;
+    let issues: Vec<Issue> = modules
+        .par_iter()
+        .flat_map(|module| {
+            let index = ModuleIndex::new(module);
+            analyze_module(&index, &rule_selection, &config).unwrap_or_default()
+        })
+        .collect();
 
     for issue in issues {
         println!(

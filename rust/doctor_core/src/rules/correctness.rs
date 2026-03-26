@@ -26,7 +26,7 @@ pub(crate) fn collect_sync_io_in_async_issues(
                     severity: "error",
                     category: "Correctness",
                     line: call.line,
-                    path: module.rel_path.clone(),
+                    path: module.rel_path.to_string(),
                     message: Box::leak(
                         format!(
                             "{label} inside async function '{}' blocks the event loop",
@@ -67,7 +67,7 @@ pub(crate) fn collect_sync_io_in_async_issues(
                 severity: "error",
                 category: "Correctness",
                 line: call.line,
-                path: module.rel_path.clone(),
+                path: module.rel_path.to_string(),
                 message: Box::leak(
                     format!(
                         "Async function '{}' calls sync helper '{}' that blocks the event loop",
@@ -110,7 +110,7 @@ pub(crate) fn collect_misused_async_construct_issues(
                     severity: "error",
                     category: "Correctness",
                     line: call.line,
-                    path: module.rel_path.clone(),
+                    path: module.rel_path.to_string(),
                     message: Box::leak(
                         format!("await used on sync function '{}()'", resolved.qualname).into_boxed_str(),
                     ),
@@ -129,7 +129,7 @@ pub(crate) fn collect_misused_async_construct_issues(
                     severity: "error",
                     category: "Correctness",
                     line: call.line,
-                    path: module.rel_path.clone(),
+                    path: module.rel_path.to_string(),
                     message: Box::leak(
                         format!(
                             "async for used on sync iterable from '{}()'",
@@ -152,7 +152,7 @@ pub(crate) fn collect_misused_async_construct_issues(
                     severity: "error",
                     category: "Correctness",
                     line: call.line,
-                    path: module.rel_path.clone(),
+                    path: module.rel_path.to_string(),
                     message: Box::leak(
                         format!(
                             "async with used on sync context manager from '{}()'",
@@ -207,7 +207,7 @@ pub(crate) fn collect_asyncio_run_in_async_issues(module: &ModuleIndex, suite: &
             severity: "error",
             category: "Correctness",
             line,
-            path: module.rel_path.clone(),
+            path: module.rel_path.to_string(),
             message:
                 "asyncio.run() in a module with async functions — use await or create_task instead",
             help:
@@ -248,7 +248,7 @@ pub(crate) fn collect_threading_lock_in_async_issues(module: &ModuleIndex, suite
             severity: "warning",
             category: "Correctness",
             line,
-            path: module.rel_path.clone(),
+            path: module.rel_path.to_string(),
             message: "threading.Lock() in async module — blocks event loop; use asyncio.Lock()",
             help: "threading.Lock blocks the event loop. Use asyncio.Lock for async code, or add '# noqa' if cross-thread sync is intentional.",
         });
@@ -272,7 +272,7 @@ pub(crate) fn collect_mutable_default_arg_issues(module: &ModuleIndex, suite: &a
                 severity: "error",
                 category: "Correctness",
                 line,
-                path: module.rel_path.clone(),
+                path: module.rel_path.to_string(),
                 message: Box::leak(
                     format!(
                         "Mutable default argument in {}() — shared across calls",
@@ -308,7 +308,7 @@ pub(crate) fn collect_return_in_finally_issues(module: &ModuleIndex, suite: &ast
                 severity: "error",
                 category: "Correctness",
                 line,
-                path: module.rel_path.clone(),
+                path: module.rel_path.to_string(),
                 message: "return inside finally block — silently swallows exceptions",
                 help: "Move the return outside the finally block. finally should only do cleanup.",
             });
@@ -549,7 +549,7 @@ pub(crate) fn collect_unreachable_in_block(module: &ModuleIndex, body: &[Stmt], 
             severity: "warning",
             category: "Correctness",
             line,
-            path: module.rel_path.clone(),
+            path: module.rel_path.to_string(),
             message: Box::leak(
                 format!(
                     "Unreachable code after {} statement",
@@ -630,7 +630,7 @@ pub(crate) fn collect_serverless_filesystem_write_issues(module: &ModuleIndex, s
                 severity: "warning",
                 category: "Correctness",
                 line,
-                path: module.rel_path.clone(),
+                path: module.rel_path.to_string(),
                 message: "Potential filesystem write outside /tmp — will fail in serverless environments",
                 help: "Use /tmp for temporary storage or an external object store (S3/GCS) for persistence.",
             });
@@ -671,7 +671,7 @@ pub(crate) fn collect_missing_http_timeout_issues(module: &ModuleIndex, suite: &
                 severity: "warning",
                 category: "Correctness",
                 line,
-                path: module.rel_path.clone(),
+                path: module.rel_path.to_string(),
                 message: "HTTP call missing timeout — can hang indefinitely",
                 help: "Always specify a timeout for HTTP calls to avoid hanging requests.",
             });
@@ -729,7 +729,7 @@ pub(crate) fn collect_get_with_side_effect_issues(module: &ModuleIndex, suite: &
                             severity: "warning",
                             category: "Correctness",
                             line,
-                            path: module.rel_path.clone(),
+                            path: module.rel_path.to_string(),
                             message: Box::leak(
                                 format!("GET endpoint {}() calls .{}() — violates REST semantics", function.name, func.attr).into_boxed_str(),
                             ),
