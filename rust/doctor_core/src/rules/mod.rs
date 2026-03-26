@@ -11,8 +11,8 @@ use rustpython_parser::Parse;
 use crate::{Config, Issue, ModuleIndex, RuleSelection};
 use crate::ast_helpers::FunctionIndex;
 
-pub(crate) fn analyze_module_ast(
-    module: &ModuleIndex,
+pub(crate) fn analyze_module_ast<'a>(
+    module: &ModuleIndex<'a>,
     rules: &RuleSelection,
     config: &Config,
 ) -> Result<Vec<Issue>, String> {

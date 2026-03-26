@@ -103,7 +103,7 @@ pub(crate) fn collect_pydantic_issues(
                                     severity: "warning",
                                     category: "Pydantic",
                                     line,
-                                    path: module.rel_path.clone(),
+                                    path: module.rel_path.to_string(),
                                     message: Box::leak(
                                         format!(
                                             "Sensitive field '{}' in model '{}' should use SecretStr",
@@ -119,7 +119,7 @@ pub(crate) fn collect_pydantic_issues(
                                     severity: "warning",
                                     category: "Security",
                                     line,
-                                    path: module.rel_path.clone(),
+                                    path: module.rel_path.to_string(),
                                     message: Box::leak(
                                         format!(
                                             "Field '{}' in model '{}' should use SecretStr",
@@ -155,7 +155,7 @@ pub(crate) fn collect_pydantic_issues(
                             severity: "error",
                             category: "Pydantic",
                             line,
-                            path: module.rel_path.clone(),
+                            path: module.rel_path.to_string(),
                             message: Box::leak(
                                 format!(
                                     "Mutable default in model '{}' — use Field(default_factory=...)",
@@ -196,7 +196,7 @@ pub(crate) fn collect_pydantic_issues(
                         severity: "warning",
                         category: "Pydantic",
                         line: class_line,
-                        path: module.rel_path.clone(),
+                        path: module.rel_path.to_string(),
                         message: Box::leak(
                             format!("TypedDict '{}' should be a Pydantic BaseModel", class_name).into_boxed_str(),
                         ),
@@ -225,7 +225,7 @@ pub(crate) fn collect_pydantic_issues(
                         severity: "warning",
                         category: "Pydantic",
                         line: class_line,
-                        path: module.rel_path.clone(),
+                        path: module.rel_path.to_string(),
                         message: Box::leak(
                             format!("NamedTuple '{}' should be a Pydantic BaseModel with frozen=True", class_name).into_boxed_str(),
                         ),
@@ -274,7 +274,7 @@ pub(crate) fn collect_pydantic_issues(
                         severity: "warning",
                         category: "Pydantic",
                         line: class_line,
-                        path: module.rel_path.clone(),
+                        path: module.rel_path.to_string(),
                         message: Box::leak(
                             format!("@dataclass '{}' should be a Pydantic BaseModel", class_name).into_boxed_str(),
                         ),

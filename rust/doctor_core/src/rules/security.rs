@@ -40,7 +40,7 @@ pub(crate) fn collect_sql_fstring_issues(module: &ModuleIndex, suite: &ast::Suit
             severity: "error",
             category: "Security",
             line,
-            path: module.rel_path.clone(),
+            path: module.rel_path.to_string(),
             message: "SQL injection risk: f-string used inside text() call",
             help: "Keep SQL parameterized instead of interpolating values into text(). Suppress with '# noqa: sql-safe' if trusted.",
         });
@@ -125,7 +125,7 @@ pub(crate) fn collect_hardcoded_secret_issues(module: &ModuleIndex, suite: &ast:
                 severity: "error",
                 category: "Security",
                 line,
-                path: module.rel_path.clone(),
+                path: module.rel_path.to_string(),
                 message: "Hardcoded secret detected — use environment variables or a secrets manager",
                 help: "Move secrets to environment variables: os.environ['KEY'] or a secrets manager like AWS SM / Vault.",
             });
@@ -144,7 +144,7 @@ pub(crate) fn collect_hardcoded_secret_issues(module: &ModuleIndex, suite: &ast:
                     severity: "error",
                     category: "Security",
                     line,
-                    path: module.rel_path.clone(),
+                    path: module.rel_path.to_string(),
                     message: Box::leak(
                         format!("Variable '{}' looks like a secret with a hardcoded string value", name)
                             .into_boxed_str(),

@@ -45,7 +45,7 @@ pub(crate) fn collect_resilience_issues(
                         severity: "warning",
                         category: "Resilience",
                         line: handler_line,
-                        path: module.rel_path.clone(),
+                        path: module.rel_path.to_string(),
                         message: "except: pass silently swallows errors without logging or comment",
                         help: "Add logger.debug/warning or a # comment explaining why it's safe to ignore.",
                     });
@@ -92,7 +92,7 @@ pub(crate) fn collect_resilience_issues(
                             severity: "warning",
                             category: "Resilience",
                             line: handler_line,
-                            path: module.rel_path.clone(),
+                            path: module.rel_path.to_string(),
                             message: "except handler re-raises without adding context — remove the try/except or add info",
                             help: "Either remove the try/except (it's noise) or use `raise NewError(...) from exc`.",
                         });
@@ -193,7 +193,7 @@ pub(crate) fn collect_resilience_issues(
                         severity: "warning",
                         category: "Resilience",
                         line: handler_line,
-                        path: module.rel_path.clone(),
+                        path: module.rel_path.to_string(),
                         message: "except Exception block swallows error without logging or re-raising",
                         help: "Add logger.exception() or logger.warning(..., exc_info=True) to preserve debugging context.",
                     });
@@ -211,7 +211,7 @@ pub(crate) fn collect_resilience_issues(
                         severity: "warning",
                         category: "Resilience",
                         line: log_line,
-                        path: module.rel_path.clone(),
+                        path: module.rel_path.to_string(),
                         message: Box::leak(
                             format!(
                                 "except Exception logs via logger.{}() but discards traceback",
