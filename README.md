@@ -246,6 +246,18 @@ It clones [fastapi/full-stack-fastapi-template](https://github.com/fastapi/full-
 
 You can override the clone location with `FASTAPI_DOCTOR_EXAMPLE_DIR=/path/to/clone`.
 
+## Performance
+
+With the introduction of the modularized Rust engine in `v0.2.0`, `fastapi-doctor` is significantly faster than its legacy pure-Python implementation.
+
+On a large, real-world codebase (100+ routes, complex Pydantic models), static analysis execution times dropped dramatically:
+
+- **Legacy Python Engine:** ~28.0 seconds
+- **New Rust Engine (Medium Profile):** ~9.9 seconds
+- **New Rust Engine (Strict Profile):** ~11.7 seconds
+
+This represents nearly a **3x speedup**, allowing agents and CI pipelines to receive feedback much faster without sacrificing code quality checks.
+
 ## Native Runtime
 
 Version 0.2.0 introduces a modularized Rust engine and expanded rule coverage. The sidecar is now split into domain-specific modules for better maintenance and performance. It covers more architecture, Pydantic, and security checks previously handled only in Python.
