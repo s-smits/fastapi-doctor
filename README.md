@@ -331,16 +331,17 @@ cargo test --manifest-path rust/doctor_core/Cargo.toml
 cargo build --release --manifest-path rust/doctor_core/Cargo.toml
 ```
 
-To stage a native binary into the Python package for the current platform:
+To stage a native binary into the Python package for local testing, use a static version string that **exactly matches** the `version` in `rust/doctor_core/Cargo.toml`.
+
+Using a dynamic version from the local git checkout can cause a mismatch with the Rust binary's version, disabling the native engine.
 
 ```bash
+# Example for version 0.2.0
+cargo build --release --manifest-path rust/doctor_core/Cargo.toml
+
 python scripts/stage_native_binary.py \
   --platform-tag darwin-arm64 \
-  --version "$(uv run python - <<'PY'
-import fastapi_doctor
-print(fastapi_doctor.__version__)
-PY
-)"
+  --version "0.2.0"
 ```
 
 Then build a wheel:
