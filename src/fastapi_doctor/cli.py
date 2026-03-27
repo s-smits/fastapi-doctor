@@ -7,14 +7,28 @@ import json
 import os
 from importlib.metadata import PackageNotFoundError, version as metadata_version
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from .console import logger
-from .external_tools import CommandResult, count_bandit_highs, map_ruff_findings_to_doctor, run_command
-from .models import DoctorReport
-from .models import PERFECT_SCORE, SCHEMA_VERSION
-from .project import get_effective_config, get_project_layout
-from .reporting import print_report_human
-from .runner import run_python_doctor_checks
+if TYPE_CHECKING:
+    from .external_tools import CommandResult
+
+
+def run_command(name: str, command: list[str], cwd: Path):
+    from .external_tools import run_command as _run_command
+
+    return _run_command(name, command, cwd)
+
+
+def count_bandit_highs(stdout: str) -> int:
+    from .external_tools import count_bandit_highs as _count_bandit_highs
+
+    return _count_bandit_highs(stdout)
+
+
+def map_ruff_findings_to_doctor(stdout: str):
+    from .external_tools import map_ruff_findings_to_doctor as _map_ruff_findings_to_doctor
+
+    return _map_ruff_findings_to_doctor(stdout)
 
 
 def compute_combined_score(
@@ -50,16 +64,24 @@ def compute_combined_score(
     return final, label
 
 def main() -> int:
+    from .models import DoctorReport, PERFECT_SCORE
+    from .runner import run_python_doctor_checks
+
     args = parse_args()
     if args.static_only:
         args.skip_app_bootstrap = True
     configure_environment_from_args(args)
     repo_root = resolve_repo_root()
     cli_version = get_cli_version()
+    quiet = args.json or args.score
+    logger = None
 
     command_results: list[CommandResult] = []
 
-    if not args.json and not args.score:
+    if not quiet:
+        from .console import logger as _logger
+
+        logger = _logger
         logger.log(f"fastapi-doctor v{cli_version}")
         logger.break_line()
 
@@ -85,8 +107,11 @@ def main() -> int:
         tool_jobs["pytest"] = ("pytest", ["uv", "run", "pytest", *args.pytest_args.split()])
 
     if tool_jobs:
-        quiet = args.json or args.score
         if not quiet:
+            if logger is None:
+                from .console import logger as _logger
+
+                logger = _logger
             logger.dim(f"Running {', '.join(tool_jobs)}...")
 
         with ThreadPoolExecutor(max_workers=len(tool_jobs)) as pool:
@@ -130,7 +155,11 @@ def main() -> int:
         if args.skip_openapi:
             ignore_rules.add("api-surface/")
 
-        if not args.json and not args.score:
+        if not quiet:
+            if logger is None:
+                from .console import logger as _logger
+
+                logger = _logger
             logger.dim("Running FastAPI Doctor checks...")
             logger.break_line()
         doctor_report = run_python_doctor_checks(
@@ -167,6 +196,8 @@ def main() -> int:
         )
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
+        from .reporting import print_report_human
+
         print_report_human(doctor_report, command_results, final_score, final_label, verbose=args.verbose)
 
     if args.fail_on != "none":
@@ -254,11 +285,14 @@ def get_cli_version() -> str:
 def build_json_payload(
     *,
     args: argparse.Namespace,
-    command_results: list[CommandResult],
+    command_results: list["CommandResult"],
     doctor_report: object | None,
     final_score: int,
     final_label: str,
 ) -> dict[str, object]:
+    from .models import SCHEMA_VERSION
+    from .project import get_effective_config, get_project_layout
+
     project_layout = get_project_layout()
     return {
         "schema_version": SCHEMA_VERSION,

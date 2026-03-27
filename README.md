@@ -85,7 +85,7 @@ uv run fastapi-doctor --app-module my_pkg.main:app
 | `strict` | All checks, including opinionated architecture and performance rules. |
 
 ## Performance
-`0.4.0` keeps the static-only path in the native project bundle and tightens the Rust-owned boundary around project discovery, config loading, route extraction, route-policy checks, and suppression collection.
+`0.4.1` trims more Python startup overhead from the static-only path while keeping the native project bundle responsible for discovery, config loading, route extraction, route-policy checks, and suppression collection.
 
 Measured with:
 
@@ -93,7 +93,7 @@ Measured with:
 uv run fastapi-doctor --static-only --profile strict --skip-ruff --skip-ty --repo-root /path/to/project
 ```
 
-On the maintainer repo, import time dropped from `0.1936s` with the legacy Python runner to `0.0521s` with the current native path, and a strict static-only self-scan dropped from `0.6355s` cold / `0.6275s` warm to `0.2228s` cold / `0.2073s` warm. On a representative external backend, the same strict static-only run held score parity while improving from `9.7251s` cold / `9.8521s` warm to `1.0967s` cold / `1.0202s` warm.
+On the maintainer repo, CLI import dropped from `0.1865s` with the legacy Python runner to `0.0419s` with the current path, and a strict static-only self-scan dropped from `0.6663s` cold / `0.6401s` warm to `0.2362s` cold / `0.2276s` warm. On a representative external backend, the same strict static-only run held score parity while improving from `11.6632s` cold / `11.0076s` warm to `1.1090s` cold / `1.1517s` warm.
 
 ## Native Runtime
 Runtime selection order:
@@ -125,7 +125,7 @@ PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv build
 ```
 
 ## Release Flow
-Push a tag like `v0.4.0` and GitHub Actions will:
+Push a tag like `v0.4.1` and GitHub Actions will:
 - Validate that the tag matches `rust/Cargo.toml`
 - Build platform wheels
 - Build an sdist

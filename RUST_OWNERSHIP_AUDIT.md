@@ -98,13 +98,13 @@ ownership:
 Measured against the legacy Python-first tool on the same machine:
 
 - Python package import:
-  - legacy: `0.193579s`
-  - current: `0.052131s`
+  - legacy: `0.186542s`
+  - current: `0.041857s`
 
 - Strict static-only self-scan:
-  - legacy: `0.635481s` cold, `0.627520s` warm
-  - current: `0.222830s` cold, `0.207280s` warm
+  - legacy: `0.666288s` cold, `0.640081s` warm
+  - current: `0.236197s` cold, `0.227556s` warm
 
 - Strict static-only scan on a representative external backend:
-  - legacy: `9.725082s` cold, `9.852116s` warm
-  - current: `1.096736s` cold, `1.020181s` warm
+  - legacy: `11.663199s` cold, `11.007550s` warm
+  - current: `1.108972s` cold, `1.151745s` warm
