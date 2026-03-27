@@ -66,9 +66,15 @@ def collect_release_assets(releases: list[dict[str, object]], project_name: str)
 
 def collect_dist_assets(dist_dir: Path, project_name: str, repository: str, tag: str) -> list[dict[str, str]]:
     base_url = f"https://github.com/{repository}/releases/download/{tag}"
+    version = tag.removeprefix("v")
+    version_token = f"-{version}-"
     assets: list[dict[str, str]] = []
     for path in sorted(dist_dir.iterdir()):
         if not path.is_file() or not is_distribution_asset(path.name, project_name):
+            continue
+        if path.suffix == ".whl" and version_token not in path.name:
+            continue
+        if path.name.endswith(".tar.gz") and f"-{version}.tar.gz" not in path.name:
             continue
         assets.append(
             {
