@@ -85,7 +85,7 @@ uv run fastapi-doctor --app-module my_pkg.main:app
 | `strict` | All checks, including opinionated architecture and performance rules. |
 
 ## Performance
-`0.3.0` moves the static-only path to a native project scan that performs file discovery, source loading, static issue analysis, route extraction, and suppression collection in Rust.
+`0.3.1` moves the static-only path to a native project scan that performs file discovery, source loading, static issue analysis, route extraction, and suppression collection in Rust.
 
 Measured on `toto-scope` with:
 
@@ -98,7 +98,7 @@ uv run fastapi-doctor --static-only --profile strict --skip-ruff --skip-ty --rep
 | Legacy Python | ~28.0s | 1x |
 | Rust subprocess (~0.1.x) | ~11.7s | ~2.4x |
 | PyO3 extension (0.2.x) | ~5.9s | ~4.8x |
-| Native project bundle (0.3.0) | ~2.1s to ~2.4s | ~11x to ~13x |
+| Native project bundle (0.3.1) | ~2.1s to ~2.4s | ~11x to ~13x |
 
 ## Native Runtime
 Runtime selection order:
@@ -130,7 +130,7 @@ PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv build
 ```
 
 ## Release Flow
-Push a tag like `v0.3.0` and GitHub Actions will:
+Push a tag like `v0.3.1` and GitHub Actions will:
 - Validate that the tag matches `rust/doctor_core/Cargo.toml`
 - Build platform wheels
 - Build an sdist

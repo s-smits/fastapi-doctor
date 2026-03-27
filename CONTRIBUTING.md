@@ -33,7 +33,7 @@ The release version is sourced from `rust/doctor_core/Cargo.toml`.
 To cut a release:
 1. Bump the version in `rust/doctor_core/Cargo.toml`.
 2. Run validation locally.
-3. Push a matching tag such as `v0.3.0`.
+3. Push a matching tag such as `v0.3.1`.
 
 The GitHub Actions release workflow will:
 - Validate that the git tag matches the package version.
