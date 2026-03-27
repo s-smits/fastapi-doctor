@@ -10,11 +10,9 @@ dist/
 *.egg-info/
 *.pyc
 *.pyo
+*.so
 .DS_Store
-rust/doctor_core/target/
 rust/target/
-src/fastapi_doctor/bin/*
-!src/fastapi_doctor/bin/.gitignore
 
 .pytest_setup_done
 state/

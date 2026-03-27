@@ -1,121 +1,79 @@
 from __future__ import annotations
 
-"""CLI entrypoint for fastapi-doctor."""
+"""CLI entrypoint for the Rust-native fastapi-doctor package."""
 
 import argparse
 import json
 import os
+import shlex
+import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from importlib.metadata import PackageNotFoundError, version as metadata_version
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import Any
 
-from ._compat import get_installed_version, is_balanced_profile, normalize_cli_profile
+from .native_core import NativeEngineUnavailable, analyze_selected_current_project_v2
 
-if TYPE_CHECKING:
-    from .external_tools import CommandResult
-
-
-_SECURITY_SELECTORS = frozenset({
-    "security/*",
-    "pydantic/sensitive-field-type",
-    "pydantic/extra-allow-on-request",
-    "config/direct-env-access",
-})
-_MEDIUM_SELECTORS = _SECURITY_SELECTORS | frozenset({
-    "correctness/*",
-    "resilience/*",
-    "config/*",
-    "pydantic/mutable-default",
-    "pydantic/deprecated-validator",
-    "architecture/async-without-await",
-    "architecture/avoid-sys-exit",
-    "architecture/engine-pool-pre-ping",
-    "architecture/missing-startup-validation",
-    "architecture/passthrough-function",
-    "architecture/print-in-production",
-    "api-surface/missing-pagination",
-    "api-surface/missing-operation-id",
-    "api-surface/duplicate-operation-id",
-    "api-surface/missing-openapi-tags",
-})
-
-
-def run_command(name: str, command: list[str], cwd: Path):
-    from .external_tools import run_command as _run_command
-
-    return _run_command(name, command, cwd)
+SCHEMA_VERSION = "1.2"
+_SECURITY_SELECTORS = frozenset(
+    {
+        "security/*",
+        "pydantic/sensitive-field-type",
+        "pydantic/extra-allow-on-request",
+        "config/direct-env-access",
+    }
+)
+_MEDIUM_SELECTORS = _SECURITY_SELECTORS | frozenset(
+    {
+        "correctness/*",
+        "resilience/*",
+        "config/*",
+        "pydantic/mutable-default",
+        "pydantic/deprecated-validator",
+        "architecture/async-without-await",
+        "architecture/avoid-sys-exit",
+        "architecture/engine-pool-pre-ping",
+        "architecture/missing-startup-validation",
+        "architecture/passthrough-function",
+        "architecture/print-in-production",
+        "api-surface/missing-pagination",
+        "api-surface/missing-operation-id",
+        "api-surface/duplicate-operation-id",
+        "api-surface/missing-openapi-tags",
+    }
+)
 
 
-def count_bandit_highs(stdout: str) -> int:
-    from .external_tools import count_bandit_highs as _count_bandit_highs
+def get_cli_version() -> str:
+    try:
+        from ._version import version
 
-    return _count_bandit_highs(stdout)
-
-
-def map_ruff_findings_to_doctor(stdout: str):
-    from .external_tools import map_ruff_findings_to_doctor as _map_ruff_findings_to_doctor
-
-    return _map_ruff_findings_to_doctor(stdout)
-
-
-def compute_combined_score(
-    base_score: int,
-    ruff_passed: bool | None,
-    ty_passed: bool | None,
-    bandit_high_count: int | None,
-) -> tuple[int, str]:
-    """Adjust structural score based on external tool signals."""
-    score = float(base_score)
-
-    # Ruff failure (any error) is a major signal
-    if ruff_passed is False:
-        score -= 5
-
-    # ty failure (type errors) is a major signal
-    if ty_passed is False:
-        score -= 5
-
-    # Bandit high-severity issues
-    if bandit_high_count:
-        score -= min(15, bandit_high_count * 5)
-
-    final = max(0, min(100, int(score)))
-
-    if final >= 80:
-        label = "Great"
-    elif final >= 60:
-        label = "Needs work"
-    else:
-        label = "Critical"
-
-    return final, label
+        return version
+    except ImportError:
+        try:
+            return metadata_version("fastapi-doctor")
+        except PackageNotFoundError:
+            return "0.0.0"
 
 
-def _try_native_static_score_fast_path(args: argparse.Namespace) -> int | None:
-    if not args.score or not args.static_only:
+def _normalize_profile(value: str) -> str:
+    normalized = value.strip().lower()
+    if normalized == "medium":
+        return "balanced"
+    if normalized not in {"security", "balanced", "strict"}:
+        raise argparse.ArgumentTypeError("profile must be one of: security, balanced, strict")
+    return normalized
+
+
+def _split_csv(value: str | None) -> list[str] | None:
+    if not value:
         return None
-    if args.json or args.with_bandit or args.with_tests:
-        return None
-    if not args.skip_ruff or not args.skip_ty:
-        return None
-    if args.fail_on != "none":
-        return None
-
-    from .native_core import score_native_project_auto_v2
-
-    only_rules = args.only_rules.split(",") if args.only_rules else None
-    ignore_rules = args.ignore_rules.split(",") if args.ignore_rules else None
-    return score_native_project_auto_v2(
-        profile=args.profile,
-        only_rules=only_rules,
-        ignore_rules=ignore_rules,
-        skip_structure=args.skip_structure,
-        skip_openapi=args.skip_openapi,
-        static_only=True,
-    )
+    items = [item.strip() for item in value.split(",")]
+    return [item for item in items if item]
 
 
-def _selector_matches(rule_id: str, selector: str) -> bool:
+def _matches_selector(rule_id: str, selector: str) -> bool:
     selector = selector.strip()
     if selector.endswith("*"):
         selector = selector[:-1]
@@ -130,17 +88,15 @@ def _runtime_rule_should_run(
     ignore_rules: set[str] | None,
 ) -> bool:
     if only_rules:
-        return any(_selector_matches(rule_id, selector) for selector in only_rules)
-
+        return any(_matches_selector(rule_id, selector) for selector in only_rules)
     if profile == "security":
-        if not any(_selector_matches(rule_id, selector) for selector in _SECURITY_SELECTORS):
+        if not any(_matches_selector(rule_id, selector) for selector in _SECURITY_SELECTORS):
             return False
-    elif is_balanced_profile(profile):
-        if not any(_selector_matches(rule_id, selector) for selector in _MEDIUM_SELECTORS):
+    elif profile in {"balanced", "medium"}:
+        if not any(_matches_selector(rule_id, selector) for selector in _MEDIUM_SELECTORS):
             return False
-
     if ignore_rules:
-        return not any(_selector_matches(rule_id, selector) for selector in ignore_rules)
+        return not any(_matches_selector(rule_id, selector) for selector in ignore_rules)
     return True
 
 
@@ -167,43 +123,137 @@ def _runtime_openapi_checks_not_evaluated(
     )
 
 
-def _doctor_report_from_native_static_result(
-    args: argparse.Namespace,
-    native_result: dict,
-    ruff_doctor_issues: list,
-):
-    from .models import DoctorReport
+def _run_command(name: str, command: list[str], cwd: Path) -> dict[str, Any]:
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        return {
+            "name": name,
+            "command": command,
+            "returncode": 127,
+            "passed": False,
+            "status": "command-not-found",
+            "failure_reason": "command-not-found",
+            "stdout": "",
+            "stderr": str(exc),
+        }
 
-    only_rules = set(args.only_rules.split(",")) if args.only_rules else None
-    ignore_rules = set(args.ignore_rules.split(",")) if args.ignore_rules else None
-    checks_not_evaluated = _runtime_openapi_checks_not_evaluated(
-        profile=args.profile,
-        only_rules=only_rules,
-        ignore_rules=ignore_rules,
-    )
-    return DoctorReport(
-        route_count=native_result["route_count"],
-        openapi_path_count=0,
-        issues=native_result["issues"] + ruff_doctor_issues,
-        checks_not_evaluated=checks_not_evaluated,
-        suppressions=native_result["suppressions"],
-    )
+    return {
+        "name": name,
+        "command": command,
+        "returncode": proc.returncode,
+        "passed": proc.returncode == 0,
+        "status": "passed" if proc.returncode == 0 else "failed",
+        "failure_reason": None if proc.returncode == 0 else "failed",
+        "stdout": proc.stdout,
+        "stderr": proc.stderr,
+    }
 
 
-def _build_json_payload_from_native_static_result(
+def _count_bandit_highs(stdout: str) -> int:
+    return stdout.count("Severity: High")
+
+
+def _parse_ruff_json(stdout: str) -> list[dict[str, Any]]:
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return []
+    return payload if isinstance(payload, list) else []
+
+
+def _map_ruff_findings_to_doctor(stdout: str) -> list[dict[str, Any]]:
+    findings = _parse_ruff_json(stdout)
+    issues: list[dict[str, Any]] = []
+    for finding in findings:
+        if not isinstance(finding, dict):
+            continue
+        code = finding.get("code")
+        filename = str(finding.get("filename", ""))
+        location = finding.get("location") or {}
+        row = int(location.get("row", 0) or 0)
+        if code == "T201":
+            issues.append(
+                {
+                    "check": "architecture/print-in-production",
+                    "severity": "warning",
+                    "category": "Architecture",
+                    "line": row,
+                    "path": filename,
+                    "message": "print() in production code - use logger instead",
+                    "help": "Replace with logger.info/debug/warning as appropriate.",
+                }
+            )
+        elif code == "F403":
+            issues.append(
+                {
+                    "check": "architecture/star-import",
+                    "severity": "warning",
+                    "category": "Architecture",
+                    "line": row,
+                    "path": filename,
+                    "message": str(
+                        finding.get(
+                            "message",
+                            "from module import * - pollutes namespace and breaks static analysis",
+                        )
+                    ),
+                    "help": "Import specific names instead of star imports.",
+                }
+            )
+    return issues
+
+
+def _build_doctor_report(
+    native_result: dict[str, Any] | None,
+    ruff_issues: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    if native_result is None:
+        return None
+    doctor = dict(native_result)
+    doctor["issues"] = native_result["issues"] + ruff_issues
+    return doctor
+
+
+def _build_requested_payload(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "repo_root": args.repo_root,
+        "code_dir": args.code_dir,
+        "import_root": args.import_root,
+        "app_module": args.app_module,
+        "only_rules": args.only_rules,
+        "ignore_rules": args.ignore_rules,
+        "profile": args.profile,
+        "fail_on": args.fail_on,
+        "with_bandit": args.with_bandit,
+        "with_tests": args.with_tests,
+        "skip_ruff": args.skip_ruff,
+        "skip_ty": args.skip_ty,
+        "skip_structure": args.skip_structure,
+        "skip_openapi": args.skip_openapi,
+        "static_only": args.static_only,
+        "skip_app_bootstrap": args.skip_app_bootstrap,
+    }
+
+
+def _build_json_payload(
     *,
     args: argparse.Namespace,
-    command_results: list["CommandResult"],
-    doctor_report,
+    command_results: list[dict[str, Any]],
+    doctor_report: dict[str, Any] | None,
     final_score: int,
     final_label: str,
-    project_context: dict | None,
-) -> dict[str, object]:
-    from .models import SCHEMA_VERSION
-
-    layout = (project_context or {}).get("layout", {}) if isinstance(project_context, dict) else {}
+) -> dict[str, Any]:
+    project_context = (doctor_report or {}).get("project_context") if doctor_report else None
+    layout = project_context.get("layout", {}) if isinstance(project_context, dict) else {}
     effective_config = (
-        (project_context or {}).get("effective_config", {})
+        project_context.get("effective_config", {})
         if isinstance(project_context, dict)
         else {}
     )
@@ -211,25 +261,7 @@ def _build_json_payload_from_native_static_result(
         "schema_version": SCHEMA_VERSION,
         "score": final_score,
         "label": final_label,
-        "requested": {
-            "repo_root": args.repo_root,
-            "code_dir": args.code_dir,
-            "import_root": args.import_root,
-            "app_module": args.app_module,
-            "only_rules": args.only_rules,
-            "ignore_rules": args.ignore_rules,
-            "profile": args.profile,
-            "fail_on": args.fail_on,
-            "with_bandit": args.with_bandit,
-            "with_tests": args.with_tests,
-            "skip_ruff": args.skip_ruff,
-            "skip_ty": args.skip_ty,
-            "skip_pyright": args.skip_ty,
-            "skip_structure": args.skip_structure,
-            "skip_openapi": args.skip_openapi,
-            "static_only": args.static_only,
-            "skip_app_bootstrap": args.skip_app_bootstrap,
-        },
+        "requested": _build_requested_payload(args),
         "project": {
             "repo_root": layout.get("repo_root"),
             "import_root": layout.get("import_root"),
@@ -238,44 +270,150 @@ def _build_json_payload_from_native_static_result(
             "discovery_source": layout.get("discovery_source"),
         },
         "effective_config": effective_config,
-        "commands": [result.to_dict() for result in command_results],
-        "doctor": doctor_report.to_dict() if doctor_report else None,
+        "commands": command_results,
+        "doctor": doctor_report,
     }
+
+
+def _print_human_report(
+    *,
+    doctor_report: dict[str, Any] | None,
+    command_results: list[dict[str, Any]],
+    final_score: int,
+    final_label: str,
+    verbose: bool,
+) -> None:
+    print(f"fastapi-doctor v{get_cli_version()}")
+    print()
+    print(f"Score: {final_score}/100 {final_label}")
+    if doctor_report:
+        error_count = sum(1 for issue in doctor_report["issues"] if issue["severity"] == "error")
+        warning_count = sum(
+            1 for issue in doctor_report["issues"] if issue["severity"] != "error"
+        )
+        print(
+            f"Findings: {error_count} errors, {warning_count} warnings, "
+            f"{doctor_report['route_count']} routes"
+        )
+        if doctor_report.get("categories"):
+            print("Categories:")
+            for category, count in sorted(doctor_report["categories"].items()):
+                print(f"  {category}: {count}")
+        if doctor_report["issues"]:
+            print("Issues:")
+            seen_rules: set[str] = set()
+            for issue in doctor_report["issues"]:
+                if not verbose and issue["check"] in seen_rules:
+                    continue
+                seen_rules.add(issue["check"])
+                location = issue["path"]
+                if issue["line"]:
+                    location = f"{location}:{issue['line']}"
+                print(f"  [{issue['check']}] {issue['message']}")
+                print(f"    {location}")
+                if verbose and issue.get("help"):
+                    print(f"    {issue['help']}")
+        else:
+            print("No structural issues found.")
+    if command_results:
+        print("External tools:")
+        for result in command_results:
+            status = "passed" if result["passed"] else result["status"]
+            print(f"  {result['name']}: {status}")
+    elif not doctor_report:
+        print("No checks were run.")
+
+
+def _compute_combined_score(
+    base_score: int,
+    ruff_passed: bool | None,
+    ty_passed: bool | None,
+    bandit_high_count: int | None,
+) -> tuple[int, str]:
+    score = float(base_score)
+    if ruff_passed is False:
+        score -= 5
+    if ty_passed is False:
+        score -= 5
+    if bandit_high_count:
+        score -= min(15, bandit_high_count * 5)
+    final = max(0, min(100, int(score)))
+    if final >= 80:
+        return final, "Great"
+    if final >= 60:
+        return final, "Needs work"
+    return final, "Critical"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Rust-native backend doctor for FastAPI and Python codebases."
+    )
+    parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {get_cli_version()}")
+    parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON output.")
+    parser.add_argument("--score", action="store_true", help="Output only the final score.")
+    parser.add_argument("--verbose", action="store_true", help="Show repeated findings.")
+    parser.add_argument(
+        "--fail-on",
+        choices=["error", "warning", "none"],
+        default="none",
+        help="Exit non-zero on diagnostics of the selected severity.",
+    )
+    parser.add_argument(
+        "--profile",
+        type=_normalize_profile,
+        default="balanced",
+        help="Audit intensity profile: security, balanced, or strict. Legacy alias: medium.",
+    )
+    parser.add_argument("--ignore-rules", help="Comma-separated list of rule IDs or prefixes.")
+    parser.add_argument("--only-rules", help="Comma-separated list of rule IDs or prefixes.")
+    parser.add_argument(
+        "--repo-root",
+        help="Project root to scan. Defaults to $DOCTOR_REPO_ROOT or the current directory.",
+    )
+    parser.add_argument("--code-dir", help="Source directory to scan.")
+    parser.add_argument("--import-root", help="Import root to add to the project context.")
+    parser.add_argument("--app-module", help="FastAPI entrypoint module:attr or module:function.")
+    parser.add_argument("--skip-ruff", action="store_true", help="Skip Ruff checks.")
+    parser.add_argument("--skip-ty", action="store_true", help="Skip ty checks.")
+    parser.add_argument("--skip-pyright", dest="skip_ty", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--skip-structure", action="store_true", help="Skip structural analysis.")
+    parser.add_argument("--skip-openapi", action="store_true", help="Skip OpenAPI analysis.")
+    parser.add_argument(
+        "--static-only",
+        action="store_true",
+        help="Retained for compatibility; analysis is Rust-native and static.",
+    )
+    parser.add_argument(
+        "--skip-app-bootstrap",
+        action="store_true",
+        help="Retained for compatibility; analysis is Rust-native and static.",
+    )
+    parser.add_argument("--with-bandit", action="store_true", help="Run Bandit alongside analysis.")
+    parser.add_argument("--with-tests", action="store_true", help="Run pytest alongside analysis.")
+    parser.add_argument(
+        "--pytest-args",
+        default="tests/ -q",
+        help="Arguments passed to pytest when --with-tests is enabled.",
+    )
+    return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    if args.static_only:
-        args.skip_app_bootstrap = True
-    configure_environment_from_args(args)
-    fast_score = _try_native_static_score_fast_path(args)
-    if fast_score is not None:
-        print(fast_score)
-        return 0
 
-    from .models import DoctorReport, PERFECT_SCORE
+    if args.repo_root:
+        os.environ["DOCTOR_REPO_ROOT"] = args.repo_root
+    if args.code_dir:
+        os.environ["DOCTOR_CODE_DIR"] = args.code_dir
+    if args.import_root:
+        os.environ["DOCTOR_IMPORT_ROOT"] = args.import_root
+    if args.app_module:
+        os.environ["DOCTOR_APP_MODULE"] = args.app_module
 
-    repo_root = resolve_repo_root()
-    cli_version = get_cli_version()
-    quiet = args.json or args.score
-    logger = None
-
-    command_results: list[CommandResult] = []
-
-    if not quiet:
-        from .console import logger as _logger
-
-        logger = _logger
-        logger.log(f"fastapi-doctor v{cli_version}")
-        logger.break_line()
-
-    ruff_passed = None
-    ty_passed = None
-    bandit_high_count = None
-    tool_results: dict[str, CommandResult] = {}
-
-    # Build list of external tool jobs to run concurrently.
-    from concurrent.futures import ThreadPoolExecutor
+    repo_root = Path(args.repo_root or os.environ.get("DOCTOR_REPO_ROOT") or os.getcwd()).resolve()
+    only_rules = set(_split_csv(args.only_rules) or [])
+    ignore_rules = set(_split_csv(args.ignore_rules) or [])
 
     tool_jobs: dict[str, tuple[str, list[str]]] = {}
     if not args.skip_ruff:
@@ -288,115 +426,55 @@ def main() -> int:
             bandit_cmd.extend(["-c", "pyproject.toml"])
         tool_jobs["bandit"] = ("bandit", bandit_cmd)
     if args.with_tests:
-        tool_jobs["pytest"] = ("pytest", ["uv", "run", "pytest", *args.pytest_args.split()])
+        tool_jobs["pytest"] = ("pytest", ["uv", "run", "pytest", *shlex.split(args.pytest_args)])
 
+    command_results: list[dict[str, Any]] = []
+    tool_results: dict[str, dict[str, Any]] = {}
     if tool_jobs:
-        if not quiet:
-            if logger is None:
-                from .console import logger as _logger
-
-                logger = _logger
-            logger.dim(f"Running {', '.join(tool_jobs)}...")
-
         with ThreadPoolExecutor(max_workers=len(tool_jobs)) as pool:
             futures = {
-                key: pool.submit(run_command, name, cmd, cwd=repo_root)
-                for key, (name, cmd) in tool_jobs.items()
+                key: pool.submit(_run_command, name, command, repo_root)
+                for key, (name, command) in tool_jobs.items()
             }
             for key, future in futures.items():
                 tool_results[key] = future.result()
-
-        # Collect results in display order.
         for key in ("ruff", "ty", "bandit", "pytest"):
             if key in tool_results:
                 command_results.append(tool_results[key])
 
-        ruff_passed = tool_results["ruff"].passed if "ruff" in tool_results else None
-        ty_passed = tool_results["ty"].passed if "ty" in tool_results else None
-        if "bandit" in tool_results:
-            bandit_high_count = count_bandit_highs(tool_results["bandit"].stdout)
+    ruff_issues: list[dict[str, Any]] = []
+    if "ruff" in tool_results:
+        ruff_issues = _map_ruff_findings_to_doctor(tool_results["ruff"]["stdout"])
+        ignore_rules.update(issue["check"] for issue in ruff_issues)
 
-        if not quiet:
-            logger.break_line()
-
-    doctor_report = None
-    ruff_doctor_issues = []
-    static_project_context = None
-    if not args.skip_structure or not args.skip_openapi:
-        only_rules = set(args.only_rules.split(",")) if args.only_rules else set()
-        ignore_rules = set(args.ignore_rules.split(",")) if args.ignore_rules else set()
-
-        if "ruff" in tool_results:
-            ruff_doctor_issues = map_ruff_findings_to_doctor(tool_results["ruff"].stdout)
-            ignore_rules.update(issue.check for issue in ruff_doctor_issues)
-
-        if not args.static_only:
-            if args.skip_structure:
-                ignore_rules.add("architecture/")
-                ignore_rules.add("correctness/")
-                ignore_rules.add("pydantic/")
-                ignore_rules.add("resilience/")
-                ignore_rules.add("security/")
-                ignore_rules.add("config/")
-            if args.skip_openapi:
-                ignore_rules.add("api-surface/")
-
-        if not quiet:
-            if logger is None:
-                from .console import logger as _logger
-
-                logger = _logger
-            logger.dim("Running FastAPI Doctor checks...")
-            logger.break_line()
-        if args.static_only:
-            from .native_core import (
-                NativeStaticModeUnavailable,
-                run_native_selected_project_auto_v2,
-            )
-
-            try:
-                native_result = run_native_selected_project_auto_v2(
-                    profile=args.profile,
-                    only_rules=sorted(only_rules) if only_rules else None,
-                    ignore_rules=sorted(ignore_rules) if ignore_rules else None,
-                    skip_structure=args.skip_structure,
-                    skip_openapi=args.skip_openapi,
-                    include_routes=False,
-                    static_only=True,
-                    require_native=True,
-                )
-            except NativeStaticModeUnavailable as exc:
-                print(str(exc), file=sys.stderr)
-                return 1
-
-            assert native_result is not None
-            doctor_report = _doctor_report_from_native_static_result(
-                args,
-                native_result,
-                ruff_doctor_issues,
-            )
-            static_project_context = native_result.get("project_context")
-        else:
-            from .runner import run_python_doctor_checks
-
-            doctor_report = run_python_doctor_checks(
-                only_rules=only_rules if only_rules else None,
-                ignore_rules=ignore_rules if ignore_rules else None,
+    native_result: dict[str, Any] | None = None
+    if not (args.skip_structure and args.skip_openapi):
+        try:
+            raw_native = analyze_selected_current_project_v2(
                 profile=args.profile,
-                skip_app_bootstrap=args.skip_app_bootstrap,
+                only_rules=sorted(only_rules) if only_rules else None,
+                ignore_rules=sorted(ignore_rules) if ignore_rules else None,
+                skip_structure=args.skip_structure,
+                skip_openapi=args.skip_openapi,
+                static_only=True,
+                include_routes=False,
             )
-            if doctor_report and ruff_doctor_issues:
-                doctor_report = DoctorReport(
-                    route_count=doctor_report.route_count,
-                    openapi_path_count=doctor_report.openapi_path_count,
-                    issues=doctor_report.issues + ruff_doctor_issues,
-                    checks_not_evaluated=doctor_report.checks_not_evaluated,
-                    suppressions=doctor_report.suppressions,
-                )
+        except NativeEngineUnavailable as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        native_result = raw_native
+        native_result["issues"] = native_result["issues"] + ruff_issues
+        native_result["checks_not_evaluated"] = _runtime_openapi_checks_not_evaluated(
+            profile=args.profile,
+            only_rules=only_rules or None,
+            ignore_rules=ignore_rules or None,
+        )
 
-    base_score = doctor_report.score if doctor_report else PERFECT_SCORE
-    final_score, final_label = compute_combined_score(
-        base_score, ruff_passed, ty_passed, bandit_high_count
+    final_score, final_label = _compute_combined_score(
+        native_result["score"] if native_result else 100,
+        tool_results.get("ruff", {}).get("passed"),
+        tool_results.get("ty", {}).get("passed"),
+        _count_bandit_highs(tool_results["bandit"]["stdout"]) if "bandit" in tool_results else None,
     )
 
     if args.score:
@@ -404,174 +482,41 @@ def main() -> int:
         return 0
 
     if args.json:
-        if args.static_only and static_project_context is not None:
-            payload = _build_json_payload_from_native_static_result(
-                args=args,
-                command_results=command_results,
-                doctor_report=doctor_report,
-                final_score=final_score,
-                final_label=final_label,
-                project_context=static_project_context,
-            )
-        else:
-            payload = build_json_payload(
-                args=args,
-                command_results=command_results,
-                doctor_report=doctor_report,
-                final_score=final_score,
-                final_label=final_label,
-            )
+        payload = _build_json_payload(
+            args=args,
+            command_results=command_results,
+            doctor_report=native_result,
+            final_score=final_score,
+            final_label=final_label,
+        )
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        from .reporting import print_report_human
-
-        print_report_human(doctor_report, command_results, final_score, final_label, verbose=args.verbose)
+        _print_human_report(
+            doctor_report=native_result,
+            command_results=command_results,
+            final_score=final_score,
+            final_label=final_label,
+            verbose=args.verbose,
+        )
 
     if args.fail_on != "none":
-        has_error = bool(doctor_report and doctor_report.error_count > 0)
-        has_warning = bool(doctor_report and doctor_report.warning_count > 0)
+        has_error = bool(
+            native_result and any(issue["severity"] == "error" for issue in native_result["issues"])
+        )
+        has_warning = bool(
+            native_result and any(issue["severity"] != "error" for issue in native_result["issues"])
+        )
         if args.fail_on == "error" and has_error:
             return 1
         if args.fail_on == "warning" and (has_error or has_warning):
             return 1
 
-    has_command_failure = any(not result.passed for result in command_results)
-    structure_failed = bool(doctor_report and doctor_report.error_count)
+    has_command_failure = any(not result["passed"] for result in command_results)
+    structure_failed = bool(
+        native_result and any(issue["severity"] == "error" for issue in native_result["issues"])
+    )
     return 1 if has_command_failure or structure_failed else 0
 
-def parse_args() -> argparse.Namespace:
-    def parse_profile(value: str) -> str:
-        normalized = normalize_cli_profile(value)
-        if normalized not in {"security", "balanced", "strict"}:
-            raise argparse.ArgumentTypeError(
-                "profile must be one of: security, balanced, strict"
-            )
-        return normalized
 
-    parser = argparse.ArgumentParser(
-        description="Backend doctor for your FastAPI/Python stack. Scores 0-100."
-    )
-    parser.add_argument(
-        "-v",
-        "--version",
-        action="version",
-        version=f"%(prog)s {get_cli_version()}",
-    )
-    parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON output.")
-    parser.add_argument("--score", action="store_true", help="Output only the score.")
-    parser.add_argument("--verbose", action="store_true", help="Show file details per rule.")
-    parser.add_argument(
-        "--fail-on",
-        choices=["error", "warning", "none"],
-        default="none",
-        help="Exit with error code on diagnostics: error, warning, none.",
-    )
-    parser.add_argument(
-        "--profile",
-        type=parse_profile,
-        default="balanced",
-        help="Audit intensity profile: security, balanced, or strict. Legacy alias: medium.",
-    )
-    parser.add_argument("--ignore-rules", help="Comma-separated list of rule IDs or prefixes to ignore.")
-    parser.add_argument("--only-rules", help="Comma-separated list of rule IDs or prefixes to run.")
-    parser.add_argument("--repo-root", help="Project root to scan. Defaults to $DOCTOR_REPO_ROOT or the current working directory.")
-    parser.add_argument("--code-dir", help="Package/source directory to scan. Defaults to auto-discovery.")
-    parser.add_argument("--import-root", help="Directory added to sys.path for importing the app module. Defaults to auto-discovery.")
-    parser.add_argument(
-        "--app-module",
-        help="FastAPI entrypoint as module:attribute or module:function(). Defaults to auto-discovery.",
-    )
-    parser.add_argument("--skip-ruff", action="store_true")
-    parser.add_argument("--skip-ty", action="store_true", help="Skip ty type checking.")
-    parser.add_argument("--skip-pyright", dest="skip_ty", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--skip-structure", action="store_true")
-    parser.add_argument("--skip-openapi", action="store_true")
-    parser.add_argument(
-        "--static-only",
-        action="store_true",
-        help="Run only static analysis. This skips app discovery, import, and live route/OpenAPI checks.",
-    )
-    parser.add_argument(
-        "--skip-app-bootstrap",
-        action="store_true",
-        help="Skip importing/booting the FastAPI app and omit live route/OpenAPI checks.",
-    )
-    parser.add_argument("--with-bandit", action="store_true", help="Include Bandit security scan.")
-    parser.add_argument("--with-tests", action="store_true", help="Run targeted backend test suites.")
-    parser.add_argument(
-        "--pytest-args",
-        default="tests/ -q",
-        help="Arguments passed to pytest when --with-tests is enabled.",
-    )
-    return parser.parse_args()
-
-
-def get_cli_version() -> str:
-    return get_installed_version()
-
-
-def build_json_payload(
-    *,
-    args: argparse.Namespace,
-    command_results: list["CommandResult"],
-    doctor_report: object | None,
-    final_score: int,
-    final_label: str,
-) -> dict[str, object]:
-    from .models import SCHEMA_VERSION
-    from .project import get_effective_config, get_project_layout
-
-    project_layout = get_project_layout()
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "score": final_score,
-        "label": final_label,
-        "requested": {
-            "repo_root": args.repo_root,
-            "code_dir": args.code_dir,
-            "import_root": args.import_root,
-            "app_module": args.app_module,
-            "only_rules": args.only_rules,
-            "ignore_rules": args.ignore_rules,
-            "profile": args.profile,
-            "fail_on": args.fail_on,
-            "with_bandit": args.with_bandit,
-            "with_tests": args.with_tests,
-            "skip_ruff": args.skip_ruff,
-            "skip_ty": args.skip_ty,
-            "skip_pyright": args.skip_ty,
-            "skip_structure": args.skip_structure,
-            "skip_openapi": args.skip_openapi,
-            "static_only": args.static_only,
-            "skip_app_bootstrap": args.skip_app_bootstrap,
-        },
-        "project": {
-            "repo_root": str(project_layout.repo_root),
-            "import_root": str(project_layout.import_root),
-            "code_dir": str(project_layout.code_dir),
-            "app_module": project_layout.app_module,
-            "discovery_source": project_layout.discovery_source,
-        },
-        "effective_config": get_effective_config(),
-        "commands": [result.to_dict() for result in command_results],
-        "doctor": doctor_report.to_dict() if doctor_report else None,
-    }
-
-
-def configure_environment_from_args(args: argparse.Namespace) -> None:
-    mappings = {
-        "DOCTOR_REPO_ROOT": args.repo_root,
-        "DOCTOR_CODE_DIR": args.code_dir,
-        "DOCTOR_IMPORT_ROOT": args.import_root,
-        "DOCTOR_APP_MODULE": args.app_module,
-    }
-    for env_name, value in mappings.items():
-        if value:
-            os.environ[env_name] = value
-
-
-def resolve_repo_root() -> Path:
-    raw_root = os.environ.get("DOCTOR_REPO_ROOT") or os.getcwd()
-    return Path(raw_root).resolve()
-
-__all__ = ["build_json_payload", "main", "parse_args"]
+if __name__ == "__main__":
+    raise SystemExit(main())

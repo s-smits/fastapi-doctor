@@ -226,7 +226,7 @@ fn analyze_current_project_v2(
         config,
         active_rules,
         include_routes,
-        "using PyO3 native auto project module v2",
+        "using Rust-native auto project module v2",
     )?;
     let payload = project_bundle_payload(py, result)?;
     let project_context = project_context_payload(py, &bundle.context)?;
@@ -378,7 +378,7 @@ fn analyze_project_bundle(
         config,
         active_rules,
         include_routes,
-        "using PyO3 native project module v2",
+        "using Rust-native project module v2",
     )
 }
 
@@ -517,7 +517,7 @@ fn analyze_selected_current_project_impl(
         bundle.project,
         config,
         active_rules,
-        "using PyO3 native auto project module v2",
+        "using Rust-native auto project module v2",
     )?;
     Ok((analysis.into_bundle(include_routes), bundle.context))
 }

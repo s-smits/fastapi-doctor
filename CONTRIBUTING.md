@@ -10,7 +10,7 @@ uv sync --extra dev
 
 ```bash
 uv run pytest -q
-cargo test --manifest-path rust/Cargo.toml
+PYO3_PYTHON="$PWD/.venv/bin/python" cargo test --manifest-path rust/Cargo.toml
 ```
 
 ## Native Extension Development
@@ -29,7 +29,7 @@ The release version is sourced from the package metadata and Rust workspace vers
 To cut a release:
 1. Update the version in the Rust workspace/package metadata.
 2. Run validation locally.
-3. Push a matching tag such as `v0.5.3`.
+3. Push a matching tag such as `v0.6.0`.
 
 The GitHub Actions release workflow will:
 - Build wheels for Linux, Windows, macOS Intel, and macOS Apple Silicon.

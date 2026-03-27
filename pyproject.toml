@@ -19,9 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Quality Assurance",
 ]
-dependencies = [
-    "PyYAML>=6.0.2",
-]
+dependencies = []
 
 [project.urls]
 Homepage = "https://github.com/s-smits/fastapi-doctor"
@@ -37,7 +35,6 @@ dev = [
 
 [project.scripts]
 fastapi-doctor = "fastapi_doctor.cli:main"
-fastapi-doctor-export-openapi = "fastapi_doctor.export_openapi:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
