@@ -10,33 +10,28 @@ uv sync --extra dev
 
 ```bash
 uv run pytest -q
-uv run python -m py_compile $(find src scripts tests -name '*.py')
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo test --manifest-path rust/doctor_core/Cargo.toml
+cargo test --manifest-path rust/Cargo.toml
 ```
 
 ## Native Extension Development
 
-The Rust extension lives under `rust/doctor_core/`.
+The Rust extension lives under `rust/fastapi_doctor_native/`.
 
 ```bash
-# Reinstall the editable package, including Rust changes
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv sync --extra dev --reinstall-package fastapi-doctor
-
-# Build release artifacts locally through the standard PEP 517 frontend
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv build
+uv sync --extra dev --reinstall-package fastapi-doctor
+uv build
 ```
 
 ## Releases
 
-The release version is sourced from `rust/doctor_core/Cargo.toml`.
+The release version is sourced from the package metadata and Rust workspace versioning.
 
 To cut a release:
-1. Bump the version in `rust/doctor_core/Cargo.toml`.
+1. Update the version in the Rust workspace/package metadata.
 2. Run validation locally.
-3. Push a matching tag such as `v0.3.1`.
+3. Push a matching tag such as `v0.5.3`.
 
 The GitHub Actions release workflow will:
-- Validate that the git tag matches the package version.
 - Build wheels for Linux, Windows, macOS Intel, and macOS Apple Silicon.
 - Build a source distribution.
 - Attach all artifacts to the corresponding GitHub Release.
@@ -44,7 +39,6 @@ The GitHub Actions release workflow will:
 
 ## Design Notes
 
-- Keep agent-facing entry points setup-agnostic.
-- Add new checks to the narrowest category module under `src/fastapi_doctor/checks/`.
-- Prefer deterministic AST-based checks over regex-heavy heuristics.
-- When adding heuristics, bias toward false negatives over noisy false positives.
+- Keep the Python surface minimal.
+- Put analyzer logic in Rust under `rust/fastapi_doctor_core/`, `rust/fastapi_doctor_project/`, and `rust/fastapi_doctor_rules/`.
+- Prefer deterministic static analysis over regex-heavy heuristics.
