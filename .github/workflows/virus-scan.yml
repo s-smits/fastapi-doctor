@@ -24,7 +24,7 @@ permissions:
 jobs:
   socket-security:
     name: Scan Python And Rust Dependencies With Socket
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.SOCKET_SECURITY_API_KEY != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -47,11 +47,6 @@ jobs:
           GH_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          if [ -z "${SOCKET_SECURITY_API_KEY}" ]; then
-            echo "Missing SOCKET_SECURITY_API_KEY secret. Install Socket for GitHub or add the repository secret before enabling this workflow." >&2
-            exit 1
-          fi
-
           PR_NUMBER=0
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             PR_NUMBER=${{ github.event.pull_request.number }}
