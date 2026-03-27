@@ -175,7 +175,7 @@ jobs:
           python-version: "3.12"
 
       - name: Configure GitHub Pages
-        uses: actions/configure-pages@v6
+        uses: actions/configure-pages@v6.0.0
 
       - name: Render simple package index
         env:
@@ -189,10 +189,10 @@ jobs:
             --output-dir site
 
       - name: Upload GitHub Pages artifact
-        uses: actions/upload-pages-artifact@v4
+        uses: actions/upload-pages-artifact@v4.0.0
         with:
           path: site
 
       - name: Deploy GitHub Pages artifact
         id: deploy
-        uses: actions/deploy-pages@v5
+        uses: actions/deploy-pages@v5.0.0
