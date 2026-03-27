@@ -132,15 +132,15 @@ def function_is_generator(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 # Cached module index
 # ---------------------------------------------------------------------------
 
-_INDEX_CACHE: dict[int, ModuleFunctionIndex] = {}
+_INDEX_CACHE: dict[int, tuple[ast.AST, ModuleFunctionIndex]] = {}
 
 
 def build_module_function_index(module_tree: ast.AST) -> ModuleFunctionIndex:
     """Index top-level functions and class methods — cached by tree identity."""
     tree_id = id(module_tree)
     cached = _INDEX_CACHE.get(tree_id)
-    if cached is not None:
-        return cached
+    if cached is not None and cached[0] is module_tree:
+        return cached[1]
     functions: list[FunctionContext] = []
     for stmt in getattr(module_tree, "body", []):
         if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -150,7 +150,7 @@ def build_module_function_index(module_tree: ast.AST) -> ModuleFunctionIndex:
                 if isinstance(class_stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     functions.append(_create_function_context(class_stmt, owner_class=stmt.name))
     index = ModuleFunctionIndex(functions)
-    _INDEX_CACHE[tree_id] = index
+    _INDEX_CACHE[tree_id] = (module_tree, index)
     return index
 
 

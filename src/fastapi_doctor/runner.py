@@ -2,23 +2,75 @@ from __future__ import annotations
 
 """Doctor orchestration and rule runner."""
 
-from importlib import import_module
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-try:
-    from fastapi import FastAPI
-except ImportError:  # pragma: no cover
-    FastAPI = Any  # type: ignore[assignment]
-
-from . import project
-from .app_loader import build_app_for_doctor, fastapi_runtime_available, iter_api_routes
-from . import native_core
-from .static_routes import RouteInfo, extract_static_routes, route_info_from_live_route
+from . import native_core, project
 from .models import DoctorIssue, DoctorReport
 
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+    from .static_routes import RouteInfo
+else:  # pragma: no cover
+    FastAPI = Any  # type: ignore[assignment]
 
-def _load_check_func(module_name: str, func_name: str):
-    return getattr(import_module(module_name), func_name)
+
+_SECURITY_SELECTORS = frozenset({
+    "security/*",
+    "pydantic/sensitive-field-type",
+    "pydantic/extra-allow-on-request",
+    "config/direct-env-access",
+})
+_MEDIUM_SELECTORS = _SECURITY_SELECTORS | frozenset({
+    "correctness/*",
+    "resilience/*",
+    "config/*",
+    "pydantic/mutable-default",
+    "pydantic/deprecated-validator",
+    "architecture/async-without-await",
+    "architecture/avoid-sys-exit",
+    "architecture/engine-pool-pre-ping",
+    "architecture/missing-startup-validation",
+    "architecture/passthrough-function",
+    "architecture/print-in-production",
+    "api-surface/missing-pagination",
+    "api-surface/missing-operation-id",
+    "api-surface/duplicate-operation-id",
+    "api-surface/missing-openapi-tags",
+})
+
+
+def _selector_matches(rule_id: str, selector: str) -> bool:
+    selector = selector.strip()
+    if selector.endswith("*"):
+        selector = selector[:-1]
+    return rule_id == selector or rule_id.startswith(selector)
+
+
+def _should_run(
+    rule_id: str,
+    only_rules: set[str] | None,
+    ignore_rules: set[str] | None,
+    profile: str | None,
+) -> bool:
+    if only_rules:
+        return any(_selector_matches(rule_id, s) for s in only_rules)
+
+    if profile:
+        if profile == "security":
+            if not any(_selector_matches(rule_id, s) for s in _SECURITY_SELECTORS):
+                return False
+        elif profile == "medium":
+            if not any(_selector_matches(rule_id, s) for s in _MEDIUM_SELECTORS):
+                return False
+
+    if ignore_rules:
+        return not any(_selector_matches(rule_id, s) for s in ignore_rules)
+
+    if project.EXCLUDE_RULES:
+        return not any(_selector_matches(rule_id, s) for s in project.EXCLUDE_RULES)
+
+    return True
+
 
 def run_python_doctor_checks(
     app: FastAPI | None = None,
@@ -30,18 +82,12 @@ def run_python_doctor_checks(
     """Run all opinionated checks and compute a health score."""
     project.refresh_runtime_config(static_only=skip_app_bootstrap)
     libraries = project.discover_libraries()
-    # Pre-warm the parsed modules cache — all static checks share this.
-    project.parsed_python_modules()
-    # Clear the per-tree function index cache from any prior run.
-    from .checks._async_analysis import clear_index_cache
-    clear_index_cache()
-    issues: list[DoctorIssue] = []
-    checks_not_evaluated: list[str] = []
 
-    route_count = 0
-    openapi_path_count = 0
-    native_bundle_routes: list[RouteInfo] | None = None
-    native_bundle_suppressions: list[dict[str, object]] | None = None
+    def should_run(rule_id: str) -> bool:
+        return _should_run(rule_id, only_rules, ignore_rules, profile)
+
+    all_rust_rules = native_core.get_native_rule_ids()
+    active_rust_rules = {rule_id for rule_id in all_rust_rules if should_run(rule_id)}
 
     from .checks.route_checks import (
         check_duplicate_routes,
@@ -55,71 +101,6 @@ def run_python_doctor_checks(
         check_write_route_parameters,
     )
 
-    # ── Profile Rule Mapping ─────────────────────────────────────────────
-    # Profile labels allow users to choose the audit intensity.
-    security_rules = {
-        "security/*",
-        "pydantic/sensitive-field-type",
-        "pydantic/extra-allow-on-request",
-        "config/direct-env-access",
-    }
-    medium_rules = security_rules | {
-        "correctness/*",
-        "resilience/*",
-        "config/*",
-        "pydantic/mutable-default",
-        "pydantic/deprecated-validator",
-        "architecture/async-without-await",
-        "architecture/avoid-sys-exit",
-        "architecture/engine-pool-pre-ping",
-        "architecture/missing-startup-validation",
-        "architecture/passthrough-function",
-        "architecture/print-in-production",
-        "api-surface/missing-pagination",
-        "api-surface/missing-operation-id",
-        "api-surface/duplicate-operation-id",
-        "api-surface/missing-openapi-tags",
-    }
-    # 'strict' includes everything (default behavior if no profile or only_rules set)
-
-    def selector_matches(rule_id: str, selector: str) -> bool:
-        selector = selector.strip()
-        if selector.endswith("*"):
-            selector = selector[:-1]
-        return rule_id == selector or rule_id.startswith(selector)
-
-    def should_run(rule_id: str) -> bool:
-        # 1. If only_rules is set, it has highest precedence
-        if only_rules:
-            return any(selector_matches(rule_id, selector) for selector in only_rules)
-
-        # 2. If profile is set, check if rule belongs to the profile
-        if profile:
-            target_rules = set()
-            if profile == "security":
-                target_rules = security_rules
-            elif profile == "medium":
-                target_rules = medium_rules
-            elif profile == "strict":
-                return True  # Strict includes everything
-
-            if not any(selector_matches(rule_id, sel) for sel in target_rules):
-                return False
-
-        # 3. If ignore_rules is set, filter them out
-        if ignore_rules:
-            return not any(selector_matches(rule_id, selector) for selector in ignore_rules)
-
-        # 4. If project.EXCLUDE_RULES is set, filter them out
-        if project.EXCLUDE_RULES:
-            return not any(selector_matches(rule_id, selector) for selector in project.EXCLUDE_RULES)
-
-        return True
-
-    # ── Route-level checks ──────────────────────────────────────────────
-    # Checks that run against a RouteInfo list work in both live and static
-    # mode.  OpenAPI-schema checks require a live app and are skipped in
-    # static mode.
     route_list_checks = [
         ("security/missing-auth-dep", check_route_dependency_policies),
         ("security/forbidden-write-param", check_write_route_parameters),
@@ -135,158 +116,99 @@ def run_python_doctor_checks(
         "api-surface/duplicate-operation-id",
         "api-surface/missing-openapi-tags",
     }
-    all_route_rule_ids = {rid for rid, _ in route_list_checks} | openapi_rule_ids
+    all_route_rule_ids = {rule_id for rule_id, _ in route_list_checks} | openapi_rule_ids
 
+    issues: list[DoctorIssue] = []
+    checks_not_evaluated: list[str] = []
     routes: list[RouteInfo] = []
+    route_count = 0
+    openapi_path_count = 0
     live_app = None
-    native_bundle_suppressions: list[dict[str, object]] | None = None
+
+    needs_static_routes = skip_app_bootstrap and libraries.fastapi and any(
+        should_run(rule_id) for rule_id, _ in route_list_checks
+    )
+
     if skip_app_bootstrap:
-        # OpenAPI checks can't run without the live app
-        checks_not_evaluated = sorted(rid for rid in openapi_rule_ids if should_run(rid))
-    elif not libraries.fastapi or not fastapi_runtime_available():
-        checks_not_evaluated = sorted(rid for rid in all_route_rule_ids if should_run(rid))
+        checks_not_evaluated = sorted(rule_id for rule_id in openapi_rule_ids if should_run(rule_id))
+    elif not libraries.fastapi:
+        checks_not_evaluated = sorted(
+            rule_id for rule_id in all_route_rule_ids if should_run(rule_id)
+        )
     else:
-        # Live-app path
-        try:
-            live_app = app or build_app_for_doctor()
-            live_routes = iter_api_routes(live_app)
-            routes = [route_info_from_live_route(r) for r in live_routes]
-            route_count = len(routes)
-            openapi_path_count = len(live_app.openapi().get("paths", {}))
-        except Exception as e:
-            import traceback
-            tb_str = traceback.format_exc()
-            issues.append(
-                DoctorIssue(
-                    check="doctor/app-bootstrap-failed",
-                    severity="error",
-                    message=f"FastAPI app failed to boot — route-level checks were skipped: {e}",
-                    path=str(project.APP_MODULE or "unknown"),
-                    category="Doctor",
-                    help="Fix the import/startup error so route, auth, and OpenAPI checks can run. "
-                    "The score may appear clean but route-level checks were not evaluated.",
-                    detail=tb_str,
-                )
+        from .app_loader import (
+            build_app_for_doctor,
+            fastapi_runtime_available,
+            iter_api_routes,
+        )
+        from .static_routes import route_info_from_live_route
+
+        if not fastapi_runtime_available():
+            checks_not_evaluated = sorted(
+                rule_id for rule_id in all_route_rule_ids if should_run(rule_id)
             )
-            checks_not_evaluated = sorted(rid for rid in all_route_rule_ids if should_run(rid))
-
-    # ── Static Checks (No arguments) ──────────────────────────────────────────
-    # Most checks are static AST-based and can be run without booting the app.
-    # Grouped by enablement flag and library dependency.
-    static_checks = [
-        # Correctness
-        ("correctness/sync-io-in-async", "fastapi_doctor.checks.correctness", "check_sync_io_in_async", True),
-        ("correctness/misused-async-constructs", "fastapi_doctor.checks.correctness", "check_misused_async_constructs", True),
-        ("correctness/naive-datetime", "fastapi_doctor.checks.correctness", "check_naive_datetime", True),
-        ("correctness/avoid-os-path", "fastapi_doctor.checks.correctness", "check_avoid_os_path", True),
-        ("correctness/asyncio-run-in-async", "fastapi_doctor.checks.correctness", "check_asyncio_run_in_async_context", True),
-        ("correctness/threading-lock-in-async", "fastapi_doctor.checks.correctness", "check_threading_lock_in_async", True),
-        ("correctness/deprecated-typing-imports", "fastapi_doctor.checks.correctness", "check_deprecated_typing_imports", True),
-        ("correctness/serverless-filesystem-write", "fastapi_doctor.checks.correctness", "check_serverless_filesystem_writes", True),
-        ("correctness/missing-http-timeout", "fastapi_doctor.checks.correctness", "check_missing_http_timeouts", True),
-        ("correctness/mutable-default-arg", "fastapi_doctor.checks.correctness", "check_mutable_default_arg", True),
-        ("correctness/return-in-finally", "fastapi_doctor.checks.correctness", "check_return_in_finally", True),
-        ("correctness/unreachable-code", "fastapi_doctor.checks.correctness", "check_unreachable_code", True),
-        ("correctness/get-with-side-effect", "fastapi_doctor.checks.correctness", "check_get_with_side_effect", True),
-        # Architecture
-        ("architecture/giant-function", "fastapi_doctor.checks.architecture", "check_giant_functions", project.ARCHITECTURE_ENABLED),
-        ("architecture/god-module", "fastapi_doctor.checks.architecture", "check_god_modules", project.ARCHITECTURE_ENABLED),
-        ("architecture/deep-nesting", "fastapi_doctor.checks.architecture", "check_deep_nesting", project.ARCHITECTURE_ENABLED),
-        ("architecture/import-bloat", "fastapi_doctor.checks.architecture", "check_import_bloat", project.ARCHITECTURE_ENABLED),
-        ("architecture/passthrough-function", "fastapi_doctor.checks.architecture", "check_passthrough_functions", project.ARCHITECTURE_ENABLED),
-        ("architecture/engine-pool-pre-ping", "fastapi_doctor.checks.architecture", "check_engine_pool_pre_ping", project.ARCHITECTURE_ENABLED),
-        ("architecture/async-without-await", "fastapi_doctor.checks.architecture", "check_async_without_await", project.ARCHITECTURE_ENABLED),
-        ("architecture/print-in-production", "fastapi_doctor.checks.architecture", "check_print_statements", project.ARCHITECTURE_ENABLED),
-        ("architecture/avoid-sys-exit", "fastapi_doctor.checks.architecture", "check_avoid_sys_exit", project.ARCHITECTURE_ENABLED),
-        ("architecture/star-import", "fastapi_doctor.checks.architecture", "check_star_import", project.ARCHITECTURE_ENABLED),
-        ("architecture/missing-startup-validation", "fastapi_doctor.checks.architecture", "check_startup_validation", project.ARCHITECTURE_ENABLED),
-        ("architecture/fat-route-handler", "fastapi_doctor.checks.route_checks", "check_fat_route_handlers", project.ARCHITECTURE_ENABLED),
-        # Configuration
-        ("config/direct-env-access", "fastapi_doctor.checks.configuration", "check_direct_env_access", True),
-        ("config/alembic-target-metadata", "fastapi_doctor.checks.configuration", "check_alembic_target_metadata", libraries.alembic),
-        ("config/alembic-empty-autogen-revision", "fastapi_doctor.checks.configuration", "check_alembic_empty_autogen_revision", libraries.alembic),
-        ("config/sqlalchemy-naming-convention", "fastapi_doctor.checks.configuration", "check_sqlalchemy_naming_convention", libraries.alembic),
-        # Security
-        ("security/weak-hash-without-flag", "fastapi_doctor.checks.security", "check_unsafe_hash_usage", True),
-        ("security/unsafe-yaml-load", "fastapi_doctor.checks.security", "check_unsafe_yaml_load", True),
-        ("security/exception-detail-leak", "fastapi_doctor.checks.security", "check_exception_detail_leak", True),
-        ("security/sql-fstring-interpolation", "fastapi_doctor.checks.security", "check_sql_fstring_interpolation", True),
-        ("security/assert-in-production", "fastapi_doctor.checks.security", "check_assert_in_production", True),
-        ("security/subprocess-shell-true", "fastapi_doctor.checks.security", "check_shell_true", True),
-        ("security/hardcoded-secret", "fastapi_doctor.checks.security", "check_hardcoded_secrets", True),
-        ("security/cors-wildcard", "fastapi_doctor.checks.security", "check_cors_wildcard", True),
-        # Resilience
-        ("resilience/bare-except-pass", "fastapi_doctor.checks.resilience", "check_bare_except_pass", True),
-        ("resilience/reraise-without-context", "fastapi_doctor.checks.resilience", "check_reraise_without_context", True),
-        ("resilience/exception-swallowed", "fastapi_doctor.checks.resilience", "check_exception_swallowed_silently", True),
-        ("resilience/broad-except-no-context", "fastapi_doctor.checks.resilience", "check_broad_except_no_context", True),
-        # Performance
-        ("performance/heavy-imports", "fastapi_doctor.checks.performance", "check_heavy_imports", True),
-        ("performance/sequential-awaits", "fastapi_doctor.checks.performance", "check_sequential_awaits", True),
-        ("performance/regex-in-loop", "fastapi_doctor.checks.performance", "check_regex_in_loop", True),
-        ("performance/n-plus-one-hint", "fastapi_doctor.checks.performance", "check_n_plus_one_hint", True),
-        # Pydantic
-        ("pydantic/deprecated-validator", "fastapi_doctor.checks.pydantic", "check_deprecated_validators", libraries.pydantic or libraries.fastapi),
-        ("pydantic/mutable-default", "fastapi_doctor.checks.pydantic", "check_mutable_model_defaults", libraries.pydantic or libraries.fastapi),
-        ("pydantic/extra-allow-on-request", "fastapi_doctor.checks.pydantic", "check_extra_allow_on_request_models", libraries.pydantic or libraries.fastapi),
-        ("pydantic/should-be-model", "fastapi_doctor.checks.pydantic", "check_should_be_pydantic_model", libraries.pydantic or libraries.fastapi),
-        ("pydantic/sensitive-field-type", "fastapi_doctor.checks.pydantic", "check_sensitive_fields_in_models", libraries.pydantic or libraries.fastapi),
-    ]
-
-    native_requested_rules = {
-        rule_id
-        for rule_id, _, _, enabled in static_checks
-        if enabled and should_run(rule_id) and rule_id in native_core.NATIVE_STATIC_RULES
-    }
-    native_issues = None
-    if skip_app_bootstrap:
-        native_bundle = native_core.run_native_static_project_bundle(native_requested_rules)
-        if native_bundle is not None:
-            native_issues, native_bundle_routes, native_bundle_suppressions = native_bundle
-            if libraries.fastapi:
-                routes = native_bundle_routes
+        else:
+            try:
+                live_app = app or build_app_for_doctor()
+                live_routes = iter_api_routes(live_app)
+                routes = [route_info_from_live_route(route) for route in live_routes]
                 route_count = len(routes)
-    if native_issues is None:
-        native_issues = native_core.run_native_static_checks(native_requested_rules)
-    native_rule_ids = native_requested_rules if native_issues is not None else set()
-    if native_issues:
-        issues.extend(native_issues)
+                openapi_path_count = len(live_app.openapi().get("paths", {}))
+            except Exception as exc:
+                import traceback
 
-    if skip_app_bootstrap and libraries.fastapi and not routes:
-        routes, route_count = extract_static_routes()
+                issues.append(
+                    DoctorIssue(
+                        check="doctor/app-bootstrap-failed",
+                        severity="error",
+                        message=f"FastAPI app failed to boot — route-level checks were skipped: {exc}",
+                        path=str(project.APP_MODULE or "unknown"),
+                        category="Doctor",
+                        help="Fix the import/startup error so route, auth, and OpenAPI checks can run.",
+                        detail=traceback.format_exc(),
+                    )
+                )
+                checks_not_evaluated = sorted(
+                    rule_id for rule_id in all_route_rule_ids if should_run(rule_id)
+                )
 
-    for rule_id, module_name, func_name, enabled in static_checks:
-        if rule_id in native_rule_ids:
-            continue
-        if enabled and should_run(rule_id):
-            check_func = _load_check_func(module_name, func_name)
-            issues.extend(check_func())
+    native_result = native_core.run_native_project_v2(
+        active_rust_rules,
+        include_routes=needs_static_routes,
+    )
+    native_suppressions: list[dict] | None = None
+    if native_result is not None:
+        issues.extend(native_result["issues"])
+        native_suppressions = native_result["suppressions"]
+        if needs_static_routes and not routes:
+            routes = native_result["routes"]
+            route_count = native_result["route_count"]
 
-    # Run route-list checks (works with both live and static RouteInfo)
     if routes:
         for rule_id, check_func in route_list_checks:
             if should_run(rule_id):
                 issues.extend(check_func(routes))
 
-    # OpenAPI schema checks (live app only)
-    if live_app is not None and any(should_run(r) for r in openapi_rule_ids):
+    if live_app is not None and any(should_run(rule_id) for rule_id in openapi_rule_ids):
         issues.extend(check_openapi_schema(live_app))
 
-    # Final filtering of issues if prefix-based should_run wasn't granular enough
     if only_rules:
-        issues = [issue for issue in issues if any(selector_matches(issue.check, selector) for selector in only_rules)]
+        issues = [
+            issue for issue in issues if any(_selector_matches(issue.check, rule_id) for rule_id in only_rules)
+        ]
     elif ignore_rules:
         issues = [
-            issue for issue in issues if not any(selector_matches(issue.check, selector) for selector in ignore_rules)
+            issue
+            for issue in issues
+            if not any(_selector_matches(issue.check, rule_id) for rule_id in ignore_rules)
         ]
 
-    if native_bundle_suppressions is not None:
-        all_suppressions = native_bundle_suppressions
+    if native_suppressions is not None:
+        all_suppressions = native_suppressions
     else:
-        # Collect structured suppressions for the JSON report.
         from .suppression import collect_suppressions
 
-        all_suppressions: list[dict[str, object]] = []
+        all_suppressions: list[dict] = []
         for module in project.parsed_python_modules():
             all_suppressions.extend(collect_suppressions(module.source, module.rel_path))
 
@@ -297,5 +219,6 @@ def run_python_doctor_checks(
         checks_not_evaluated=checks_not_evaluated,
         suppressions=all_suppressions,
     )
+
 
 __all__ = ["run_python_doctor_checks"]

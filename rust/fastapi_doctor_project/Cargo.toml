@@ -1,0 +1,12 @@
+[package]
+name = "fastapi_doctor_project"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Project discovery and source loading for fastapi-doctor."
+
+[dependencies]
+fastapi_doctor_core = { path = "../fastapi_doctor_core" }
+rayon.workspace = true

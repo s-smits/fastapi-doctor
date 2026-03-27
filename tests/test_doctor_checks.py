@@ -170,7 +170,7 @@ def test_skip_app_bootstrap_avoids_live_app_import(monkeypatch, tmp_path: Path) 
     def _boom():
         raise AssertionError("app bootstrap should be skipped")
 
-    monkeypatch.setattr(runner_module, "build_app_for_doctor", _boom)
+    monkeypatch.setattr(app_loader_module, "build_app_for_doctor", _boom)
     report = module.run_python_doctor_checks(profile="strict", skip_app_bootstrap=True)
 
     assert any(issue.check == "correctness/deprecated-typing-imports" for issue in report.issues)
@@ -211,8 +211,8 @@ def test_missing_fastapi_runtime_skips_live_app_import(monkeypatch, tmp_path: Pa
     def _boom():
         raise AssertionError("app bootstrap should be skipped when fastapi runtime is unavailable")
 
-    monkeypatch.setattr(runner_module, "build_app_for_doctor", _boom)
-    monkeypatch.setattr(runner_module, "fastapi_runtime_available", lambda: False)
+    monkeypatch.setattr(app_loader_module, "build_app_for_doctor", _boom)
+    monkeypatch.setattr(app_loader_module, "fastapi_runtime_available", lambda: False)
 
     report = module.run_python_doctor_checks(profile="strict")
 
@@ -603,3 +603,76 @@ def test_alembic_best_practice_checks_accept_common_hooks(monkeypatch, tmp_path:
     report = module.run_python_doctor_checks(only_rules={"config/alembic", "config/sqlalchemy-naming-convention"})
 
     assert report.issues == []
+
+
+def test_skip_app_bootstrap_requests_native_routes(monkeypatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "pkg"
+    _write(package_dir / "__init__.py", "")
+    _write(package_dir / "main.py", "from fastapi import FastAPI\n\napp = FastAPI()\n")
+
+    module = _reload_doctor(monkeypatch, tmp_path, code_dir="pkg")
+    seen: list[bool] = []
+
+    monkeypatch.setattr(
+        project_module,
+        "discover_libraries",
+        lambda: project_module.LibraryInfo(fastapi=True),
+    )
+
+    def _fake_native(active_rules, *, include_routes=True):  # type: ignore[unused-argument]
+        seen.append(include_routes)
+        return {
+            "issues": [],
+            "routes": [],
+            "suppressions": [],
+            "route_count": 0,
+            "openapi_path_count": None,
+            "categories": {},
+            "score": 100,
+            "label": "A",
+            "checks_not_evaluated": [],
+        }
+
+    monkeypatch.setattr(runner_module.native_core, "run_native_project_v2", _fake_native)
+
+    module.run_python_doctor_checks(profile="strict", skip_app_bootstrap=True)
+
+    assert seen == [True]
+
+
+def test_static_only_without_route_rules_skips_native_routes(monkeypatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "pkg"
+    _write(package_dir / "__init__.py", "")
+    _write(package_dir / "main.py", "from fastapi import FastAPI\n\napp = FastAPI()\n")
+
+    module = _reload_doctor(monkeypatch, tmp_path, code_dir="pkg")
+    seen: list[bool] = []
+
+    monkeypatch.setattr(
+        project_module,
+        "discover_libraries",
+        lambda: project_module.LibraryInfo(fastapi=True),
+    )
+
+    def _fake_native(active_rules, *, include_routes=True):  # type: ignore[unused-argument]
+        seen.append(include_routes)
+        return {
+            "issues": [],
+            "routes": [],
+            "suppressions": [],
+            "route_count": 0,
+            "openapi_path_count": None,
+            "categories": {},
+            "score": 100,
+            "label": "A",
+            "checks_not_evaluated": [],
+        }
+
+    monkeypatch.setattr(runner_module.native_core, "run_native_project_v2", _fake_native)
+
+    module.run_python_doctor_checks(
+        only_rules={"security/assert-in-production"},
+        skip_app_bootstrap=True,
+    )
+
+    assert seen == [False]

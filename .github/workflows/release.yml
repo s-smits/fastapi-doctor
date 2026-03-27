@@ -38,8 +38,8 @@ jobs:
           import tomllib
           from pathlib import Path
 
-          cargo = tomllib.loads(Path("rust/doctor_core/Cargo.toml").read_text())
-          version = cargo["package"]["version"]
+          cargo = tomllib.loads(Path("rust/Cargo.toml").read_text())
+          version = cargo["workspace"]["package"]["version"]
           ref = os.environ["GITHUB_REF"]
 
           if ref.startswith("refs/tags/"):

@@ -1,0 +1,11 @@
+[package]
+name = "fastapi_doctor_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Core analysis facts, parsing, routing, suppressions, and scoring for fastapi-doctor."
+
+[dependencies]
+rustpython-parser.workspace = true

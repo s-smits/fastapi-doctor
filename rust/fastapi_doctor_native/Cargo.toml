@@ -1,0 +1,19 @@
+[package]
+name = "fastapi-doctor-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Native PyO3 bridge for fastapi-doctor."
+
+[lib]
+name = "_fastapi_doctor_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+fastapi_doctor_core = { path = "../fastapi_doctor_core" }
+fastapi_doctor_project = { path = "../fastapi_doctor_project" }
+fastapi_doctor_rules = { path = "../fastapi_doctor_rules" }
+rayon.workspace = true
+pyo3.workspace = true

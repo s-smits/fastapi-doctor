@@ -1,0 +1,12 @@
+[package]
+name = "fastapi_doctor_rules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Static rule engine for fastapi-doctor."
+
+[dependencies]
+rustpython-parser.workspace = true
+fastapi_doctor_core = { path = "../fastapi_doctor_core" }

@@ -12,6 +12,7 @@ dist/
 *.pyo
 .DS_Store
 rust/doctor_core/target/
+rust/target/
 src/fastapi_doctor/bin/*
 !src/fastapi_doctor/bin/.gitignore
 

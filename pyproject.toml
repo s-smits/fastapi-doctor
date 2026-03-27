@@ -46,8 +46,8 @@ testpaths = ["tests"]
 features = ["pyo3/extension-module"]
 python-source = "src"
 module-name = "fastapi_doctor._fastapi_doctor_native"
-manifest-path = "rust/doctor_core/Cargo.toml"
-strip = true
+manifest-path = "rust/fastapi_doctor_native/Cargo.toml"
+strip = false
 
 [dependency-groups]
 dev = [

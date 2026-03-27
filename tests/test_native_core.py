@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import importlib
-import os
-import stat
 import sys
 from pathlib import Path
 
@@ -23,11 +21,6 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content)
 
 
-def _write_executable(path: Path, content: str) -> None:
-    _write(path, content)
-    path.chmod(path.stat().st_mode | stat.S_IXUSR)
-
-
 def _reload_runner(monkeypatch, repo_root: Path, *, code_dir: str | None = None):
     monkeypatch.setenv("DOCTOR_REPO_ROOT", str(repo_root))
     if code_dir is None:
@@ -45,66 +38,7 @@ def _issue_fingerprint(issue) -> tuple[str, str, int, str]:
     return (issue.check, issue.path, issue.line, issue.message)
 
 
-def _prefer_repo_debug_binary(monkeypatch) -> None:
-    override = os.environ.get("FASTAPI_DOCTOR_NATIVE_BINARY", "").strip()
-    binary = Path(override) if override else None
-    monkeypatch.setattr(
-        native_core_module,
-        "_resolve_binary",
-        lambda: binary if binary and binary.is_file() else None,
-    )
-
-
-def test_override_binary_is_used_when_versions_match(monkeypatch, tmp_path: Path) -> None:
-    binary = tmp_path / "fastapi-doctor-native"
-    _write_executable(
-        binary,
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '1.2.3\\n'\n  exit 0\nfi\nexit 1\n",
-    )
-
-    native_core_module._VERSION_OK_CACHE.clear()
-    monkeypatch.setenv("FASTAPI_DOCTOR_NATIVE_BINARY", str(binary))
-    monkeypatch.setattr(native_core_module, "_package_version", lambda: "1.2.3")
-
-    assert native_core_module._resolve_binary() == binary
-    assert "override native binary" in native_core_module.last_native_reason()
-
-
-def test_version_mismatch_falls_back_to_python(monkeypatch, tmp_path: Path) -> None:
-    binary = tmp_path / "fastapi-doctor-native"
-    _write_executable(
-        binary,
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '9.9.9\\n'\n  exit 0\nfi\nexit 1\n",
-    )
-
-    native_core_module._VERSION_OK_CACHE.clear()
-    monkeypatch.setenv("FASTAPI_DOCTOR_NATIVE_BINARY", str(binary))
-    monkeypatch.setattr(native_core_module, "_package_version", lambda: "1.2.3")
-
-    assert native_core_module._resolve_binary() is None
-    assert native_core_module.last_native_reason() == "native override version mismatch"
-
-
-def test_bundled_binary_lookup_uses_packaged_asset(monkeypatch, tmp_path: Path) -> None:
-    package_root = tmp_path / "fastapi_doctor"
-    binary = package_root / "bin" / "linux-x86_64" / "fastapi-doctor-native"
-    _write_executable(
-        binary,
-        "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '2.0.0\\n'\n  exit 0\nfi\nexit 1\n",
-    )
-
-    native_core_module._VERSION_OK_CACHE.clear()
-    monkeypatch.delenv("FASTAPI_DOCTOR_NATIVE_BINARY", raising=False)
-    monkeypatch.setattr(native_core_module.resources, "files", lambda _: package_root)
-    monkeypatch.setattr(native_core_module.sys, "platform", "linux")
-    monkeypatch.setattr(native_core_module.platform, "machine", lambda: "x86_64")
-    monkeypatch.setattr(native_core_module, "_package_version", lambda: "2.0.0")
-
-    assert native_core_module._resolve_binary() == binary
-    assert "bundled native binary" in native_core_module.last_native_reason()
-
-
-def test_native_security_subset_matches_python_runner(monkeypatch, tmp_path: Path) -> None:
+def test_native_security_subset(monkeypatch, tmp_path: Path) -> None:
     package_dir = tmp_path / "pkg"
     _write(package_dir / "__init__.py", "")
     _write(
@@ -122,7 +56,6 @@ def test_native_security_subset_matches_python_runner(monkeypatch, tmp_path: Pat
     )
 
     runner = _reload_runner(monkeypatch, tmp_path, code_dir="pkg")
-    _prefer_repo_debug_binary(monkeypatch)
     target_rules = {
         "security/assert-in-production",
         "security/subprocess-shell-true",
@@ -131,18 +64,16 @@ def test_native_security_subset_matches_python_runner(monkeypatch, tmp_path: Pat
     }
 
     monkeypatch.delenv("FASTAPI_DOCTOR_DISABLE_NATIVE", raising=False)
-    native_report = runner.run_python_doctor_checks(only_rules=target_rules)
+    report = runner.run_python_doctor_checks(only_rules=target_rules)
 
-    monkeypatch.setenv("FASTAPI_DOCTOR_DISABLE_NATIVE", "1")
-    legacy_report = runner.run_python_doctor_checks(only_rules=target_rules)
-
-    assert sorted(_issue_fingerprint(issue) for issue in native_report.issues) == sorted(
-        _issue_fingerprint(issue) for issue in legacy_report.issues
-    )
-    assert native_report.rule_counts() == legacy_report.rule_counts()
+    found = {issue.check for issue in report.issues}
+    assert "security/assert-in-production" in found
+    assert "security/subprocess-shell-true" in found
+    assert "security/unsafe-yaml-load" in found
+    assert "security/weak-hash-without-flag" in found
 
 
-def test_native_custom_subset_matches_python_runner(monkeypatch, tmp_path: Path) -> None:
+def test_native_custom_subset(monkeypatch, tmp_path: Path) -> None:
     package_dir = tmp_path / "pkg"
     _write(package_dir / "__init__.py", "")
     _write(
@@ -173,7 +104,6 @@ def test_native_custom_subset_matches_python_runner(monkeypatch, tmp_path: Path)
     )
 
     runner = _reload_runner(monkeypatch, tmp_path, code_dir="pkg")
-    _prefer_repo_debug_binary(monkeypatch)
     target_rules = {
         "config/direct-env-access",
         "correctness/naive-datetime",
@@ -183,18 +113,16 @@ def test_native_custom_subset_matches_python_runner(monkeypatch, tmp_path: Path)
     }
 
     monkeypatch.delenv("FASTAPI_DOCTOR_DISABLE_NATIVE", raising=False)
-    native_report = runner.run_python_doctor_checks(only_rules=target_rules)
+    report = runner.run_python_doctor_checks(only_rules=target_rules)
 
-    monkeypatch.setenv("FASTAPI_DOCTOR_DISABLE_NATIVE", "1")
-    legacy_report = runner.run_python_doctor_checks(only_rules=target_rules)
-
-    assert sorted(_issue_fingerprint(issue) for issue in native_report.issues) == sorted(
-        _issue_fingerprint(issue) for issue in legacy_report.issues
-    )
-    assert native_report.rule_counts() == legacy_report.rule_counts()
+    found = {issue.check for issue in report.issues}
+    assert "correctness/naive-datetime" in found
+    assert "security/cors-wildcard" in found
+    assert "security/exception-detail-leak" in found
+    assert "resilience/sqlalchemy-pool-pre-ping" in found
 
 
-def test_native_fallback_subset_matches_python_runner(monkeypatch, tmp_path: Path) -> None:
+def test_native_architecture_and_correctness_subset(monkeypatch, tmp_path: Path) -> None:
     package_dir = tmp_path / "pkg"
     _write(package_dir / "__init__.py", "")
     _write(
@@ -204,35 +132,10 @@ def test_native_fallback_subset_matches_python_runner(monkeypatch, tmp_path: Pat
             "from somewhere import *\n"
             "import os\n"
             "import openai\n"
-            "import alpha\n"
-            "import beta\n"
-            "import gamma\n"
-            "import delta\n"
-            "import epsilon\n"
-            "import zeta\n"
-            "import eta\n"
-            "import theta\n"
-            "import iota\n"
-            "import kappa\n"
-            "import lambda_mod\n"
-            "import mu\n"
-            "import nu\n"
-            "import xi\n"
-            "import omicron\n"
-            "import pi\n"
-            "import rho\n"
-            "import sigma\n"
-            "import tau\n"
-            "import upsilon\n"
-            "import phi\n"
-            "import chi\n"
-            "import psi\n"
-            "import omega\n"
-            "import one\n"
-            "import two\n"
-            "import three\n"
-            "import four\n"
-            "import five\n"
+            "import alpha, beta, gamma, delta, epsilon, zeta, eta, theta\n"
+            "import iota, kappa, lambda_mod, mu, nu, xi, omicron, pi\n"
+            "import rho, sigma, tau, upsilon, phi, chi, psi, omega\n"
+            "import one, two, three, four, five\n"
             "def run() -> None:\n"
             "    print('hello')\n"
             "    value = os.path.join('a', 'b')\n"
@@ -241,7 +144,6 @@ def test_native_fallback_subset_matches_python_runner(monkeypatch, tmp_path: Pat
     )
 
     runner = _reload_runner(monkeypatch, tmp_path, code_dir="pkg")
-    _prefer_repo_debug_binary(monkeypatch)
     target_rules = {
         "architecture/import-bloat",
         "architecture/print-in-production",
@@ -252,18 +154,15 @@ def test_native_fallback_subset_matches_python_runner(monkeypatch, tmp_path: Pat
     }
 
     monkeypatch.delenv("FASTAPI_DOCTOR_DISABLE_NATIVE", raising=False)
-    native_report = runner.run_python_doctor_checks(only_rules=target_rules)
+    report = runner.run_python_doctor_checks(only_rules=target_rules)
 
-    monkeypatch.setenv("FASTAPI_DOCTOR_DISABLE_NATIVE", "1")
-    legacy_report = runner.run_python_doctor_checks(only_rules=target_rules)
-
-    assert sorted(_issue_fingerprint(issue) for issue in native_report.issues) == sorted(
-        _issue_fingerprint(issue) for issue in legacy_report.issues
-    )
-    assert native_report.rule_counts() == legacy_report.rule_counts()
+    found = {issue.check for issue in report.issues}
+    assert "architecture/print-in-production" in found
+    assert "architecture/star-import" in found
+    assert "correctness/deprecated-typing-imports" in found
 
 
-def test_native_static_correctness_subset_matches_python_runner(monkeypatch, tmp_path: Path) -> None:
+def test_native_correctness_async_subset(monkeypatch, tmp_path: Path) -> None:
     package_dir = tmp_path / "pkg"
     _write(package_dir / "__init__.py", "")
     _write(
@@ -287,7 +186,6 @@ def test_native_static_correctness_subset_matches_python_runner(monkeypatch, tmp
     )
 
     runner = _reload_runner(monkeypatch, tmp_path, code_dir="pkg")
-    _prefer_repo_debug_binary(monkeypatch)
     target_rules = {
         "correctness/asyncio-run-in-async",
         "correctness/mutable-default-arg",
@@ -297,12 +195,31 @@ def test_native_static_correctness_subset_matches_python_runner(monkeypatch, tmp
     }
 
     monkeypatch.delenv("FASTAPI_DOCTOR_DISABLE_NATIVE", raising=False)
-    native_report = runner.run_python_doctor_checks(only_rules=target_rules)
+    report = runner.run_python_doctor_checks(only_rules=target_rules)
 
+    found = {issue.check for issue in report.issues}
+    assert "correctness/mutable-default-arg" in found
+    assert "correctness/return-in-finally" in found
+    assert "correctness/unreachable-code" in found
+
+
+def test_native_disabled_produces_no_static_issues(monkeypatch, tmp_path: Path) -> None:
+    """When native is disabled there is no Python fallback — static issues are empty."""
+    package_dir = tmp_path / "pkg"
+    _write(package_dir / "__init__.py", "")
+    _write(package_dir / "bad.py", "import yaml\nyaml.load('x')\n")
+
+    runner = _reload_runner(monkeypatch, tmp_path, code_dir="pkg")
     monkeypatch.setenv("FASTAPI_DOCTOR_DISABLE_NATIVE", "1")
-    legacy_report = runner.run_python_doctor_checks(only_rules=target_rules)
+    report = runner.run_python_doctor_checks(only_rules={"security/unsafe-yaml-load"})
 
-    assert sorted(_issue_fingerprint(issue) for issue in native_report.issues) == sorted(
-        _issue_fingerprint(issue) for issue in legacy_report.issues
-    )
-    assert native_report.rule_counts() == legacy_report.rule_counts()
+    assert report.issues == []
+
+
+def test_get_native_rule_ids_returns_registry(monkeypatch) -> None:
+    monkeypatch.delenv("FASTAPI_DOCTOR_DISABLE_NATIVE", raising=False)
+    rule_ids = native_core_module.get_native_rule_ids()
+    assert len(rule_ids) > 40
+    assert "security/unsafe-yaml-load" in rule_ids
+    assert "correctness/naive-datetime" in rule_ids
+    assert "architecture/giant-function" in rule_ids
