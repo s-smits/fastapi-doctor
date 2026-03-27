@@ -1459,15 +1459,10 @@ fn analyze_module_with_suite<'a>(
         }
 
         if rules.missing_startup_validation
-            && module.file_name.as_deref() == Some("main.py")
+            && is_startup_entrypoint_module(module)
             && line.number == 1
         {
-            let has_validation = module.source.contains("validate_")
-                && module.source.contains("startup")
-                || module.source.contains("settings.validate")
-                || module.source.contains("check_config")
-                || module.source.contains("verify_env");
-            if !has_validation {
+            if !has_startup_validation_signal(module) {
                 issues.push(issue(
                     "architecture/missing-startup-validation",
                     "warning",
@@ -1482,6 +1477,24 @@ fn analyze_module_with_suite<'a>(
     }
 
     issues
+}
+
+fn is_startup_entrypoint_module(module: &ModuleIndex<'_>) -> bool {
+    module.file_name.as_deref() == Some("main.py")
+        && (module.source.contains("FastAPI(")
+            || module.source.contains("FastAPI (")
+            || module.source.contains("def create_app(")
+            || module.source.contains("async def create_app("))
+}
+
+fn has_startup_validation_signal(module: &ModuleIndex<'_>) -> bool {
+    module.source.contains("validate_") && module.source.contains("startup")
+        || module.source.contains("settings.validate")
+        || module.source.contains("check_config")
+        || module.source.contains("verify_env")
+        || ((module.source.contains("config import settings")
+            || module.source.contains("settings import settings"))
+            && module.source.contains("settings."))
 }
 
 use pyo3::prelude::*;
@@ -1783,6 +1796,26 @@ mod tests {
         );
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].check, "security/subprocess-shell-true");
+    }
+
+    #[test]
+    fn startup_validation_skips_router_modules_named_main() {
+        let issues = issues_for(
+            "architecture/missing-startup-validation",
+            "app/api/main.py",
+            "from fastapi import APIRouter\n\napi_router = APIRouter()\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn startup_validation_treats_eager_settings_app_bootstrap_as_valid() {
+        let issues = issues_for(
+            "architecture/missing-startup-validation",
+            "app/main.py",
+            "from fastapi import FastAPI\nfrom app.core.config import settings\n\napp = FastAPI(title=settings.PROJECT_NAME)\n",
+        );
+        assert!(issues.is_empty());
     }
 
     #[test]

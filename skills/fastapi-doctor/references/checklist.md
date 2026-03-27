@@ -9,6 +9,12 @@
 uv run fastapi-doctor
 ```
 
+Ask the user to pick `security`, `balanced`, or `strict` first. If the repo runtime is older than Python `3.12`, install the wheel in an isolated tool env:
+
+```bash
+uv tool install --python 3.12 --index https://s-smits.github.io/fastapi-doctor/simple/ fastapi-doctor
+```
+
 Use for:
 - normal backend edits
 - route refactors
@@ -50,6 +56,23 @@ uv run fastapi-doctor --json
 
 Returns JSON with `score`, `label`, `categories`, `issues[]`, and external tool results.
 Useful for CI integration.
+
+## Monorepo Pass
+
+```bash
+uv run fastapi-doctor \
+  --json \
+  --profile strict \
+  --repo-root . \
+  --code-dir apps/service_api \
+  --import-root . \
+  --app-module apps.service_api.main:app
+```
+
+Use for:
+- `apps/<service>` layouts
+- `services/<service>` layouts
+- repo roots that also contain unrelated Python
 
 ## Interpreting the Score
 

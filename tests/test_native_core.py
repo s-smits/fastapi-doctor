@@ -4,6 +4,8 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
@@ -223,3 +225,18 @@ def test_get_native_rule_ids_returns_registry(monkeypatch) -> None:
     assert "security/unsafe-yaml-load" in rule_ids
     assert "correctness/naive-datetime" in rule_ids
     assert "architecture/giant-function" in rule_ids
+
+
+def test_selected_native_static_mode_raises_when_disabled(monkeypatch) -> None:
+    monkeypatch.setenv("FASTAPI_DOCTOR_DISABLE_NATIVE", "1")
+
+    with pytest.raises(native_core_module.NativeStaticModeUnavailable):
+        native_core_module.run_native_selected_project_auto_v2(
+            profile="strict",
+            only_rules=None,
+            ignore_rules=None,
+            skip_structure=False,
+            skip_openapi=False,
+            static_only=True,
+            require_native=True,
+        )

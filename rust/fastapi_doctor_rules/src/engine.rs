@@ -15,6 +15,24 @@ use crate::routes;
 use crate::rule_selector::parse_static_rule;
 use crate::security;
 
+fn is_startup_entrypoint_module(module: &ModuleIndex<'_>) -> bool {
+    module.file_name.as_deref() == Some("main.py")
+        && (module.source.contains("FastAPI(")
+            || module.source.contains("FastAPI (")
+            || module.source.contains("def create_app(")
+            || module.source.contains("async def create_app("))
+}
+
+fn has_startup_validation_signal(module: &ModuleIndex<'_>) -> bool {
+    module.source.contains("validate_") && module.source.contains("startup")
+        || module.source.contains("settings.validate")
+        || module.source.contains("check_config")
+        || module.source.contains("verify_env")
+        || ((module.source.contains("config import settings")
+            || module.source.contains("settings import settings"))
+            && module.source.contains("settings."))
+}
+
 #[derive(Clone, Default)]
 pub struct RuleSelection {
     pub giant_function: bool,
@@ -785,15 +803,10 @@ pub fn analyze_module_with_suite(
         }
 
         if rules.missing_startup_validation
-            && module.file_name.as_deref() == Some("main.py")
+            && is_startup_entrypoint_module(module)
             && line.number == 1
         {
-            let has_validation = module.source.contains("validate_")
-                && module.source.contains("startup")
-                || module.source.contains("settings.validate")
-                || module.source.contains("check_config")
-                || module.source.contains("verify_env");
-            if !has_validation {
+            if !has_startup_validation_signal(module) {
                 issues.push(issue(
                     "architecture/missing-startup-validation",
                     "warning",

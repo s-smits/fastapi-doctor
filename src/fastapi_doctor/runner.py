@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+from ._compat import is_balanced_profile
 from . import native_core, project
 from .models import DoctorIssue, DoctorReport
 
@@ -59,7 +60,7 @@ def _should_run(
         if profile == "security":
             if not any(_selector_matches(rule_id, s) for s in _SECURITY_SELECTORS):
                 return False
-        elif profile == "medium":
+        elif is_balanced_profile(profile):
             if not any(_selector_matches(rule_id, s) for s in _MEDIUM_SELECTORS):
                 return False
 
@@ -83,29 +84,12 @@ def run_python_doctor_checks(
     def should_run(rule_id: str) -> bool:
         return _should_run(rule_id, only_rules, ignore_rules, profile)
 
-    all_rust_rules = native_core.get_native_rule_ids()
-    active_rust_rules = {rule_id for rule_id in all_rust_rules if should_run(rule_id)}
-    route_list_checks: list[tuple[str, Any]] = []
-    native_route_rule_ids = {
-        "security/forbidden-write-param",
-        "correctness/duplicate-route",
-        "api-surface/missing-tags",
-        "correctness/missing-response-model",
-        "correctness/post-status-code",
-        "api-surface/missing-docstring",
-        "api-surface/missing-pagination",
-    }
     openapi_rule_ids = {
         "api-surface/missing-operation-id",
         "api-surface/duplicate-operation-id",
         "api-surface/missing-openapi-tags",
     }
     check_openapi_schema = None
-
-    if project.PROTECTED_ROUTE_RULES and should_run("security/missing-auth-dep"):
-        from .checks.route_checks import check_route_dependency_policies
-
-        route_list_checks.append(("security/missing-auth-dep", check_route_dependency_policies))
 
     issues: list[DoctorIssue] = []
     checks_not_evaluated: list[str] = []
@@ -114,36 +98,43 @@ def run_python_doctor_checks(
     openapi_path_count = 0
     live_app = None
 
-    route_list_rule_ids = {rule_id for rule_id, _ in route_list_checks}
-    needs_static_routes = any(should_run(rule_id) for rule_id in (route_list_rule_ids | native_route_rule_ids))
-
     native_suppressions: list[dict] | None = None
     if skip_app_bootstrap:
-        checks_not_evaluated = sorted(rule_id for rule_id in openapi_rule_ids if should_run(rule_id))
-        native_result = native_core.run_native_project_auto_v2(
-            active_rust_rules,
-            include_routes=needs_static_routes,
-            static_only=True,
+        checks_not_evaluated = sorted(
+            rule_id for rule_id in openapi_rule_ids if should_run(rule_id)
         )
-        if native_result is not None:
-            project_context = native_result.get("project_context")
-            if isinstance(project_context, dict) and isinstance(project_context.get("layout"), dict):
-                project.apply_native_project_context(project_context, static_only=True)
-            else:
-                project.refresh_runtime_config(static_only=True)
-            issues.extend(native_result["issues"])
-            native_suppressions = native_result["suppressions"]
-            if needs_static_routes:
-                routes = native_result["routes"]
-                route_count = native_result["route_count"]
-        else:
-            project.refresh_runtime_config(static_only=True)
+        if project.PROTECTED_ROUTE_RULES and should_run("security/missing-auth-dep"):
+            checks_not_evaluated.append("security/missing-auth-dep")
+
+        native_result = native_core.run_native_selected_project_auto_v2(
+            profile=profile,
+            only_rules=sorted(only_rules) if only_rules else None,
+            ignore_rules=sorted(ignore_rules) if ignore_rules else None,
+            skip_structure=False,
+            skip_openapi=False,
+            include_routes=False,
+            static_only=True,
+            require_native=True,
+        )
+        project_context = native_result.get("project_context")
+        if isinstance(project_context, dict) and isinstance(project_context.get("layout"), dict):
+            project.apply_native_project_context(project_context, static_only=True)
+        issues.extend(native_result["issues"])
+        native_suppressions = native_result["suppressions"]
+        route_count = native_result["route_count"]
     else:
         project.refresh_runtime_config(static_only=False)
         libraries = project.discover_libraries()
+        need_python_route_policies = bool(
+            project.PROTECTED_ROUTE_RULES and should_run("security/missing-auth-dep")
+        )
 
         if not libraries.fastapi:
-            checks_not_evaluated = sorted(rule_id for rule_id in openapi_rule_ids if should_run(rule_id))
+            checks_not_evaluated = sorted(
+                rule_id for rule_id in openapi_rule_ids if should_run(rule_id)
+            )
+            if need_python_route_policies:
+                checks_not_evaluated.append("security/missing-auth-dep")
         else:
             from .app_loader import (
                 build_app_for_doctor,
@@ -153,7 +144,11 @@ def run_python_doctor_checks(
             from .static_routes import route_info_from_live_route
 
             if not fastapi_runtime_available():
-                checks_not_evaluated = sorted(rule_id for rule_id in openapi_rule_ids if should_run(rule_id))
+                checks_not_evaluated = sorted(
+                    rule_id for rule_id in openapi_rule_ids if should_run(rule_id)
+                )
+                if need_python_route_policies:
+                    checks_not_evaluated.append("security/missing-auth-dep")
             else:
                 try:
                     live_app = app or build_app_for_doctor()
@@ -180,22 +175,32 @@ def run_python_doctor_checks(
                         for rule_id in openapi_rule_ids
                         if should_run(rule_id)
                     )
+                    if need_python_route_policies:
+                        checks_not_evaluated.append("security/missing-auth-dep")
 
-        native_result = native_core.run_native_project_v2(
-            active_rust_rules,
-            include_routes=needs_static_routes,
+        native_result = native_core.run_native_selected_project_auto_v2(
+            profile=profile,
+            only_rules=sorted(only_rules) if only_rules else None,
+            ignore_rules=sorted(ignore_rules) if ignore_rules else None,
+            skip_structure=False,
+            skip_openapi=False,
+            include_routes=need_python_route_policies and not routes,
+            static_only=False,
         )
         if native_result is not None:
+            project_context = native_result.get("project_context")
+            if isinstance(project_context, dict) and isinstance(project_context.get("layout"), dict):
+                project.apply_native_project_context(project_context, static_only=False)
             issues.extend(native_result["issues"])
             native_suppressions = native_result["suppressions"]
-            if needs_static_routes and not routes:
+            if need_python_route_policies and not routes:
                 routes = native_result["routes"]
                 route_count = native_result["route_count"]
 
-    if routes:
-        for rule_id, check_func in route_list_checks:
-            if should_run(rule_id):
-                issues.extend(check_func(routes))
+    if routes and project.PROTECTED_ROUTE_RULES and should_run("security/missing-auth-dep"):
+        from .checks.route_checks import check_route_dependency_policies
+
+        issues.extend(check_route_dependency_policies(routes))
 
     if live_app is not None and any(should_run(rule_id) for rule_id in openapi_rule_ids):
         if check_openapi_schema is None:
@@ -203,17 +208,6 @@ def run_python_doctor_checks(
 
             check_openapi_schema = _check_openapi_schema
         issues.extend(check_openapi_schema(live_app))
-
-    if only_rules:
-        issues = [
-            issue for issue in issues if any(_selector_matches(issue.check, rule_id) for rule_id in only_rules)
-        ]
-    elif ignore_rules:
-        issues = [
-            issue
-            for issue in issues
-            if not any(_selector_matches(issue.check, rule_id) for rule_id in ignore_rules)
-        ]
 
     if native_suppressions is not None:
         all_suppressions = native_suppressions

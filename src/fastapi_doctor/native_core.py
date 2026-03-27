@@ -21,6 +21,10 @@ _NATIVE_ROUTE_RULES = frozenset({
 })
 
 
+class NativeStaticModeUnavailable(RuntimeError):
+    """Static analysis requires the native extension in the next major line."""
+
+
 def _set_last_native_reason(reason: str) -> None:
     global _LAST_NATIVE_REASON
     _LAST_NATIVE_REASON = reason
@@ -35,11 +39,39 @@ def _native_enabled() -> bool:
     return value not in {"1", "true", "yes", "on"}
 
 
+def _static_native_error(reason: str) -> NativeStaticModeUnavailable:
+    return NativeStaticModeUnavailable(
+        f"Static analysis requires the native engine: {reason}"
+    )
+
+
+def _load_native_module(*, required_for_static: bool = False):
+    if not _native_enabled():
+        reason = "native disabled by FASTAPI_DOCTOR_DISABLE_NATIVE"
+        _set_last_native_reason(reason)
+        if required_for_static:
+            raise _static_native_error(reason)
+        return None
+
+    try:
+        from . import _fastapi_doctor_native
+    except ImportError as e:
+        reason = f"failed to import native PyO3 module: {e}"
+        _set_last_native_reason(reason)
+        if required_for_static:
+            raise _static_native_error(reason)
+        return None
+
+    return _fastapi_doctor_native
+
+
 def get_native_rule_ids() -> frozenset[str]:
     """Return the set of rule IDs owned by the Rust engine."""
     try:
-        from . import _fastapi_doctor_native
-        return frozenset(_fastapi_doctor_native.get_all_rule_ids())
+        native_module = _load_native_module()
+        if native_module is None:
+            return frozenset()
+        return frozenset(native_module.get_all_rule_ids())
     except Exception:
         return frozenset()
 
@@ -53,18 +85,14 @@ def score_native_project_auto_v2(
     skip_openapi: bool,
     static_only: bool = True,
 ) -> int | None:
-    if not _native_enabled():
-        _set_last_native_reason("native disabled by FASTAPI_DOCTOR_DISABLE_NATIVE")
+    try:
+        native_module = _load_native_module(required_for_static=True)
+    except NativeStaticModeUnavailable:
         return None
+    assert native_module is not None
 
     try:
-        from . import _fastapi_doctor_native
-    except ImportError as e:
-        _set_last_native_reason(f"failed to import native PyO3 module: {e}")
-        return None
-
-    try:
-        score = _fastapi_doctor_native.score_current_project_v2(
+        score = native_module.score_current_project_v2(
             profile,
             only_rules,
             ignore_rules,
@@ -78,6 +106,44 @@ def score_native_project_auto_v2(
 
     _set_last_native_reason("native auto score v2")
     return int(score)
+
+
+def run_native_selected_project_auto_v2(
+    *,
+    profile: str | None,
+    only_rules: list[str] | None,
+    ignore_rules: list[str] | None,
+    skip_structure: bool,
+    skip_openapi: bool,
+    include_routes: bool = True,
+    static_only: bool = True,
+    require_native: bool = False,
+) -> dict | None:
+    try:
+        native_module = _load_native_module(required_for_static=require_native)
+    except NativeStaticModeUnavailable:
+        raise
+    if native_module is None:
+        return None
+
+    try:
+        raw = native_module.analyze_selected_current_project_v2(
+            profile,
+            only_rules,
+            ignore_rules,
+            skip_structure,
+            skip_openapi,
+            static_only,
+            include_routes,
+        )
+    except Exception as e:
+        reason = f"native execution failed: {e}"
+        _set_last_native_reason(reason)
+        if require_native:
+            raise _static_native_error(reason) from e
+        return None
+
+    return _coerce_native_project_result(raw, default_reason="native selected auto v2")
 
 
 def _coerce_native_project_result(raw: dict, *, default_reason: str) -> dict:
@@ -159,21 +225,18 @@ def run_native_project_v2(active_rules: set[str], *, include_routes: bool = True
             "checks_not_evaluated": [],
             "engine_reason": "no rules selected",
         }
-    if not _native_enabled():
-        _set_last_native_reason("native disabled by FASTAPI_DOCTOR_DISABLE_NATIVE")
-        return None
-
     try:
-        from . import _fastapi_doctor_native
-    except ImportError as e:
-        _set_last_native_reason(f"failed to import native PyO3 module: {e}")
+        native_module = _load_native_module()
+    except NativeStaticModeUnavailable:
+        return None
+    if native_module is None:
         return None
 
     from . import project
     include_routes = include_routes or bool(active_rules.intersection(_NATIVE_ROUTE_RULES))
 
     try:
-        raw = _fastapi_doctor_native.analyze_project_v2(
+        raw = native_module.analyze_project_v2(
             str(project.REPO_ROOT),
             str(project.OWN_CODE_DIR),
             sorted(project.SCAN_EXCLUDED_DIRS),
@@ -217,20 +280,17 @@ def run_native_project_auto_v2(
             "checks_not_evaluated": [],
             "engine_reason": "no rules selected",
         }
-    if not _native_enabled():
-        _set_last_native_reason("native disabled by FASTAPI_DOCTOR_DISABLE_NATIVE")
-        return None
-
     try:
-        from . import _fastapi_doctor_native
-    except ImportError as e:
-        _set_last_native_reason(f"failed to import native PyO3 module: {e}")
+        native_module = _load_native_module()
+    except NativeStaticModeUnavailable:
+        return None
+    if native_module is None:
         return None
 
     include_routes = include_routes or bool(active_rules.intersection(_NATIVE_ROUTE_RULES))
 
     try:
-        raw = _fastapi_doctor_native.analyze_current_project_v2(
+        raw = native_module.analyze_current_project_v2(
             sorted(active_rules),
             include_routes,
             static_only,
@@ -243,8 +303,10 @@ def run_native_project_auto_v2(
 
 
 __all__ = [
+    "NativeStaticModeUnavailable",
     "get_native_rule_ids",
     "last_native_reason",
+    "run_native_selected_project_auto_v2",
     "score_native_project_auto_v2",
     "run_native_project_auto_v2",
     "run_native_project_v2",

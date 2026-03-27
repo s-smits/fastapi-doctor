@@ -5,11 +5,39 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ._compat import get_installed_version, is_balanced_profile, normalize_cli_profile
+
 if TYPE_CHECKING:
     from .external_tools import CommandResult
+
+
+_SECURITY_SELECTORS = frozenset({
+    "security/*",
+    "pydantic/sensitive-field-type",
+    "pydantic/extra-allow-on-request",
+    "config/direct-env-access",
+})
+_MEDIUM_SELECTORS = _SECURITY_SELECTORS | frozenset({
+    "correctness/*",
+    "resilience/*",
+    "config/*",
+    "pydantic/mutable-default",
+    "pydantic/deprecated-validator",
+    "architecture/async-without-await",
+    "architecture/avoid-sys-exit",
+    "architecture/engine-pool-pre-ping",
+    "architecture/missing-startup-validation",
+    "architecture/passthrough-function",
+    "architecture/print-in-production",
+    "api-surface/missing-pagination",
+    "api-surface/missing-operation-id",
+    "api-surface/duplicate-operation-id",
+    "api-surface/missing-openapi-tags",
+})
 
 
 def run_command(name: str, command: list[str], cwd: Path):
@@ -87,6 +115,134 @@ def _try_native_static_score_fast_path(args: argparse.Namespace) -> int | None:
     )
 
 
+def _selector_matches(rule_id: str, selector: str) -> bool:
+    selector = selector.strip()
+    if selector.endswith("*"):
+        selector = selector[:-1]
+    return rule_id == selector or rule_id.startswith(selector)
+
+
+def _runtime_rule_should_run(
+    rule_id: str,
+    *,
+    profile: str | None,
+    only_rules: set[str] | None,
+    ignore_rules: set[str] | None,
+) -> bool:
+    if only_rules:
+        return any(_selector_matches(rule_id, selector) for selector in only_rules)
+
+    if profile == "security":
+        if not any(_selector_matches(rule_id, selector) for selector in _SECURITY_SELECTORS):
+            return False
+    elif is_balanced_profile(profile):
+        if not any(_selector_matches(rule_id, selector) for selector in _MEDIUM_SELECTORS):
+            return False
+
+    if ignore_rules:
+        return not any(_selector_matches(rule_id, selector) for selector in ignore_rules)
+    return True
+
+
+def _runtime_openapi_checks_not_evaluated(
+    *,
+    profile: str | None,
+    only_rules: set[str] | None,
+    ignore_rules: set[str] | None,
+) -> list[str]:
+    openapi_rule_ids = {
+        "api-surface/missing-operation-id",
+        "api-surface/duplicate-operation-id",
+        "api-surface/missing-openapi-tags",
+    }
+    return sorted(
+        rule_id
+        for rule_id in openapi_rule_ids
+        if _runtime_rule_should_run(
+            rule_id,
+            profile=profile,
+            only_rules=only_rules,
+            ignore_rules=ignore_rules,
+        )
+    )
+
+
+def _doctor_report_from_native_static_result(
+    args: argparse.Namespace,
+    native_result: dict,
+    ruff_doctor_issues: list,
+):
+    from .models import DoctorReport
+
+    only_rules = set(args.only_rules.split(",")) if args.only_rules else None
+    ignore_rules = set(args.ignore_rules.split(",")) if args.ignore_rules else None
+    checks_not_evaluated = _runtime_openapi_checks_not_evaluated(
+        profile=args.profile,
+        only_rules=only_rules,
+        ignore_rules=ignore_rules,
+    )
+    return DoctorReport(
+        route_count=native_result["route_count"],
+        openapi_path_count=0,
+        issues=native_result["issues"] + ruff_doctor_issues,
+        checks_not_evaluated=checks_not_evaluated,
+        suppressions=native_result["suppressions"],
+    )
+
+
+def _build_json_payload_from_native_static_result(
+    *,
+    args: argparse.Namespace,
+    command_results: list["CommandResult"],
+    doctor_report,
+    final_score: int,
+    final_label: str,
+    project_context: dict | None,
+) -> dict[str, object]:
+    from .models import SCHEMA_VERSION
+
+    layout = (project_context or {}).get("layout", {}) if isinstance(project_context, dict) else {}
+    effective_config = (
+        (project_context or {}).get("effective_config", {})
+        if isinstance(project_context, dict)
+        else {}
+    )
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "score": final_score,
+        "label": final_label,
+        "requested": {
+            "repo_root": args.repo_root,
+            "code_dir": args.code_dir,
+            "import_root": args.import_root,
+            "app_module": args.app_module,
+            "only_rules": args.only_rules,
+            "ignore_rules": args.ignore_rules,
+            "profile": args.profile,
+            "fail_on": args.fail_on,
+            "with_bandit": args.with_bandit,
+            "with_tests": args.with_tests,
+            "skip_ruff": args.skip_ruff,
+            "skip_ty": args.skip_ty,
+            "skip_pyright": args.skip_ty,
+            "skip_structure": args.skip_structure,
+            "skip_openapi": args.skip_openapi,
+            "static_only": args.static_only,
+            "skip_app_bootstrap": args.skip_app_bootstrap,
+        },
+        "project": {
+            "repo_root": layout.get("repo_root"),
+            "import_root": layout.get("import_root"),
+            "code_dir": layout.get("code_dir"),
+            "app_module": layout.get("app_module"),
+            "discovery_source": layout.get("discovery_source"),
+        },
+        "effective_config": effective_config,
+        "commands": [result.to_dict() for result in command_results],
+        "doctor": doctor_report.to_dict() if doctor_report else None,
+    }
+
+
 def main() -> int:
     args = parse_args()
     if args.static_only:
@@ -98,7 +254,6 @@ def main() -> int:
         return 0
 
     from .models import DoctorReport, PERFECT_SCORE
-    from .runner import run_python_doctor_checks
 
     repo_root = resolve_repo_root()
     cli_version = get_cli_version()
@@ -166,6 +321,7 @@ def main() -> int:
 
     doctor_report = None
     ruff_doctor_issues = []
+    static_project_context = None
     if not args.skip_structure or not args.skip_openapi:
         only_rules = set(args.only_rules.split(",")) if args.only_rules else set()
         ignore_rules = set(args.ignore_rules.split(",")) if args.ignore_rules else set()
@@ -174,15 +330,16 @@ def main() -> int:
             ruff_doctor_issues = map_ruff_findings_to_doctor(tool_results["ruff"].stdout)
             ignore_rules.update(issue.check for issue in ruff_doctor_issues)
 
-        if args.skip_structure:
-            ignore_rules.add("architecture/")
-            ignore_rules.add("correctness/")
-            ignore_rules.add("pydantic/")
-            ignore_rules.add("resilience/")
-            ignore_rules.add("security/")
-            ignore_rules.add("config/")
-        if args.skip_openapi:
-            ignore_rules.add("api-surface/")
+        if not args.static_only:
+            if args.skip_structure:
+                ignore_rules.add("architecture/")
+                ignore_rules.add("correctness/")
+                ignore_rules.add("pydantic/")
+                ignore_rules.add("resilience/")
+                ignore_rules.add("security/")
+                ignore_rules.add("config/")
+            if args.skip_openapi:
+                ignore_rules.add("api-surface/")
 
         if not quiet:
             if logger is None:
@@ -191,20 +348,51 @@ def main() -> int:
                 logger = _logger
             logger.dim("Running FastAPI Doctor checks...")
             logger.break_line()
-        doctor_report = run_python_doctor_checks(
-            only_rules=only_rules if only_rules else None,
-            ignore_rules=ignore_rules if ignore_rules else None,
-            profile=args.profile,
-            skip_app_bootstrap=args.skip_app_bootstrap,
-        )
-        if doctor_report and ruff_doctor_issues:
-            doctor_report = DoctorReport(
-                route_count=doctor_report.route_count,
-                openapi_path_count=doctor_report.openapi_path_count,
-                issues=doctor_report.issues + ruff_doctor_issues,
-                checks_not_evaluated=doctor_report.checks_not_evaluated,
-                suppressions=doctor_report.suppressions,
+        if args.static_only:
+            from .native_core import (
+                NativeStaticModeUnavailable,
+                run_native_selected_project_auto_v2,
             )
+
+            try:
+                native_result = run_native_selected_project_auto_v2(
+                    profile=args.profile,
+                    only_rules=sorted(only_rules) if only_rules else None,
+                    ignore_rules=sorted(ignore_rules) if ignore_rules else None,
+                    skip_structure=args.skip_structure,
+                    skip_openapi=args.skip_openapi,
+                    include_routes=False,
+                    static_only=True,
+                    require_native=True,
+                )
+            except NativeStaticModeUnavailable as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+
+            assert native_result is not None
+            doctor_report = _doctor_report_from_native_static_result(
+                args,
+                native_result,
+                ruff_doctor_issues,
+            )
+            static_project_context = native_result.get("project_context")
+        else:
+            from .runner import run_python_doctor_checks
+
+            doctor_report = run_python_doctor_checks(
+                only_rules=only_rules if only_rules else None,
+                ignore_rules=ignore_rules if ignore_rules else None,
+                profile=args.profile,
+                skip_app_bootstrap=args.skip_app_bootstrap,
+            )
+            if doctor_report and ruff_doctor_issues:
+                doctor_report = DoctorReport(
+                    route_count=doctor_report.route_count,
+                    openapi_path_count=doctor_report.openapi_path_count,
+                    issues=doctor_report.issues + ruff_doctor_issues,
+                    checks_not_evaluated=doctor_report.checks_not_evaluated,
+                    suppressions=doctor_report.suppressions,
+                )
 
     base_score = doctor_report.score if doctor_report else PERFECT_SCORE
     final_score, final_label = compute_combined_score(
@@ -216,13 +404,23 @@ def main() -> int:
         return 0
 
     if args.json:
-        payload = build_json_payload(
-            args=args,
-            command_results=command_results,
-            doctor_report=doctor_report,
-            final_score=final_score,
-            final_label=final_label,
-        )
+        if args.static_only and static_project_context is not None:
+            payload = _build_json_payload_from_native_static_result(
+                args=args,
+                command_results=command_results,
+                doctor_report=doctor_report,
+                final_score=final_score,
+                final_label=final_label,
+                project_context=static_project_context,
+            )
+        else:
+            payload = build_json_payload(
+                args=args,
+                command_results=command_results,
+                doctor_report=doctor_report,
+                final_score=final_score,
+                final_label=final_label,
+            )
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         from .reporting import print_report_human
@@ -242,6 +440,14 @@ def main() -> int:
     return 1 if has_command_failure or structure_failed else 0
 
 def parse_args() -> argparse.Namespace:
+    def parse_profile(value: str) -> str:
+        normalized = normalize_cli_profile(value)
+        if normalized not in {"security", "balanced", "strict"}:
+            raise argparse.ArgumentTypeError(
+                "profile must be one of: security, balanced, strict"
+            )
+        return normalized
+
     parser = argparse.ArgumentParser(
         description="Backend doctor for your FastAPI/Python stack. Scores 0-100."
     )
@@ -262,9 +468,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--profile",
-        choices=["security", "medium", "strict"],
-        default="medium",
-        help="Audit intensity profile: security (only security checks), medium (balanced), strict (all checks).",
+        type=parse_profile,
+        default="balanced",
+        help="Audit intensity profile: security, balanced, or strict. Legacy alias: medium.",
     )
     parser.add_argument("--ignore-rules", help="Comma-separated list of rule IDs or prefixes to ignore.")
     parser.add_argument("--only-rules", help="Comma-separated list of rule IDs or prefixes to run.")
@@ -301,12 +507,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def get_cli_version() -> str:
-    try:
-        from ._version import version
-
-        return version
-    except ImportError:
-        return "0.0.0"
+    return get_installed_version()
 
 
 def build_json_payload(

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 import types
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -213,6 +216,23 @@ def test_static_only_prefers_src_code_dir_over_repo_root(monkeypatch, tmp_path: 
 
     assert layout.code_dir == tmp_path / "src"
     assert not any(parsed_module.rel_path.startswith("tests/") for parsed_module in parsed)
+
+
+def test_static_only_prefers_nested_service_dir_in_apps_container(monkeypatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "apps" / "worker"
+    _write(tmp_path / "apps" / "__init__.py", "")
+    _write(package_dir / "__init__.py", "")
+    _write(package_dir / "main.py", "from fastapi import FastAPI\n\napp = FastAPI()\n")
+    _write(package_dir / "service.py", "def run() -> int:\n    return 1\n")
+
+    module = _reload_doctor(monkeypatch, tmp_path)
+    project_module.refresh_runtime_config(static_only=True)
+
+    layout = module.get_project_layout()
+
+    assert layout.import_root == tmp_path
+    assert layout.code_dir == package_dir
+    assert layout.app_module == "apps.worker.main:app"
 
 
 def test_missing_fastapi_runtime_skips_live_app_import(monkeypatch, tmp_path: Path) -> None:
@@ -469,6 +489,121 @@ def test_main_uses_native_static_score_fast_path(monkeypatch, capsys) -> None:
     assert capsys.readouterr().out.strip() == "77"
 
 
+def test_main_uses_native_static_json_path(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "parse_args",
+        lambda: SimpleNamespace(
+            static_only=True,
+            json=True,
+            score=False,
+            skip_ruff=True,
+            skip_ty=True,
+            with_bandit=False,
+            with_tests=False,
+            skip_structure=False,
+            skip_openapi=False,
+            fail_on="none",
+            profile="strict",
+            only_rules=None,
+            ignore_rules=None,
+            verbose=False,
+            repo_root=None,
+            code_dir=None,
+            import_root=None,
+            app_module=None,
+            skip_app_bootstrap=False,
+            pytest_args="",
+        ),
+    )
+    monkeypatch.setattr(cli_module, "configure_environment_from_args", lambda args: None)
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: Path.cwd())
+    monkeypatch.setattr(cli_module, "get_cli_version", lambda: "test")
+    monkeypatch.setattr(
+        cli_module,
+        "build_json_payload",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("static json should use native payload path")),
+    )
+
+    import fastapi_doctor.native_core as native_core_module
+
+    monkeypatch.setattr(
+        native_core_module,
+        "run_native_selected_project_auto_v2",
+        lambda **kwargs: {
+            "issues": [],
+            "routes": [],
+            "suppressions": [],
+            "route_count": 3,
+            "openapi_path_count": None,
+            "categories": {},
+            "score": 100,
+            "label": "A",
+            "checks_not_evaluated": [],
+            "project_context": {
+                "layout": {
+                    "repo_root": "/tmp/repo",
+                    "import_root": "/tmp/repo/src",
+                    "code_dir": "/tmp/repo/src/app",
+                    "app_module": "app.main:app",
+                    "discovery_source": "static-only heuristics",
+                },
+                "effective_config": {"scan": {"exclude_dirs": ["vendor"], "exclude_rules": []}},
+            },
+        },
+    )
+
+    assert cli_module.main() == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["project"]["code_dir"] == "/tmp/repo/src/app"
+    assert payload["doctor"]["route_count"] == 3
+
+
+def test_main_static_json_fails_when_native_unavailable(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "parse_args",
+        lambda: SimpleNamespace(
+            static_only=True,
+            json=True,
+            score=False,
+            skip_ruff=True,
+            skip_ty=True,
+            with_bandit=False,
+            with_tests=False,
+            skip_structure=False,
+            skip_openapi=False,
+            fail_on="none",
+            profile="strict",
+            only_rules=None,
+            ignore_rules=None,
+            verbose=False,
+            repo_root=None,
+            code_dir=None,
+            import_root=None,
+            app_module=None,
+            skip_app_bootstrap=False,
+            pytest_args="",
+        ),
+    )
+    monkeypatch.setattr(cli_module, "configure_environment_from_args", lambda args: None)
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: Path.cwd())
+    monkeypatch.setattr(cli_module, "get_cli_version", lambda: "test")
+
+    import fastapi_doctor.native_core as native_core_module
+
+    monkeypatch.setattr(
+        native_core_module,
+        "run_native_selected_project_auto_v2",
+        lambda **kwargs: (_ for _ in ()).throw(
+            native_core_module.NativeStaticModeUnavailable("Static analysis requires the native engine: disabled")
+        ),
+    )
+
+    assert cli_module.main() == 1
+    assert "Static analysis requires the native engine" in capsys.readouterr().err
+
+
 def test_route_checks_legacy_exports_are_lazy() -> None:
     route_checks = importlib.reload(route_checks_module)
 
@@ -665,6 +800,41 @@ def test_explicit_app_module_skips_repo_scan_and_infers_layout(monkeypatch, tmp_
     assert layout.app_module == "service.api:create_app()"
 
 
+def test_explicit_app_module_infers_nested_monorepo_service_layout(monkeypatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "apps" / "worker"
+    _write(tmp_path / "apps" / "__init__.py", "")
+    _write(package_dir / "__init__.py", "")
+    _write(package_dir / "main.py", "from fastapi import FastAPI\n\napp = FastAPI()\n")
+
+    monkeypatch.setenv("DOCTOR_REPO_ROOT", str(tmp_path))
+    monkeypatch.setenv("DOCTOR_APP_MODULE", "apps.worker.main:app")
+    monkeypatch.delenv("DOCTOR_CODE_DIR", raising=False)
+    monkeypatch.delenv("DOCTOR_IMPORT_ROOT", raising=False)
+
+    project = importlib.reload(project_module)
+    layout = project.get_project_layout()
+
+    assert layout.import_root == tmp_path
+    assert layout.code_dir == package_dir
+    assert layout.app_module == "apps.worker.main:app"
+
+
+def test_parse_args_accepts_balanced_profile_name(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["fastapi-doctor", "--profile", "Balanced"])
+
+    args = cli_module.parse_args()
+
+    assert args.profile == "balanced"
+
+
+def test_parse_args_normalizes_legacy_medium_profile_name(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["fastapi-doctor", "--profile", "medium"])
+
+    args = cli_module.parse_args()
+
+    assert args.profile == "balanced"
+
+
 def test_parsed_python_modules_reuses_cache(monkeypatch, tmp_path: Path) -> None:
     package_dir = tmp_path / "pkg"
     _write(package_dir / "__init__.py", "")
@@ -826,16 +996,16 @@ def test_alembic_best_practice_checks_accept_common_hooks(monkeypatch, tmp_path:
     assert report.issues == []
 
 
-def test_skip_app_bootstrap_requests_native_routes(monkeypatch, tmp_path: Path) -> None:
+def test_skip_app_bootstrap_uses_selected_native_entrypoint(monkeypatch, tmp_path: Path) -> None:
     package_dir = tmp_path / "pkg"
     _write(package_dir / "__init__.py", "")
     _write(package_dir / "main.py", "from fastapi import FastAPI\n\napp = FastAPI()\n")
 
     module = _reload_doctor(monkeypatch, tmp_path, code_dir="pkg")
-    seen: list[bool] = []
+    seen: list[dict[str, object]] = []
 
-    def _fake_native(active_rules, *, include_routes=True, static_only=True):  # type: ignore[unused-argument]
-        seen.append(include_routes)
+    def _fake_native(**kwargs):
+        seen.append(kwargs)
         return {
             "issues": [],
             "routes": [],
@@ -846,42 +1016,53 @@ def test_skip_app_bootstrap_requests_native_routes(monkeypatch, tmp_path: Path) 
             "score": 100,
             "label": "A",
             "checks_not_evaluated": [],
+            "project_context": {
+                "layout": {
+                    "repo_root": str(tmp_path),
+                    "import_root": str(tmp_path),
+                    "code_dir": str(package_dir),
+                    "app_module": "pkg.main:app",
+                    "discovery_source": "static-only heuristics",
+                }
+            },
         }
 
-    monkeypatch.setattr(runner_module.native_core, "run_native_project_auto_v2", _fake_native)
+    monkeypatch.setattr(runner_module.native_core, "run_native_selected_project_auto_v2", _fake_native)
 
     module.run_python_doctor_checks(profile="strict", skip_app_bootstrap=True)
 
-    assert seen == [True]
+    assert seen == [
+        {
+            "profile": "strict",
+            "only_rules": None,
+            "ignore_rules": None,
+            "skip_structure": False,
+            "skip_openapi": False,
+            "include_routes": False,
+            "static_only": True,
+            "require_native": True,
+        }
+    ]
 
 
-def test_static_only_without_route_rules_skips_native_routes(monkeypatch, tmp_path: Path) -> None:
+def test_skip_app_bootstrap_raises_when_native_required(monkeypatch, tmp_path: Path) -> None:
     package_dir = tmp_path / "pkg"
     _write(package_dir / "__init__.py", "")
     _write(package_dir / "main.py", "from fastapi import FastAPI\n\napp = FastAPI()\n")
 
     module = _reload_doctor(monkeypatch, tmp_path, code_dir="pkg")
-    seen: list[bool] = []
-
-    def _fake_native(active_rules, *, include_routes=True, static_only=True):  # type: ignore[unused-argument]
-        seen.append(include_routes)
-        return {
-            "issues": [],
-            "routes": [],
-            "suppressions": [],
-            "route_count": 0,
-            "openapi_path_count": None,
-            "categories": {},
-            "score": 100,
-            "label": "A",
-            "checks_not_evaluated": [],
-        }
-
-    monkeypatch.setattr(runner_module.native_core, "run_native_project_auto_v2", _fake_native)
-
-    module.run_python_doctor_checks(
-        only_rules={"security/assert-in-production"},
-        skip_app_bootstrap=True,
+    monkeypatch.setattr(
+        runner_module.native_core,
+        "run_native_selected_project_auto_v2",
+        lambda **kwargs: (_ for _ in ()).throw(
+            runner_module.native_core.NativeStaticModeUnavailable(
+                "Static analysis requires the native engine: disabled"
+            )
+        ),
     )
 
-    assert seen == [False]
+    with pytest.raises(runner_module.native_core.NativeStaticModeUnavailable):
+        module.run_python_doctor_checks(
+            only_rules={"security/assert-in-production"},
+            skip_app_bootstrap=True,
+        )

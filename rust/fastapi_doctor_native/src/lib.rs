@@ -254,20 +254,17 @@ fn score_current_project_v2(
     skip_openapi: bool,
     static_only: bool,
 ) -> PyResult<usize> {
-    let bundle = load_current_project_bundle(static_only).map_err(PyRuntimeError::new_err)?;
-    let active_rules = select_rule_ids(
-        profile.as_deref(),
-        only_rules.as_deref().unwrap_or(&[]),
-        ignore_rules.as_deref().unwrap_or(&[]),
-        &bundle.context.effective_config.scan.exclude_rules,
+    let (result, _) = analyze_selected_current_project_impl(
+        py,
+        profile,
+        only_rules,
+        ignore_rules,
         skip_structure,
         skip_openapi,
-    );
-    if active_rules.is_empty() {
-        return Ok(100);
-    }
-    let config = bundle.context.effective_config.to_core_config();
-    score_loaded_project_bundle(py, bundle.project, config, active_rules)
+        static_only,
+        false,
+    )?;
+    Ok(result.score)
 }
 
 struct ProjectBundleResult {
@@ -280,6 +277,67 @@ struct ProjectBundleResult {
     label: String,
     checks_not_evaluated: Vec<String>,
     engine_reason: String,
+}
+
+struct ProjectAnalysisResult {
+    raw_issues: Vec<Issue>,
+    finalized_routes: Vec<RouteRecord>,
+    suppressions: Vec<SuppressionTuple>,
+    engine_reason: String,
+}
+
+impl ProjectAnalysisResult {
+    fn into_bundle(self, include_route_payload: bool) -> ProjectBundleResult {
+        let summary = score_summary(&self.raw_issues);
+        let route_count = self.finalized_routes.len();
+        let routes = if include_route_payload {
+            self.finalized_routes.into_iter().map(route_tuple).collect()
+        } else {
+            Vec::new()
+        };
+        let issues = self.raw_issues.iter().map(issue_tuple).collect();
+        ProjectBundleResult {
+            route_count,
+            categories: summary.categories.into_iter().collect(),
+            score: summary.score,
+            label: summary.label,
+            issues,
+            routes,
+            suppressions: self.suppressions,
+            checks_not_evaluated: Vec::new(),
+            engine_reason: self.engine_reason,
+        }
+    }
+}
+
+fn empty_project_bundle_result(engine_reason: &str) -> ProjectBundleResult {
+    ProjectBundleResult {
+        issues: Vec::new(),
+        routes: Vec::new(),
+        suppressions: Vec::new(),
+        route_count: 0,
+        categories: Vec::new(),
+        score: 100,
+        label: "A".to_string(),
+        checks_not_evaluated: Vec::new(),
+        engine_reason: engine_reason.to_string(),
+    }
+}
+
+fn source_may_define_routes(source: &str) -> bool {
+    source.contains("APIRouter")
+        || source.contains("FastAPI(")
+        || source.contains("FastAPI (")
+        || source.contains(".get(")
+        || source.contains(".post(")
+        || source.contains(".put(")
+        || source.contains(".patch(")
+        || source.contains(".delete(")
+        || source.contains(".api_route(")
+}
+
+fn source_may_have_suppressions(source: &str) -> bool {
+    source.contains("noqa") || source.contains("doctor:ignore")
 }
 
 fn analyze_project_bundle(
@@ -332,9 +390,20 @@ fn analyze_loaded_project_bundle(
     include_routes: bool,
     engine_reason: &str,
 ) -> PyResult<ProjectBundleResult> {
-    let rule_selection = RuleSelection::from_rules(&active_rules);
+    let analysis =
+        analyze_loaded_project_bundle_core(py, project, config, active_rules, engine_reason)?;
+    Ok(analysis.into_bundle(include_routes))
+}
 
-    let needs_routes = include_routes || rule_selection.any_route_rules();
+fn analyze_loaded_project_bundle_core(
+    py: Python<'_>,
+    project: LoadedProject,
+    config: Config,
+    active_rules: Vec<String>,
+    engine_reason: &str,
+) -> PyResult<ProjectAnalysisResult> {
+    let rule_selection = RuleSelection::from_rules(&active_rules);
+    let needs_routes = rule_selection.any_route_rules();
 
     let scans = py.allow_threads(|| {
         project
@@ -349,7 +418,7 @@ fn analyze_loaded_project_bundle(
                     &rule_selection,
                     &config,
                 );
-                let route_scan = if needs_routes {
+                let route_scan = if needs_routes && source_may_define_routes(&module.source) {
                     parsed_suite
                         .as_ref()
                         .map(|suite| extract_route_scan(&index, suite))
@@ -357,7 +426,11 @@ fn analyze_loaded_project_bundle(
                 } else {
                     Default::default()
                 };
-                let suppressions = collect_suppressions(&module.source, &module.rel_path);
+                let suppressions = if source_may_have_suppressions(&module.source) {
+                    collect_suppressions(&module.source, &module.rel_path)
+                } else {
+                    Vec::new()
+                };
                 Ok::<_, String>((issues, route_scan.drafts, suppressions, route_scan.includes))
             })
             .collect::<Result<Vec<_>, String>>()
@@ -381,16 +454,11 @@ fn analyze_loaded_project_bundle(
         }
     }
 
-    let mut issues = Vec::new();
-    let mut routes = Vec::new();
-    let mut suppressions = Vec::new();
     let mut finalized_routes: Vec<RouteRecord> = Vec::new();
+    let mut suppressions = Vec::new();
     let mut raw_issues = Vec::new();
     for (module_issues, module_routes, module_suppressions, _) in scans {
-        for issue in module_issues {
-            issues.push(issue_tuple(&issue));
-            raw_issues.push(issue);
-        }
+        raw_issues.extend(module_issues);
         for route in module_routes {
             finalized_routes.push(finalize_route(route, &include_prefix_map));
         }
@@ -403,101 +471,93 @@ fn analyze_loaded_project_bundle(
             ));
         }
     }
-    for issue in project_issues {
-        issues.push(issue_tuple(&issue));
-        raw_issues.push(issue);
-    }
-
-    let route_issues = analyze_routes(&finalized_routes, &rule_selection, &config);
-    for issue in route_issues {
-        issues.push(issue_tuple(&issue));
-        raw_issues.push(issue);
-    }
-
-    if include_routes {
-        routes = finalized_routes.into_iter().map(route_tuple).collect();
-    }
-
-    let summary = score_summary(&raw_issues);
-    Ok(ProjectBundleResult {
-        route_count: routes.len(),
-        categories: summary.categories.into_iter().collect(),
-        score: summary.score,
-        label: summary.label,
-        issues,
-        routes,
-        suppressions,
-        checks_not_evaluated: Vec::new(),
-        engine_reason: engine_reason.to_string(),
-    })
-}
-
-fn score_loaded_project_bundle(
-    py: Python<'_>,
-    project: LoadedProject,
-    config: Config,
-    active_rules: Vec<String>,
-) -> PyResult<usize> {
-    let rule_selection = RuleSelection::from_rules(&active_rules);
-    let needs_routes = rule_selection.any_route_rules();
-
-    let scans = py.allow_threads(|| {
-        project
-            .modules
-            .par_iter()
-            .map(|module| {
-                let index = fastapi_doctor_core::ModuleIndex::new(module);
-                let parsed_suite = parse_suite(module);
-                let issues = analyze_module_with_suite(
-                    &index,
-                    parsed_suite.as_ref(),
-                    &rule_selection,
-                    &config,
-                );
-                let route_scan = if needs_routes {
-                    parsed_suite
-                        .as_ref()
-                        .map(|suite| extract_route_scan(&index, suite))
-                        .unwrap_or_default()
-                } else {
-                    Default::default()
-                };
-                Ok::<_, String>((issues, route_scan.drafts, route_scan.includes))
-            })
-            .collect::<Result<Vec<_>, String>>()
-    });
-
-    let scans = scans.map_err(PyRuntimeError::new_err)?;
-    let mut raw_issues = analyze_project_modules(&project.modules, &rule_selection);
-
-    let mut include_prefix_map: HashMap<String, (String, Vec<String>)> = HashMap::new();
-    for (_, _, includes) in &scans {
-        for (router_name, include_prefix, include_tags) in includes {
-            match include_prefix_map.get(router_name) {
-                Some((existing_prefix, _)) if existing_prefix.len() >= include_prefix.len() => {}
-                _ => {
-                    include_prefix_map.insert(
-                        router_name.clone(),
-                        (include_prefix.clone(), include_tags.clone()),
-                    );
-                }
-            }
-        }
-    }
-
-    let mut finalized_routes: Vec<RouteRecord> = Vec::new();
-    for (module_issues, module_routes, _) in scans {
-        raw_issues.extend(module_issues);
-        for route in module_routes {
-            finalized_routes.push(finalize_route(route, &include_prefix_map));
-        }
-    }
+    raw_issues.extend(project_issues);
 
     if needs_routes {
         raw_issues.extend(analyze_routes(&finalized_routes, &rule_selection, &config));
     }
 
-    Ok(score_summary(&raw_issues).score)
+    Ok(ProjectAnalysisResult {
+        raw_issues,
+        finalized_routes,
+        suppressions,
+        engine_reason: engine_reason.to_string(),
+    })
+}
+
+fn analyze_selected_current_project_impl(
+    py: Python<'_>,
+    profile: Option<String>,
+    only_rules: Option<Vec<String>>,
+    ignore_rules: Option<Vec<String>>,
+    skip_structure: bool,
+    skip_openapi: bool,
+    static_only: bool,
+    include_routes: bool,
+) -> PyResult<(ProjectBundleResult, fastapi_doctor_project::ProjectContext)> {
+    let bundle = load_current_project_bundle(static_only).map_err(PyRuntimeError::new_err)?;
+    let active_rules = select_rule_ids(
+        profile.as_deref(),
+        only_rules.as_deref().unwrap_or(&[]),
+        ignore_rules.as_deref().unwrap_or(&[]),
+        &bundle.context.effective_config.scan.exclude_rules,
+        skip_structure,
+        skip_openapi,
+    );
+    if active_rules.is_empty() {
+        return Ok((
+            empty_project_bundle_result("no rules selected"),
+            bundle.context,
+        ));
+    }
+
+    let config = bundle.context.effective_config.to_core_config();
+    let analysis = analyze_loaded_project_bundle_core(
+        py,
+        bundle.project,
+        config,
+        active_rules,
+        "using PyO3 native auto project module v2",
+    )?;
+    Ok((analysis.into_bundle(include_routes), bundle.context))
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    profile=None,
+    only_rules=None,
+    ignore_rules=None,
+    skip_structure=false,
+    skip_openapi=false,
+    static_only=true,
+    include_routes=true,
+))]
+fn analyze_selected_current_project_v2(
+    py: Python<'_>,
+    profile: Option<String>,
+    only_rules: Option<Vec<String>>,
+    ignore_rules: Option<Vec<String>>,
+    skip_structure: bool,
+    skip_openapi: bool,
+    static_only: bool,
+    include_routes: bool,
+) -> PyResult<Py<PyDict>> {
+    let (result, context) = analyze_selected_current_project_impl(
+        py,
+        profile,
+        only_rules,
+        ignore_rules,
+        skip_structure,
+        skip_openapi,
+        static_only,
+        include_routes,
+    )?;
+    let payload = project_bundle_payload(py, result)?;
+    let project_context = project_context_payload(py, &context)?;
+    payload
+        .bind(py)
+        .set_item("project_context", project_context)?;
+    Ok(payload)
 }
 
 fn project_bundle_payload(py: Python<'_>, result: ProjectBundleResult) -> PyResult<Py<PyDict>> {
@@ -674,6 +734,7 @@ fn _fastapi_doctor_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(analyze_project, m)?)?;
     m.add_function(wrap_pyfunction!(analyze_project_v2, m)?)?;
     m.add_function(wrap_pyfunction!(analyze_current_project_v2, m)?)?;
+    m.add_function(wrap_pyfunction!(analyze_selected_current_project_v2, m)?)?;
     m.add_function(wrap_pyfunction!(score_current_project_v2, m)?)?;
     m.add_function(wrap_pyfunction!(get_all_rule_ids, m)?)?;
     m.add_function(wrap_pyfunction!(get_project_context, m)?)?;

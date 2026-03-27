@@ -1,6 +1,6 @@
 # fastapi-doctor
 
-[![Socket Supply Chain Scan](https://github.com/s-smits/fastapi-doctor/actions/workflows/virus-scan.yml/badge.svg)](https://github.com/s-smits/fastapi-doctor/actions/workflows/virus-scan.yml)
+[![Trivy Repository Scan](https://github.com/s-smits/fastapi-doctor/actions/workflows/trivy.yml/badge.svg)](https://github.com/s-smits/fastapi-doctor/actions/workflows/trivy.yml)
 
 `fastapi-doctor` is an agent-first backend verifier for FastAPI and Python services. It enforces route contracts, async safety, security boundaries, and structural correctness with deterministic static analysis.
 
@@ -12,7 +12,7 @@ LLM agents are good at local edits and weak at repo-wide invariants. `fastapi-do
 - Catching security and correctness issues that are easy to miss in review.
 
 ## Agent Quick Start
-1. Ask the user for a `security`, `medium`, or `strict` audit profile.
+1. Ask the user for a `security`, `balanced`, or `strict` audit profile.
 2. Run `uv run fastapi-doctor --json --profile <profile>`.
 3. If the score is below `80`, fix findings with the smallest semantic diff.
 
@@ -21,10 +21,11 @@ LLM agents are good at local edits and weak at repo-wide invariants. `fastapi-do
 
 ## Key Features
 - Auto-discovers `repo-root`, `src/<pkg>`, and `backend/<pkg>` layouts.
+- Handles common monorepo layouts such as `apps/<service>`, `services/<service>`, and `packages/<service>` when you pass `--app-module` or rely on static heuristics.
 - Uses a Rust-powered static engine with Python fallback.
 - Runs route/OpenAPI checks, architecture checks, security checks, performance checks, and Pydantic checks.
 - Supports machine-readable JSON for agent workflows.
-- Runs a scheduled Socket supply-chain scan in GitHub Actions for Python and Rust dependencies, with malware-focused checks that are free for open source repositories.
+- Runs GitHub Dependency Review on pull requests and scheduled Trivy scans for dependency, secret, and misconfiguration checks.
 
 ## Installation
 
@@ -39,6 +40,12 @@ uv tool install --index https://s-smits.github.io/fastapi-doctor/simple/ fastapi
 
 ```bash
 uvx --index https://s-smits.github.io/fastapi-doctor/simple/ fastapi-doctor --version
+```
+
+If the target project still runs on Python `3.11` or older, keep `fastapi-doctor` in an isolated tool environment instead of forcing it into the app runtime:
+
+```bash
+uv tool install --python 3.12 --index https://s-smits.github.io/fastapi-doctor/simple/ fastapi-doctor
 ```
 
 ### From Source
@@ -80,12 +87,55 @@ uv run fastapi-doctor --json --with-bandit --with-tests
 uv run fastapi-doctor --app-module my_pkg.main:app
 ```
 
+## Monorepo Layout Recipes
+Use the service root as `--repo-root` when possible. If you must scan from a larger monorepo root, pass `--code-dir`, `--import-root`, and `--app-module` explicitly.
+
+```text
+repo/
+  src/my_service/main.py
+```
+
+```bash
+uv run fastapi-doctor --profile strict --repo-root . --app-module my_service.main:app
+```
+
+```text
+repo/
+  backend/service/app.py
+```
+
+```bash
+uv run fastapi-doctor --profile strict --repo-root backend --app-module service.app:app
+```
+
+```text
+repo/
+  apps/
+    service_api/
+      __init__.py
+      main.py
+      routers/
+```
+
+```bash
+uv run fastapi-doctor \
+  --profile strict \
+  --repo-root . \
+  --code-dir apps/service_api \
+  --import-root . \
+  --app-module apps.service_api.main:app
+```
+
+For monorepos with unrelated Python under directories like `internal_tools/` or `generated/`, add them to [`scan.exclude_dirs`](./.fastapi-doctor.example.yml).
+
 ## Audit Profiles
 | Profile | Focus |
 | :--- | :--- |
 | `security` | Auth dependencies, CORS, secrets, env access, error leaks. |
-| `medium` | Security plus correctness, resilience, and async safety. |
+| `balanced` | Security plus correctness, resilience, and async safety. |
 | `strict` | All checks, including opinionated architecture and performance rules. |
+
+`medium` remains accepted as a legacy alias for `balanced`.
 
 ## Performance
 `0.5.0` strips much more Python out of the strict static-only score path. Static score runs now use a native fast path for rule selection and scoring, avoid importing live FastAPI route/OpenAPI helpers, and use optimized dev builds for the Rust parser and analysis crates.
@@ -106,7 +156,7 @@ Runtime selection order:
 ## Internal Layout
 - `src/fastapi_doctor/`: CLI, report assembly, live route checks, Python fallback logic.
 - `rust/`: Rust workspace for the static engine, project model, rules, and native extension.
-- `.github/workflows/`: wheel build and GitHub Release publishing.
+- `.github/workflows/`: release, dependency review, and Trivy security scanning.
 - `tests/`: unit and integration tests.
 
 ## Development

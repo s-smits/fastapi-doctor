@@ -5,7 +5,7 @@ description: |
   and architectural health (Ruff/Pyright/Bandit/AST). Use for backend verification,
   route/auth audits, and identifying performance-blocking sync calls in async handlers.
   Keywords: FastAPI, Ruff, Pyright, backend health, OpenAPI, route auth, Pydantic v2
-last_verified: 2026-03-17
+last_verified: 2026-03-27
 ---
 
 # FastAPI Doctor
@@ -88,6 +88,8 @@ Files with >30 import statements depend on too many things. Use `TYPE_CHECKING` 
 
 ## Commands
 
+Ask the user which profile they want before running it: `security`, `balanced`, or `strict`.
+
 Run from the target project's working directory, or pass `--repo-root` when
 scanning another checkout.
 
@@ -103,6 +105,35 @@ uv run fastapi-doctor --json
 
 # Scan a different repo explicitly
 uv run fastapi-doctor --repo-root /path/to/project
+```
+
+If the target repo is still on Python `3.11` or older, install `fastapi-doctor` as a wheel-backed tool in an isolated Python `3.12+` env instead of adding it to the app environment:
+
+```bash
+uv tool install --python 3.12 --index https://s-smits.github.io/fastapi-doctor/simple/ fastapi-doctor
+```
+
+Common layout recipes:
+
+```text
+repo/
+  src/my_service/main.py
+```
+
+```bash
+uv run fastapi-doctor --profile strict --repo-root . --app-module my_service.main:app
+```
+
+```text
+repo/
+  apps/
+    service_api/
+      __init__.py
+      main.py
+```
+
+```bash
+uv run fastapi-doctor --profile strict --repo-root . --code-dir apps/service_api --import-root . --app-module apps.service_api.main:app
 ```
 
 ## Rule Reference

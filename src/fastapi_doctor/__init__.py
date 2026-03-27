@@ -2,10 +2,9 @@
 
 from importlib import import_module
 
-try:
-    from ._version import version as __version__
-except ImportError:
-    __version__ = "0.0.0"
+from ._compat import get_installed_version
+
+__version__ = get_installed_version()
 
 __all__ = [
     "DoctorIssue",

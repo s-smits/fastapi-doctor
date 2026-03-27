@@ -106,6 +106,7 @@ _EXCLUDED_DISCOVERY_DIRS = frozenset(
         "site-packages", "egg-info", "dist-info", "__pypackages__",
     }
 )
+_PREFERRED_DISCOVERY_CONTAINERS = frozenset({"apps", "services", "packages"})
 _APP_FILE_BONUS = {"main.py": 40, "app.py": 35, "api.py": 25, "server.py": 20}
 _APP_FACTORY_NAMES = frozenset({"create_app", "build_app", "make_app", "get_app"})
 _LIBRARY_KEYWORDS = {
@@ -341,9 +342,17 @@ def _infer_layout_from_app_module(repo_root: Path, app_module: str) -> tuple[Pat
         package_init = import_root.joinpath(*module_parts, "__init__.py")
         if module_file.is_file():
             code_dir = import_root / module_parts[0]
+            if import_root == repo_root and len(module_parts) >= 2 and module_parts[0] in _PREFERRED_DISCOVERY_CONTAINERS:
+                nested_code_dir = import_root / module_parts[0] / module_parts[1]
+                if nested_code_dir.exists():
+                    return import_root, nested_code_dir
             return import_root, code_dir if code_dir.exists() else module_file.parent
         if package_init.is_file():
             code_dir = import_root / module_parts[0]
+            if import_root == repo_root and len(module_parts) >= 2 and module_parts[0] in _PREFERRED_DISCOVERY_CONTAINERS:
+                nested_code_dir = import_root / module_parts[0] / module_parts[1]
+                if nested_code_dir.exists():
+                    return import_root, nested_code_dir
             return import_root, code_dir if code_dir.exists() else package_init.parent
     return None
 
@@ -359,6 +368,30 @@ def _score_app_candidate(file_path: Path, attr_name: str) -> int:
     if "api" in rel_parts or "routers" in rel_parts:
         score += 10
     return score
+
+
+def _iter_code_dir_candidates(repo_root: Path) -> list[Path]:
+    try:
+        children = list(repo_root.iterdir())
+    except OSError:
+        return []
+
+    candidates: list[Path] = []
+    for child in children:
+        if not child.is_dir() or child.name.startswith(".") or child.name in _EXCLUDED_DISCOVERY_DIRS:
+            continue
+        candidates.append(child)
+        if child.name not in _PREFERRED_DISCOVERY_CONTAINERS:
+            continue
+        try:
+            nested_children = list(child.iterdir())
+        except OSError:
+            continue
+        for nested_child in nested_children:
+            if not nested_child.is_dir() or nested_child.name.startswith(".") or nested_child.name in _EXCLUDED_DISCOVERY_DIRS:
+                continue
+            candidates.append(nested_child)
+    return candidates
 
 
 def _discover_app_candidate(repo_root: Path) -> tuple[Path, str, str] | None:
@@ -404,50 +437,55 @@ def _discover_app_candidate(repo_root: Path) -> tuple[Path, str, str] | None:
 
 def _discover_code_dir(repo_root: Path) -> Path:
     candidates: list[tuple[int, Path]] = []
-    try:
-        children = list(repo_root.iterdir())
-    except OSError:
-        return repo_root
-    for child in children:
-        if not child.is_dir() or child.name.startswith(".") or child.name in _EXCLUDED_DISCOVERY_DIRS:
-            continue
-        score = 0
-        if (child / "__init__.py").exists():
-            score += 10
-        if (child / "routers").is_dir() or (child / "api").is_dir():
-            score += 30
-        if (child / "main.py").is_file() or (child / "app.py").is_file():
-            score += 25
-        score += min(_count_py_files(child), 20)
+    for child in _iter_code_dir_candidates(repo_root):
+        score = _score_code_dir_candidate(repo_root, child)
         if score:
             candidates.append((score, child))
     return max(candidates, key=lambda item: item[0])[1] if candidates else repo_root
 
 
-def _count_py_files(directory: Path, *, cap: int = 20) -> int:
-    count = 0
+def _score_code_dir_candidate(repo_root: Path, child: Path) -> int:
+    score = 0
+    if (child / "__init__.py").exists():
+        score += 10
+    if (child / "routers").is_dir() or (child / "api").is_dir():
+        score += 30
+    if any((child / name).is_file() for name in ("main.py", "app.py", "api.py", "server.py")):
+        score += 25
+    if child.parent != repo_root and child.parent.name in _PREFERRED_DISCOVERY_CONTAINERS:
+        score += 20
+    if child.name in {"src", "backend"}:
+        score += 20
+    score += _shallow_python_density_score(child, cap=12)
+    return score
 
-    def _walk(current_path: str) -> None:
-        nonlocal count
-        if count >= cap:
-            return
-        try:
-            with os.scandir(current_path) as entries:
-                for entry in entries:
-                    if count >= cap:
-                        return
-                    name = entry.name
-                    if name.startswith(".") or name in _EXCLUDED_DISCOVERY_DIRS:
-                        continue
-                    if entry.is_dir(follow_symlinks=False):
-                        _walk(entry.path)
-                    elif entry.is_file(follow_symlinks=False) and name.endswith(".py"):
-                        count += 1
-        except (PermissionError, OSError):
-            return
 
-    _walk(str(directory))
-    return count
+def _shallow_python_density_score(directory: Path, *, cap: int = 12) -> int:
+    score = 0
+    try:
+        with os.scandir(directory) as entries:
+            for entry in entries:
+                if score >= cap:
+                    break
+                name = entry.name
+                if name.startswith(".") or name in _EXCLUDED_DISCOVERY_DIRS:
+                    continue
+                if entry.is_file(follow_symlinks=False):
+                    if name.endswith(".py"):
+                        score += 1
+                    continue
+                if not entry.is_dir(follow_symlinks=False):
+                    continue
+                child_path = Path(entry.path)
+                if (child_path / "__init__.py").is_file():
+                    score += 4
+                if (child_path / "routers").is_dir() or (child_path / "api").is_dir():
+                    score += 3
+                if any((child_path / filename).is_file() for filename in ("main.py", "app.py", "api.py", "server.py")):
+                    score += 3
+    except (PermissionError, OSError):
+        return 0
+    return min(score, cap)
 
 
 def _fallback_project_layout(*, static_only: bool = False) -> ProjectLayout:

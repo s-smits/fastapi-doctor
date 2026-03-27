@@ -222,6 +222,7 @@ const EXCLUDED_DISCOVERY_DIRS: &[&str] = &[
 ];
 
 const APP_FACTORY_NAMES: &[&str] = &["create_app", "build_app", "make_app", "get_app"];
+const PREFERRED_DISCOVERY_CONTAINERS: &[&str] = &["apps", "services", "packages"];
 
 pub fn resolve_project_context(static_only: bool) -> ProjectContext {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -499,7 +500,19 @@ fn infer_layout_from_app_module(repo_root: &Path, app_module: &str) -> Option<(P
             .fold(import_root.clone(), |path, part| path.join(part))
             .join("__init__.py");
         if module_file.is_file() || package_init.is_file() {
-            let code_dir = import_root.join(module_parts[0]);
+            let code_dir = if import_root == repo_root
+                && module_parts.len() >= 2
+                && PREFERRED_DISCOVERY_CONTAINERS.contains(&module_parts[0])
+            {
+                let nested = import_root.join(module_parts[0]).join(module_parts[1]);
+                if nested.exists() {
+                    nested
+                } else {
+                    import_root.join(module_parts[0])
+                }
+            } else {
+                import_root.join(module_parts[0])
+            };
             let resolved_code_dir = if code_dir.exists() {
                 code_dir
             } else if module_file.is_file() {
@@ -605,30 +618,9 @@ fn score_app_candidate(file_path: &Path, attr_name: &str) -> usize {
 }
 
 fn discover_code_dir(repo_root: &Path) -> PathBuf {
-    let Ok(children) = fs::read_dir(repo_root) else {
-        return repo_root.to_path_buf();
-    };
     let mut candidates = Vec::new();
-    for child in children.flatten() {
-        let path = child.path();
-        let Ok(file_type) = child.file_type() else {
-            continue;
-        };
-        let name = child.file_name().to_string_lossy().to_string();
-        if !file_type.is_dir() || should_skip_name(&name) {
-            continue;
-        }
-        let mut score = 0;
-        if path.join("__init__.py").is_file() {
-            score += 10;
-        }
-        if path.join("routers").is_dir() || path.join("api").is_dir() {
-            score += 30;
-        }
-        if path.join("main.py").is_file() || path.join("app.py").is_file() {
-            score += 25;
-        }
-        score += count_py_files(&path, 20);
+    for path in iter_code_dir_candidates(repo_root) {
+        let score = score_code_dir_candidate(&path);
         if score > 0 {
             candidates.push((score, path));
         }
@@ -640,37 +632,114 @@ fn discover_code_dir(repo_root: &Path) -> PathBuf {
         .unwrap_or_else(|| repo_root.to_path_buf())
 }
 
-fn count_py_files(directory: &Path, cap: usize) -> usize {
-    fn walk(current: &Path, cap: usize, count: &mut usize) {
-        if *count >= cap {
-            return;
-        }
-        let Ok(entries) = fs::read_dir(current) else {
-            return;
+fn score_code_dir_candidate(path: &Path) -> usize {
+    let mut score = 0;
+    if path.join("__init__.py").is_file() {
+        score += 10;
+    }
+    if path.join("routers").is_dir() || path.join("api").is_dir() {
+        score += 30;
+    }
+    if path.join("main.py").is_file()
+        || path.join("app.py").is_file()
+        || path.join("api.py").is_file()
+        || path.join("server.py").is_file()
+    {
+        score += 25;
+    }
+    if path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| PREFERRED_DISCOVERY_CONTAINERS.contains(&name))
+    {
+        score += 20;
+    }
+    if matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some("src") | Some("backend")
+    ) {
+        score += 20;
+    }
+    score + shallow_python_density_score(path, 12)
+}
+
+fn iter_code_dir_candidates(repo_root: &Path) -> Vec<PathBuf> {
+    let Ok(children) = fs::read_dir(repo_root) else {
+        return Vec::new();
+    };
+    let mut candidates = Vec::new();
+    for child in children.flatten() {
+        let path = child.path();
+        let Ok(file_type) = child.file_type() else {
+            continue;
         };
-        for entry in entries.flatten() {
-            if *count >= cap {
-                return;
-            }
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
-            let Ok(file_type) = entry.file_type() else {
+        let name = child.file_name().to_string_lossy().to_string();
+        if !file_type.is_dir() || should_skip_name(&name) {
+            continue;
+        }
+        candidates.push(path.clone());
+        if !PREFERRED_DISCOVERY_CONTAINERS.contains(&name.as_str()) {
+            continue;
+        }
+        let Ok(nested_children) = fs::read_dir(&path) else {
+            continue;
+        };
+        for nested_child in nested_children.flatten() {
+            let nested_path = nested_child.path();
+            let Ok(nested_type) = nested_child.file_type() else {
                 continue;
             };
-            if file_type.is_dir() {
-                if should_skip_name(&name) {
-                    continue;
-                }
-                walk(&path, cap, count);
-            } else if file_type.is_file() && name.ends_with(".py") {
-                *count += 1;
+            let nested_name = nested_child.file_name().to_string_lossy().to_string();
+            if !nested_type.is_dir() || should_skip_name(&nested_name) {
+                continue;
             }
+            candidates.push(nested_path);
+        }
+    }
+    candidates
+}
+
+fn shallow_python_density_score(directory: &Path, cap: usize) -> usize {
+    let Ok(entries) = fs::read_dir(directory) else {
+        return 0;
+    };
+
+    let mut score = 0;
+    for entry in entries.flatten() {
+        if score >= cap {
+            break;
+        }
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_file() {
+            if name.ends_with(".py") {
+                score += 1;
+            }
+            continue;
+        }
+        if !file_type.is_dir() || should_skip_name(&name) {
+            continue;
+        }
+        if path.join("__init__.py").is_file() {
+            score += 4;
+        }
+        if path.join("routers").is_dir() || path.join("api").is_dir() {
+            score += 3;
+        }
+        if path.join("main.py").is_file()
+            || path.join("app.py").is_file()
+            || path.join("api.py").is_file()
+            || path.join("server.py").is_file()
+        {
+            score += 3;
         }
     }
 
-    let mut count = 0;
-    walk(directory, cap, &mut count);
-    count
+    score.min(cap)
 }
 
 fn discover_libraries(layout: &ProjectLayout) -> LibraryInfo {

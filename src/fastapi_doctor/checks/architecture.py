@@ -490,12 +490,25 @@ def check_startup_validation() -> list[DoctorIssue]:
         r"(?:validate_.*_startup|settings\.validate|check_config|verify_env)",
         re.IGNORECASE,
     )
+    app_entrypoint_patterns = re.compile(
+        r"(?:FastAPI\s*\(|def\s+create_app\s*\(|async\s+def\s+create_app\s*\()",
+        re.IGNORECASE,
+    )
+    eager_settings_patterns = re.compile(
+        r"(?:from\s+[\w.]*config\s+import\s+settings|from\s+[\w.]*settings\s+import\s+settings)",
+        re.IGNORECASE,
+    )
 
     for module in project.parsed_python_modules():
         if module.path.name != "main.py":
             continue
+        if not app_entrypoint_patterns.search(module.source):
+            continue
 
-        has_validation = bool(validation_patterns.search(module.source))
+        has_validation = bool(validation_patterns.search(module.source)) or (
+            bool(eager_settings_patterns.search(module.source))
+            and "settings." in module.source
+        )
         if not has_validation:
             issues.append(
                 DoctorIssue(

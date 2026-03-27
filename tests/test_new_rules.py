@@ -2,7 +2,10 @@ import ast
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from fastapi_doctor.checks.architecture import check_async_without_await
+from fastapi_doctor.checks.architecture import (
+    check_async_without_await,
+    check_startup_validation,
+)
 from fastapi_doctor.checks.correctness import (
     check_asyncio_run_in_async_context,
     check_misused_async_constructs,
@@ -84,6 +87,30 @@ def test_check_pydantic_secretstr():
     with patch("fastapi_doctor.project.parsed_python_modules", return_value=[m2]):
         issues = check_pydantic_secretstr()
         assert len(issues) == 0
+
+
+def test_check_startup_validation_skips_router_main_modules():
+    module = MockModule(
+        "app/api/main.py",
+        "from fastapi import APIRouter\n\napi_router = APIRouter()\n",
+    )
+    with patch("fastapi_doctor.project.parsed_python_modules", return_value=[module]):
+        issues = check_startup_validation()
+        assert issues == []
+
+
+def test_check_startup_validation_accepts_eager_settings_bootstrap():
+    module = MockModule(
+        "app/main.py",
+        (
+            "from fastapi import FastAPI\n"
+            "from app.core.config import settings\n\n"
+            "app = FastAPI(title=settings.PROJECT_NAME)\n"
+        ),
+    )
+    with patch("fastapi_doctor.project.parsed_python_modules", return_value=[module]):
+        issues = check_startup_validation()
+        assert issues == []
 
 
 # ── Suppression system tests ────────────────────────────────────────────────

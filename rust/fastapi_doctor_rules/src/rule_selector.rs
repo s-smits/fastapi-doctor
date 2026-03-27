@@ -154,7 +154,7 @@ fn should_run(
                     return false;
                 }
             }
-            "medium" => {
+            "medium" | "balanced" => {
                 if !MEDIUM_SELECTORS
                     .iter()
                     .any(|selector| selector_matches(rule_id, selector))
