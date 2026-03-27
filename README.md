@@ -87,10 +87,10 @@ uv run fastapi-doctor --app-module my_pkg.main:app
 ## Performance
 `0.3.1` moves the static-only path to a native project scan that performs file discovery, source loading, static issue analysis, route extraction, and suppression collection in Rust.
 
-Measured on `toto-scope` with:
+Measured with:
 
 ```bash
-uv run fastapi-doctor --static-only --profile strict --skip-ruff --skip-ty --repo-root /Users/air/Developer/toto-scope
+uv run fastapi-doctor --static-only --profile strict --skip-ruff --skip-ty --repo-root /path/to/project
 ```
 
 | Engine | Strict Static Scan | vs Legacy |
