@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from importlib.metadata import PackageNotFoundError, version as metadata_version
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -63,14 +62,44 @@ def compute_combined_score(
 
     return final, label
 
-def main() -> int:
-    from .models import DoctorReport, PERFECT_SCORE
-    from .runner import run_python_doctor_checks
 
+def _try_native_static_score_fast_path(args: argparse.Namespace) -> int | None:
+    if not args.score or not args.static_only:
+        return None
+    if args.json or args.with_bandit or args.with_tests:
+        return None
+    if not args.skip_ruff or not args.skip_ty:
+        return None
+    if args.fail_on != "none":
+        return None
+
+    from .native_core import score_native_project_auto_v2
+
+    only_rules = args.only_rules.split(",") if args.only_rules else None
+    ignore_rules = args.ignore_rules.split(",") if args.ignore_rules else None
+    return score_native_project_auto_v2(
+        profile=args.profile,
+        only_rules=only_rules,
+        ignore_rules=ignore_rules,
+        skip_structure=args.skip_structure,
+        skip_openapi=args.skip_openapi,
+        static_only=True,
+    )
+
+
+def main() -> int:
     args = parse_args()
     if args.static_only:
         args.skip_app_bootstrap = True
     configure_environment_from_args(args)
+    fast_score = _try_native_static_score_fast_path(args)
+    if fast_score is not None:
+        print(fast_score)
+        return 0
+
+    from .models import DoctorReport, PERFECT_SCORE
+    from .runner import run_python_doctor_checks
+
     repo_root = resolve_repo_root()
     cli_version = get_cli_version()
     quiet = args.json or args.score
@@ -273,13 +302,11 @@ def parse_args() -> argparse.Namespace:
 
 def get_cli_version() -> str:
     try:
-        return metadata_version("fastapi-doctor")
-    except PackageNotFoundError:
-        try:
-            from ._version import version
-        except ImportError:
-            return "0.0.0"
+        from ._version import version
+
         return version
+    except ImportError:
+        return "0.0.0"
 
 
 def build_json_payload(

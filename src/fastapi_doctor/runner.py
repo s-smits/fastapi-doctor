@@ -80,20 +80,12 @@ def run_python_doctor_checks(
     skip_app_bootstrap: bool = False,
 ) -> DoctorReport:
     """Run all opinionated checks and compute a health score."""
-    project.refresh_runtime_config(static_only=skip_app_bootstrap)
-    libraries = project.discover_libraries()
-
     def should_run(rule_id: str) -> bool:
         return _should_run(rule_id, only_rules, ignore_rules, profile)
 
     all_rust_rules = native_core.get_native_rule_ids()
     active_rust_rules = {rule_id for rule_id in all_rust_rules if should_run(rule_id)}
-
-    from .checks.route_checks import check_openapi_schema, check_route_dependency_policies
-
-    route_list_checks = [
-        ("security/missing-auth-dep", check_route_dependency_policies),
-    ]
+    route_list_checks: list[tuple[str, Any]] = []
     native_route_rule_ids = {
         "security/forbidden-write-param",
         "correctness/duplicate-route",
@@ -108,6 +100,12 @@ def run_python_doctor_checks(
         "api-surface/duplicate-operation-id",
         "api-surface/missing-openapi-tags",
     }
+    check_openapi_schema = None
+
+    if project.PROTECTED_ROUTE_RULES and should_run("security/missing-auth-dep"):
+        from .checks.route_checks import check_route_dependency_policies
+
+        route_list_checks.append(("security/missing-auth-dep", check_route_dependency_policies))
 
     issues: list[DoctorIssue] = []
     checks_not_evaluated: list[str] = []
@@ -119,58 +117,80 @@ def run_python_doctor_checks(
     route_list_rule_ids = {rule_id for rule_id, _ in route_list_checks}
     needs_static_routes = any(should_run(rule_id) for rule_id in (route_list_rule_ids | native_route_rule_ids))
 
+    native_suppressions: list[dict] | None = None
     if skip_app_bootstrap:
         checks_not_evaluated = sorted(rule_id for rule_id in openapi_rule_ids if should_run(rule_id))
-    elif not libraries.fastapi:
-        checks_not_evaluated = sorted(rule_id for rule_id in openapi_rule_ids if should_run(rule_id))
-    else:
-        from .app_loader import (
-            build_app_for_doctor,
-            fastapi_runtime_available,
-            iter_api_routes,
+        native_result = native_core.run_native_project_auto_v2(
+            active_rust_rules,
+            include_routes=needs_static_routes,
+            static_only=True,
         )
-        from .static_routes import route_info_from_live_route
+        if native_result is not None:
+            project_context = native_result.get("project_context")
+            if isinstance(project_context, dict) and isinstance(project_context.get("layout"), dict):
+                project.apply_native_project_context(project_context, static_only=True)
+            else:
+                project.refresh_runtime_config(static_only=True)
+            issues.extend(native_result["issues"])
+            native_suppressions = native_result["suppressions"]
+            if needs_static_routes:
+                routes = native_result["routes"]
+                route_count = native_result["route_count"]
+        else:
+            project.refresh_runtime_config(static_only=True)
+    else:
+        project.refresh_runtime_config(static_only=False)
+        libraries = project.discover_libraries()
 
-        if not fastapi_runtime_available():
+        if not libraries.fastapi:
             checks_not_evaluated = sorted(rule_id for rule_id in openapi_rule_ids if should_run(rule_id))
         else:
-            try:
-                live_app = app or build_app_for_doctor()
-                live_routes = iter_api_routes(live_app)
-                routes = [route_info_from_live_route(route) for route in live_routes]
-                route_count = len(routes)
-                openapi_path_count = len(live_app.openapi().get("paths", {}))
-            except Exception as exc:
-                import traceback
+            from .app_loader import (
+                build_app_for_doctor,
+                fastapi_runtime_available,
+                iter_api_routes,
+            )
+            from .static_routes import route_info_from_live_route
 
-                issues.append(
-                    DoctorIssue(
-                        check="doctor/app-bootstrap-failed",
-                        severity="error",
-                        message=f"FastAPI app failed to boot — route-level checks were skipped: {exc}",
-                        path=str(project.APP_MODULE or "unknown"),
-                        category="Doctor",
-                        help="Fix the import/startup error so route, auth, and OpenAPI checks can run.",
-                        detail=traceback.format_exc(),
+            if not fastapi_runtime_available():
+                checks_not_evaluated = sorted(rule_id for rule_id in openapi_rule_ids if should_run(rule_id))
+            else:
+                try:
+                    live_app = app or build_app_for_doctor()
+                    live_routes = iter_api_routes(live_app)
+                    routes = [route_info_from_live_route(route) for route in live_routes]
+                    route_count = len(routes)
+                    openapi_path_count = len(live_app.openapi().get("paths", {}))
+                except Exception as exc:
+                    import traceback
+
+                    issues.append(
+                        DoctorIssue(
+                            check="doctor/app-bootstrap-failed",
+                            severity="error",
+                            message=f"FastAPI app failed to boot — route-level checks were skipped: {exc}",
+                            path=str(project.APP_MODULE or "unknown"),
+                            category="Doctor",
+                            help="Fix the import/startup error so route, auth, and OpenAPI checks can run.",
+                            detail=traceback.format_exc(),
+                        )
                     )
-                )
-                checks_not_evaluated = sorted(
-                    rule_id
-                    for rule_id in openapi_rule_ids
-                    if should_run(rule_id)
-                )
+                    checks_not_evaluated = sorted(
+                        rule_id
+                        for rule_id in openapi_rule_ids
+                        if should_run(rule_id)
+                    )
 
-    native_result = native_core.run_native_project_v2(
-        active_rust_rules,
-        include_routes=needs_static_routes,
-    )
-    native_suppressions: list[dict] | None = None
-    if native_result is not None:
-        issues.extend(native_result["issues"])
-        native_suppressions = native_result["suppressions"]
-        if needs_static_routes and not routes:
-            routes = native_result["routes"]
-            route_count = native_result["route_count"]
+        native_result = native_core.run_native_project_v2(
+            active_rust_rules,
+            include_routes=needs_static_routes,
+        )
+        if native_result is not None:
+            issues.extend(native_result["issues"])
+            native_suppressions = native_result["suppressions"]
+            if needs_static_routes and not routes:
+                routes = native_result["routes"]
+                route_count = native_result["route_count"]
 
     if routes:
         for rule_id, check_func in route_list_checks:
@@ -178,6 +198,10 @@ def run_python_doctor_checks(
                 issues.extend(check_func(routes))
 
     if live_app is not None and any(should_run(rule_id) for rule_id in openapi_rule_ids):
+        if check_openapi_schema is None:
+            from .checks.route_checks import check_openapi_schema as _check_openapi_schema
+
+            check_openapi_schema = _check_openapi_schema
         issues.extend(check_openapi_schema(live_app))
 
     if only_rules:

@@ -169,6 +169,46 @@ def _native_effective_config(native_context: dict[str, Any] | None) -> dict[str,
     return payload if isinstance(payload, dict) else None
 
 
+def apply_native_project_context(native_context: dict[str, Any], *, static_only: bool = False) -> ProjectLayout:
+    global REPO_ROOT, IMPORT_ROOT, OWN_CODE_DIR, APP_MODULE, VENDORED_LIB
+    global _PROJECT_LAYOUT
+    global _CONFIG_SIGNATURE, _PARSED_MODULE_CACHE, _LIBRARY_INFO_CACHE, _STATIC_ONLY_DISCOVERY
+    global _NATIVE_PROJECT_CONTEXT
+
+    native_layout = native_context["layout"]
+    layout = ProjectLayout(
+        repo_root=Path(native_layout["repo_root"]),
+        import_root=Path(native_layout["import_root"]),
+        code_dir=Path(native_layout["code_dir"]),
+        app_module=native_layout.get("app_module"),
+        discovery_source=native_layout["discovery_source"],
+    )
+
+    REPO_ROOT = layout.repo_root
+    IMPORT_ROOT = layout.import_root
+    OWN_CODE_DIR = layout.code_dir
+    APP_MODULE = layout.app_module
+    VENDORED_LIB = None
+    _PROJECT_LAYOUT = layout
+    _NATIVE_PROJECT_CONTEXT = native_context
+
+    native_effective_config = _native_effective_config(native_context)
+    if native_effective_config is not None:
+        _apply_effective_config(native_effective_config)
+    else:
+        _apply_effective_config(_load_doctor_config())
+
+    _STATIC_ONLY_DISCOVERY = static_only
+    _CONFIG_SIGNATURE = _current_config_signature(static_only=static_only)
+    _PARSED_MODULE_CACHE = None
+    _LIBRARY_INFO_CACHE = None
+
+    if isinstance(native_context.get("libraries"), dict):
+        _LIBRARY_INFO_CACHE = _library_info_from_payload(native_context["libraries"])
+
+    return layout
+
+
 def _as_string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -465,22 +505,11 @@ def _fallback_project_layout(*, static_only: bool = False) -> ProjectLayout:
 
 
 def refresh_runtime_config(*, static_only: bool = False) -> ProjectLayout:
-    global REPO_ROOT, IMPORT_ROOT, OWN_CODE_DIR, APP_MODULE, VENDORED_LIB
-    global _PROJECT_LAYOUT
-    global _CONFIG_SIGNATURE, _PARSED_MODULE_CACHE, _LIBRARY_INFO_CACHE, _STATIC_ONLY_DISCOVERY
     global _NATIVE_PROJECT_CONTEXT
 
     native_context = _load_native_project_context(static_only=static_only)
     if native_context and isinstance(native_context.get("layout"), dict):
-        native_layout = native_context["layout"]
-        layout = ProjectLayout(
-            repo_root=Path(native_layout["repo_root"]),
-            import_root=Path(native_layout["import_root"]),
-            code_dir=Path(native_layout["code_dir"]),
-            app_module=native_layout.get("app_module"),
-            discovery_source=native_layout["discovery_source"],
-        )
-        _NATIVE_PROJECT_CONTEXT = native_context
+        return apply_native_project_context(native_context, static_only=static_only)
     else:
         layout = _fallback_project_layout(static_only=static_only)
         _NATIVE_PROJECT_CONTEXT = None
@@ -501,9 +530,6 @@ def refresh_runtime_config(*, static_only: bool = False) -> ProjectLayout:
     _CONFIG_SIGNATURE = _current_config_signature(static_only=static_only)
     _PARSED_MODULE_CACHE = None
     _LIBRARY_INFO_CACHE = None
-
-    if _NATIVE_PROJECT_CONTEXT and isinstance(_NATIVE_PROJECT_CONTEXT.get("libraries"), dict):
-        _LIBRARY_INFO_CACHE = _library_info_from_payload(_NATIVE_PROJECT_CONTEXT["libraries"])
 
     return layout
 
@@ -672,6 +698,7 @@ __all__ = [
     "_discover_app_candidate",
     "discover_libraries",
     "ensure_runtime_config",
+    "apply_native_project_context",
     "get_effective_config",
     "get_project_layout",
     "own_python_files",

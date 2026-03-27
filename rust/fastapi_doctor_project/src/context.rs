@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use fastapi_doctor_core::Config;
 use serde::Deserialize;
 
 #[derive(Debug, Clone)]
@@ -116,6 +117,23 @@ pub struct EffectiveProjectConfig {
     pub api: ApiSettings,
     pub security: SecuritySettings,
     pub scan: ScanSettings,
+}
+
+impl EffectiveProjectConfig {
+    pub fn to_core_config(&self) -> Config {
+        Config {
+            import_bloat_threshold: self.architecture.import_bloat,
+            giant_function_threshold: self.architecture.giant_function,
+            large_function_threshold: self.architecture.large_function,
+            deep_nesting_threshold: self.architecture.deep_nesting,
+            god_module_threshold: self.architecture.god_module,
+            fat_route_handler_threshold: self.architecture.fat_route_handler,
+            should_be_model_mode: self.pydantic.should_be_model.clone(),
+            forbidden_write_params: self.security.forbidden_write_params.clone(),
+            create_post_prefixes: self.api.create_post_prefixes.clone(),
+            tag_required_prefixes: self.api.tag_required_prefixes.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

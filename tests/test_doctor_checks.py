@@ -430,6 +430,45 @@ def test_main_bootstraps_ruff_with_uvx(monkeypatch, tmp_path: Path, capsys) -> N
     assert capsys.readouterr().out.strip() == "100"
 
 
+def test_main_uses_native_static_score_fast_path(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        cli_module,
+        "parse_args",
+        lambda: SimpleNamespace(
+            static_only=True,
+            json=False,
+            score=True,
+            skip_ruff=True,
+            skip_ty=True,
+            with_bandit=False,
+            with_tests=False,
+            skip_structure=False,
+            skip_openapi=False,
+            fail_on="none",
+            profile="strict",
+            only_rules=None,
+            ignore_rules=None,
+            verbose=False,
+            repo_root=None,
+            code_dir=None,
+            import_root=None,
+            app_module=None,
+            skip_app_bootstrap=False,
+            pytest_args="",
+        ),
+    )
+    monkeypatch.setattr(cli_module, "configure_environment_from_args", lambda args: None)
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: (_ for _ in ()).throw(AssertionError("slow path should not resolve repo root")))
+    monkeypatch.setattr(cli_module, "get_cli_version", lambda: (_ for _ in ()).throw(AssertionError("slow path should not load version")))
+
+    import fastapi_doctor.native_core as native_core_module
+
+    monkeypatch.setattr(native_core_module, "score_native_project_auto_v2", lambda **kwargs: 77)
+
+    assert cli_module.main() == 0
+    assert capsys.readouterr().out.strip() == "77"
+
+
 def test_route_checks_legacy_exports_are_lazy() -> None:
     route_checks = importlib.reload(route_checks_module)
 
@@ -795,13 +834,7 @@ def test_skip_app_bootstrap_requests_native_routes(monkeypatch, tmp_path: Path) 
     module = _reload_doctor(monkeypatch, tmp_path, code_dir="pkg")
     seen: list[bool] = []
 
-    monkeypatch.setattr(
-        project_module,
-        "discover_libraries",
-        lambda: project_module.LibraryInfo(fastapi=True),
-    )
-
-    def _fake_native(active_rules, *, include_routes=True):  # type: ignore[unused-argument]
+    def _fake_native(active_rules, *, include_routes=True, static_only=True):  # type: ignore[unused-argument]
         seen.append(include_routes)
         return {
             "issues": [],
@@ -815,7 +848,7 @@ def test_skip_app_bootstrap_requests_native_routes(monkeypatch, tmp_path: Path) 
             "checks_not_evaluated": [],
         }
 
-    monkeypatch.setattr(runner_module.native_core, "run_native_project_v2", _fake_native)
+    monkeypatch.setattr(runner_module.native_core, "run_native_project_auto_v2", _fake_native)
 
     module.run_python_doctor_checks(profile="strict", skip_app_bootstrap=True)
 
@@ -830,13 +863,7 @@ def test_static_only_without_route_rules_skips_native_routes(monkeypatch, tmp_pa
     module = _reload_doctor(monkeypatch, tmp_path, code_dir="pkg")
     seen: list[bool] = []
 
-    monkeypatch.setattr(
-        project_module,
-        "discover_libraries",
-        lambda: project_module.LibraryInfo(fastapi=True),
-    )
-
-    def _fake_native(active_rules, *, include_routes=True):  # type: ignore[unused-argument]
+    def _fake_native(active_rules, *, include_routes=True, static_only=True):  # type: ignore[unused-argument]
         seen.append(include_routes)
         return {
             "issues": [],
@@ -850,7 +877,7 @@ def test_static_only_without_route_rules_skips_native_routes(monkeypatch, tmp_pa
             "checks_not_evaluated": [],
         }
 
-    monkeypatch.setattr(runner_module.native_core, "run_native_project_v2", _fake_native)
+    monkeypatch.setattr(runner_module.native_core, "run_native_project_auto_v2", _fake_native)
 
     module.run_python_doctor_checks(
         only_rules={"security/assert-in-production"},

@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use fastapi_doctor_core::{path_to_string, ModuleRecord};
 use rayon::prelude::*;
 
+use crate::context::resolve_project_context;
 use crate::metadata::ProjectMetadata;
 
 #[derive(Debug, Clone)]
@@ -61,6 +62,19 @@ impl ProjectFilesWalker {
 pub struct LoadedProject {
     pub metadata: ProjectMetadata,
     pub modules: Vec<ModuleRecord>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LoadedProjectBundle {
+    pub context: crate::ProjectContext,
+    pub project: LoadedProject,
+}
+
+pub fn load_current_project_bundle(static_only: bool) -> Result<LoadedProjectBundle, String> {
+    let context = resolve_project_context(static_only);
+    let metadata = ProjectMetadata::from_context(&context);
+    let project = load_project_modules(metadata)?;
+    Ok(LoadedProjectBundle { context, project })
 }
 
 pub fn load_project_modules(metadata: ProjectMetadata) -> Result<LoadedProject, String> {

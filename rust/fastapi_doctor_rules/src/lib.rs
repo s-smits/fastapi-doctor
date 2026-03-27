@@ -16,3 +16,4 @@ pub use engine::{
     RuleSelection,
 };
 pub use registry::StaticRule;
+pub use rule_selector::select_rule_ids;

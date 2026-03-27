@@ -8,7 +8,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/s-smits/fastapi-doctor"
@@ -20,3 +20,18 @@ rustpython-parser = "0.4.0"
 pyo3 = { version = "0.23.5", features = ["abi3-py312"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
+
+[profile.dev.package.fastapi_doctor_core]
+opt-level = 3
+
+[profile.dev.package.fastapi_doctor_project]
+opt-level = 3
+
+[profile.dev.package.fastapi_doctor_rules]
+opt-level = 3
+
+[profile.dev.package."fastapi-doctor-native"]
+opt-level = 3
+
+[profile.dev.package.rustpython-parser]
+opt-level = 3

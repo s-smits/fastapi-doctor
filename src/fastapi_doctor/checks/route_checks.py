@@ -3,16 +3,16 @@ from __future__ import annotations
 """Active Python route checks plus lazy compatibility shims."""
 
 from importlib import import_module
-from typing import Any
-
-try:
-    from fastapi import FastAPI
-except ImportError:  # pragma: no cover
-    FastAPI = Any  # type: ignore[assignment]
+from typing import TYPE_CHECKING, Any
 
 from .. import project
 from ..models import DoctorIssue
 from ..static_routes import RouteInfo
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
+else:  # pragma: no cover
+    FastAPI = Any  # type: ignore[assignment]
 
 _LEGACY_EXPORTS = frozenset({
     "check_write_route_parameters",

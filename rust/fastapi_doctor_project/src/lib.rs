@@ -8,6 +8,6 @@ pub use context::{
 };
 pub use metadata::ProjectMetadata;
 pub use walk::{
-    find_alembic_env_files, load_project_modules, LoadedProject, ProjectFilesFilter,
-    ProjectFilesWalker,
+    find_alembic_env_files, load_current_project_bundle, load_project_modules, LoadedProject,
+    LoadedProjectBundle, ProjectFilesFilter, ProjectFilesWalker,
 };

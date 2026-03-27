@@ -1,5 +1,7 @@
 # fastapi-doctor
 
+[![Socket Supply Chain Scan](https://github.com/s-smits/fastapi-doctor/actions/workflows/virus-scan.yml/badge.svg)](https://github.com/s-smits/fastapi-doctor/actions/workflows/virus-scan.yml)
+
 `fastapi-doctor` is an agent-first backend verifier for FastAPI and Python services. It enforces route contracts, async safety, security boundaries, and structural correctness with deterministic static analysis.
 
 ## Why This Exists
@@ -22,6 +24,7 @@ LLM agents are good at local edits and weak at repo-wide invariants. `fastapi-do
 - Uses a Rust-powered static engine with Python fallback.
 - Runs route/OpenAPI checks, architecture checks, security checks, performance checks, and Pydantic checks.
 - Supports machine-readable JSON for agent workflows.
+- Runs a scheduled Socket supply-chain scan in GitHub Actions for Python and Rust dependencies, with malware-focused checks that are free for open source repositories.
 
 ## Installation
 
@@ -85,7 +88,7 @@ uv run fastapi-doctor --app-module my_pkg.main:app
 | `strict` | All checks, including opinionated architecture and performance rules. |
 
 ## Performance
-`0.4.1` trims more Python startup overhead from the static-only path while keeping the native project bundle responsible for discovery, config loading, route extraction, route-policy checks, and suppression collection.
+`0.5.0` strips much more Python out of the strict static-only score path. Static score runs now use a native fast path for rule selection and scoring, avoid importing live FastAPI route/OpenAPI helpers, and use optimized dev builds for the Rust parser and analysis crates.
 
 Measured with:
 
@@ -93,7 +96,7 @@ Measured with:
 uv run fastapi-doctor --static-only --profile strict --skip-ruff --skip-ty --repo-root /path/to/project
 ```
 
-On the maintainer repo, CLI import dropped from `0.1865s` with the legacy Python runner to `0.0419s` with the current path, and a strict static-only self-scan dropped from `0.6663s` cold / `0.6401s` warm to `0.2362s` cold / `0.2276s` warm. On a representative external backend, the same strict static-only run held score parity while improving from `11.6632s` cold / `11.0076s` warm to `1.1090s` cold / `1.1517s` warm.
+Measured against the same command shape, `0.5.0` improves CLI import from `0.0522s` in `0.4.1` to `0.0262s`, and improves a strict static-only self-scan from `0.2451s` cold / `0.2229s` warm to `0.0449s` cold / `0.0438s` warm. On a representative external backend, the same strict static-only run keeps score parity while improving from `1.0879s` cold / `1.0758s` warm in `0.4.1` to `0.5652s` cold / `0.5422s` warm in `0.5.0`.
 
 ## Native Runtime
 Runtime selection order:
@@ -125,7 +128,7 @@ PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv build
 ```
 
 ## Release Flow
-Push a tag like `v0.4.1` and GitHub Actions will:
+Push a tag like `v0.5.0` and GitHub Actions will:
 - Validate that the tag matches `rust/Cargo.toml`
 - Build platform wheels
 - Build an sdist

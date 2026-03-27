@@ -1,5 +1,34 @@
 use crate::registry::StaticRule;
 
+const SECURITY_SELECTORS: &[&str] = &[
+    "security/*",
+    "pydantic/sensitive-field-type",
+    "pydantic/extra-allow-on-request",
+    "config/direct-env-access",
+];
+
+const MEDIUM_SELECTORS: &[&str] = &[
+    "security/*",
+    "pydantic/sensitive-field-type",
+    "pydantic/extra-allow-on-request",
+    "config/direct-env-access",
+    "correctness/*",
+    "resilience/*",
+    "config/*",
+    "pydantic/mutable-default",
+    "pydantic/deprecated-validator",
+    "architecture/async-without-await",
+    "architecture/avoid-sys-exit",
+    "architecture/engine-pool-pre-ping",
+    "architecture/missing-startup-validation",
+    "architecture/passthrough-function",
+    "architecture/print-in-production",
+    "api-surface/missing-pagination",
+    "api-surface/missing-operation-id",
+    "api-surface/duplicate-operation-id",
+    "api-surface/missing-openapi-tags",
+];
+
 pub fn parse_static_rule(rule_id: &str) -> Option<StaticRule> {
     Some(match rule_id {
         "architecture/giant-function" => StaticRule::ArchitectureGiantFunction,
@@ -67,4 +96,108 @@ pub fn parse_static_rule(rule_id: &str) -> Option<StaticRule> {
         "resilience/broad-except-no-context" => StaticRule::ResilienceBroadExceptNoContext,
         _ => return None,
     })
+}
+
+pub fn select_rule_ids(
+    profile: Option<&str>,
+    only_rules: &[String],
+    ignore_rules: &[String],
+    exclude_rules: &[String],
+    skip_structure: bool,
+    skip_openapi: bool,
+) -> Vec<String> {
+    StaticRule::all()
+        .iter()
+        .map(|rule| rule.rule_id())
+        .filter(|rule_id| {
+            should_run(
+                rule_id,
+                profile,
+                only_rules,
+                ignore_rules,
+                exclude_rules,
+                skip_structure,
+                skip_openapi,
+            )
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+fn selector_matches(rule_id: &str, selector: &str) -> bool {
+    let selector = selector.trim_end_matches('*');
+    rule_id == selector || rule_id.starts_with(selector)
+}
+
+fn should_run(
+    rule_id: &str,
+    profile: Option<&str>,
+    only_rules: &[String],
+    ignore_rules: &[String],
+    exclude_rules: &[String],
+    skip_structure: bool,
+    skip_openapi: bool,
+) -> bool {
+    if !only_rules.is_empty() {
+        return only_rules
+            .iter()
+            .any(|selector| selector_matches(rule_id, selector));
+    }
+
+    if let Some(profile) = profile {
+        match profile {
+            "security" => {
+                if !SECURITY_SELECTORS
+                    .iter()
+                    .any(|selector| selector_matches(rule_id, selector))
+                {
+                    return false;
+                }
+            }
+            "medium" => {
+                if !MEDIUM_SELECTORS
+                    .iter()
+                    .any(|selector| selector_matches(rule_id, selector))
+                {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if skip_structure
+        && [
+            "architecture/",
+            "correctness/",
+            "pydantic/",
+            "resilience/",
+            "security/",
+            "config/",
+        ]
+        .iter()
+        .any(|selector| selector_matches(rule_id, selector))
+    {
+        return false;
+    }
+
+    if skip_openapi && selector_matches(rule_id, "api-surface/") {
+        return false;
+    }
+
+    if ignore_rules
+        .iter()
+        .any(|selector| selector_matches(rule_id, selector))
+    {
+        return false;
+    }
+
+    if exclude_rules
+        .iter()
+        .any(|selector| selector_matches(rule_id, selector))
+    {
+        return false;
+    }
+
+    true
 }

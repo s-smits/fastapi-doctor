@@ -1,15 +1,11 @@
 """Public package API for fastapi-doctor."""
 
 from importlib import import_module
-from importlib.metadata import PackageNotFoundError, version as metadata_version
 
 try:
     from ._version import version as __version__
 except ImportError:
-    try:
-        __version__ = metadata_version("fastapi-doctor")
-    except PackageNotFoundError:
-        __version__ = "0.0.0"
+    __version__ = "0.0.0"
 
 __all__ = [
     "DoctorIssue",
