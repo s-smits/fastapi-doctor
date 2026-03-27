@@ -25,6 +25,19 @@ LLM agents are good at local edits and weak at repo-wide invariants. `fastapi-do
 
 ## Installation
 
+### Prebuilt Wheels
+Install from the package index hosted on GitHub Pages:
+
+```bash
+uv tool install --index https://s-smits.github.io/fastapi-doctor/simple/ fastapi-doctor
+```
+
+`uv` will pick the matching Linux, macOS, or Windows wheel automatically from the index, and fall back to the sdist only if no compatible wheel exists. This is the right path for CI as well:
+
+```bash
+uvx --index https://s-smits.github.io/fastapi-doctor/simple/ fastapi-doctor --version
+```
+
 ### From Source
 ```bash
 git clone https://github.com/s-smits/fastapi-doctor.git
@@ -37,15 +50,8 @@ Run it from the checked-out repo with:
 uv run fastapi-doctor --profile strict --repo-root /path/to/your/project
 ```
 
-### From GitHub Release Assets
-If you want a prebuilt wheel instead of building from source, install from a GitHub Release artifact:
-
-```bash
-uv tool install --from "https://github.com/s-smits/fastapi-doctor/releases/download/v0.3.0/<wheel-file-name>.whl" fastapi-doctor
-```
-
 ## GitHub Release Artifacts
-Tagged releases publish wheel files and an sdist to [GitHub Releases](https://github.com/s-smits/fastapi-doctor/releases).
+Tagged releases publish wheel files and an sdist to [GitHub Releases](https://github.com/s-smits/fastapi-doctor/releases), and the release workflow updates a PEP 503 simple index on GitHub Pages at [s-smits.github.io/fastapi-doctor/simple/](https://s-smits.github.io/fastapi-doctor/simple/).
 
 Each release uploads:
 - Linux wheel
@@ -55,11 +61,6 @@ Each release uploads:
 - Source distribution
 
 The native extension is built with `abi3` for Python `3.12+`, so each platform only needs one wheel per architecture instead of one wheel per Python minor version.
-
-To install from a downloaded GitHub Release asset:
-```bash
-uv tool install --from /path/to/fastapi_doctor-0.3.0-*.whl fastapi-doctor
-```
 
 ## Common Invocations
 ```bash
@@ -121,14 +122,11 @@ PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo test --manifest-path rust/doctor_cor
 
 ### Local Native Development
 ```bash
-# Build and install the extension into the active environment
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uvx maturin develop --release
+# Reinstall the editable package, including native changes
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv sync --extra dev --reinstall-package fastapi-doctor
 
-# Build local wheel artifacts
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv build --wheel
-
-# Build an sdist
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv build --sdist
+# Build local wheel and sdist artifacts through the standard frontend
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv build
 ```
 
 ## Release Flow
@@ -137,3 +135,4 @@ Push a tag like `v0.3.0` and GitHub Actions will:
 - Build platform wheels
 - Build an sdist
 - Attach all artifacts to a GitHub Release
+- Publish/update the simple package index on GitHub Pages

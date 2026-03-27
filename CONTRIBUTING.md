@@ -19,14 +19,11 @@ PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo test --manifest-path rust/doctor_cor
 The Rust extension lives under `rust/doctor_core/`.
 
 ```bash
-# Install the extension into the active environment
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uvx maturin develop --release
+# Reinstall the editable package, including Rust changes
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv sync --extra dev --reinstall-package fastapi-doctor
 
-# Build wheel artifacts locally
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv build --wheel
-
-# Build an sdist locally
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv build --sdist
+# Build release artifacts locally through the standard PEP 517 frontend
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv build
 ```
 
 ## Releases
@@ -43,6 +40,7 @@ The GitHub Actions release workflow will:
 - Build wheels for Linux, Windows, macOS Intel, and macOS Apple Silicon.
 - Build a source distribution.
 - Attach all artifacts to the corresponding GitHub Release.
+- Publish a GitHub Pages simple index so `uv` and `pip` can auto-select the right wheel.
 
 ## Design Notes
 
