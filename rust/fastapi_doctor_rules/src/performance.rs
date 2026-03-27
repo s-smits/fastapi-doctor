@@ -1,14 +1,24 @@
-use std::collections::HashSet;
 use rustpython_parser::ast::{self, Expr, Ranged, Stmt};
+use std::collections::HashSet;
 
-use fastapi_doctor_core::{Issue, ModuleIndex};
 use fastapi_doctor_core::ast_helpers::*;
+use fastapi_doctor_core::{Issue, ModuleIndex};
 
 pub(crate) fn collect_regex_in_loop_issues(module: &ModuleIndex, suite: &ast::Suite) -> Vec<Issue> {
     if !module.source.contains("re.") {
         return Vec::new();
     }
-    let re_funcs: HashSet<&str> = ["compile", "match", "search", "findall", "fullmatch", "sub", "split"].into_iter().collect();
+    let re_funcs: HashSet<&str> = [
+        "compile",
+        "match",
+        "search",
+        "findall",
+        "fullmatch",
+        "sub",
+        "split",
+    ]
+    .into_iter()
+    .collect();
     let mut issues = Vec::new();
     let mut seen_lines = HashSet::new();
 
@@ -23,35 +33,113 @@ pub(crate) fn collect_regex_in_loop_issues(module: &ModuleIndex, suite: &ast::Su
         for stmt in stmts {
             match stmt {
                 Stmt::For(node) => {
-                    walk_for_regex_in_loop(&node.body, loop_depth + 1, module, re_funcs, issues, seen_lines);
-                    walk_for_regex_in_loop(&node.orelse, loop_depth, module, re_funcs, issues, seen_lines);
+                    walk_for_regex_in_loop(
+                        &node.body,
+                        loop_depth + 1,
+                        module,
+                        re_funcs,
+                        issues,
+                        seen_lines,
+                    );
+                    walk_for_regex_in_loop(
+                        &node.orelse,
+                        loop_depth,
+                        module,
+                        re_funcs,
+                        issues,
+                        seen_lines,
+                    );
                 }
                 Stmt::AsyncFor(node) => {
-                    walk_for_regex_in_loop(&node.body, loop_depth + 1, module, re_funcs, issues, seen_lines);
-                    walk_for_regex_in_loop(&node.orelse, loop_depth, module, re_funcs, issues, seen_lines);
+                    walk_for_regex_in_loop(
+                        &node.body,
+                        loop_depth + 1,
+                        module,
+                        re_funcs,
+                        issues,
+                        seen_lines,
+                    );
+                    walk_for_regex_in_loop(
+                        &node.orelse,
+                        loop_depth,
+                        module,
+                        re_funcs,
+                        issues,
+                        seen_lines,
+                    );
                 }
                 Stmt::While(node) => {
-                    walk_for_regex_in_loop(&node.body, loop_depth + 1, module, re_funcs, issues, seen_lines);
-                    walk_for_regex_in_loop(&node.orelse, loop_depth, module, re_funcs, issues, seen_lines);
+                    walk_for_regex_in_loop(
+                        &node.body,
+                        loop_depth + 1,
+                        module,
+                        re_funcs,
+                        issues,
+                        seen_lines,
+                    );
+                    walk_for_regex_in_loop(
+                        &node.orelse,
+                        loop_depth,
+                        module,
+                        re_funcs,
+                        issues,
+                        seen_lines,
+                    );
                 }
                 Stmt::If(node) => {
-                    walk_for_regex_in_loop(&node.body, loop_depth, module, re_funcs, issues, seen_lines);
-                    walk_for_regex_in_loop(&node.orelse, loop_depth, module, re_funcs, issues, seen_lines);
+                    walk_for_regex_in_loop(
+                        &node.body, loop_depth, module, re_funcs, issues, seen_lines,
+                    );
+                    walk_for_regex_in_loop(
+                        &node.orelse,
+                        loop_depth,
+                        module,
+                        re_funcs,
+                        issues,
+                        seen_lines,
+                    );
                 }
                 Stmt::With(node) => {
-                    walk_for_regex_in_loop(&node.body, loop_depth, module, re_funcs, issues, seen_lines);
+                    walk_for_regex_in_loop(
+                        &node.body, loop_depth, module, re_funcs, issues, seen_lines,
+                    );
                 }
                 Stmt::AsyncWith(node) => {
-                    walk_for_regex_in_loop(&node.body, loop_depth, module, re_funcs, issues, seen_lines);
+                    walk_for_regex_in_loop(
+                        &node.body, loop_depth, module, re_funcs, issues, seen_lines,
+                    );
                 }
                 Stmt::Try(node) => {
-                    walk_for_regex_in_loop(&node.body, loop_depth, module, re_funcs, issues, seen_lines);
+                    walk_for_regex_in_loop(
+                        &node.body, loop_depth, module, re_funcs, issues, seen_lines,
+                    );
                     for handler in &node.handlers {
                         let ast::ExceptHandler::ExceptHandler(handler) = handler;
-                        walk_for_regex_in_loop(&handler.body, loop_depth, module, re_funcs, issues, seen_lines);
+                        walk_for_regex_in_loop(
+                            &handler.body,
+                            loop_depth,
+                            module,
+                            re_funcs,
+                            issues,
+                            seen_lines,
+                        );
                     }
-                    walk_for_regex_in_loop(&node.orelse, loop_depth, module, re_funcs, issues, seen_lines);
-                    walk_for_regex_in_loop(&node.finalbody, loop_depth, module, re_funcs, issues, seen_lines);
+                    walk_for_regex_in_loop(
+                        &node.orelse,
+                        loop_depth,
+                        module,
+                        re_funcs,
+                        issues,
+                        seen_lines,
+                    );
+                    walk_for_regex_in_loop(
+                        &node.finalbody,
+                        loop_depth,
+                        module,
+                        re_funcs,
+                        issues,
+                        seen_lines,
+                    );
                 }
                 Stmt::FunctionDef(node) => {
                     walk_for_regex_in_loop(&node.body, 0, module, re_funcs, issues, seen_lines);
@@ -102,7 +190,10 @@ pub(crate) fn collect_regex_in_loop_issues(module: &ModuleIndex, suite: &ast::Su
 
 // ── Performance: n-plus-one-hint ────────────────────────────────────────
 
-pub(crate) fn collect_n_plus_one_hint_issues(module: &ModuleIndex, suite: &ast::Suite) -> Vec<Issue> {
+pub(crate) fn collect_n_plus_one_hint_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
     let lower_source = module.source.to_ascii_lowercase();
     if !["session", "db", "database", "conn", "connection", "cursor"]
         .iter()
@@ -110,8 +201,24 @@ pub(crate) fn collect_n_plus_one_hint_issues(module: &ModuleIndex, suite: &ast::
     {
         return Vec::new();
     }
-    let db_attrs: HashSet<&str> = ["query", "execute", "get", "filter", "filter_by", "all", "first", "one", "scalars", "scalar"].into_iter().collect();
-    let session_hints: HashSet<&str> = ["session", "db", "database", "conn", "connection", "cursor"].into_iter().collect();
+    let db_attrs: HashSet<&str> = [
+        "query",
+        "execute",
+        "get",
+        "filter",
+        "filter_by",
+        "all",
+        "first",
+        "one",
+        "scalars",
+        "scalar",
+    ]
+    .into_iter()
+    .collect();
+    let session_hints: HashSet<&str> =
+        ["session", "db", "database", "conn", "connection", "cursor"]
+            .into_iter()
+            .collect();
     let mut issues = Vec::new();
     let mut seen_lines: HashSet<usize> = HashSet::new();
 
@@ -134,8 +241,26 @@ pub(crate) fn collect_n_plus_one_hint_issues(module: &ModuleIndex, suite: &ast::
                             new_names.insert(n.id.to_string());
                         }
                     });
-                    walk_for_db_in_loop(&node.body, &new_names, true, module, db_attrs, session_hints, issues, seen_lines);
-                    walk_for_db_in_loop(&node.orelse, loop_names, in_loop, module, db_attrs, session_hints, issues, seen_lines);
+                    walk_for_db_in_loop(
+                        &node.body,
+                        &new_names,
+                        true,
+                        module,
+                        db_attrs,
+                        session_hints,
+                        issues,
+                        seen_lines,
+                    );
+                    walk_for_db_in_loop(
+                        &node.orelse,
+                        loop_names,
+                        in_loop,
+                        module,
+                        db_attrs,
+                        session_hints,
+                        issues,
+                        seen_lines,
+                    );
                 }
                 Stmt::While(node) => {
                     let mut new_names = loop_names.clone();
@@ -144,30 +269,120 @@ pub(crate) fn collect_n_plus_one_hint_issues(module: &ModuleIndex, suite: &ast::
                             new_names.insert(n.id.to_string());
                         }
                     });
-                    walk_for_db_in_loop(&node.body, &new_names, true, module, db_attrs, session_hints, issues, seen_lines);
-                    walk_for_db_in_loop(&node.orelse, loop_names, in_loop, module, db_attrs, session_hints, issues, seen_lines);
+                    walk_for_db_in_loop(
+                        &node.body,
+                        &new_names,
+                        true,
+                        module,
+                        db_attrs,
+                        session_hints,
+                        issues,
+                        seen_lines,
+                    );
+                    walk_for_db_in_loop(
+                        &node.orelse,
+                        loop_names,
+                        in_loop,
+                        module,
+                        db_attrs,
+                        session_hints,
+                        issues,
+                        seen_lines,
+                    );
                 }
                 Stmt::FunctionDef(node) => {
-                    walk_for_db_in_loop(&node.body, &HashSet::new(), false, module, db_attrs, session_hints, issues, seen_lines);
+                    walk_for_db_in_loop(
+                        &node.body,
+                        &HashSet::new(),
+                        false,
+                        module,
+                        db_attrs,
+                        session_hints,
+                        issues,
+                        seen_lines,
+                    );
                 }
                 Stmt::AsyncFunctionDef(node) => {
-                    walk_for_db_in_loop(&node.body, &HashSet::new(), false, module, db_attrs, session_hints, issues, seen_lines);
+                    walk_for_db_in_loop(
+                        &node.body,
+                        &HashSet::new(),
+                        false,
+                        module,
+                        db_attrs,
+                        session_hints,
+                        issues,
+                        seen_lines,
+                    );
                 }
                 Stmt::ClassDef(node) => {
-                    walk_for_db_in_loop(&node.body, &HashSet::new(), false, module, db_attrs, session_hints, issues, seen_lines);
+                    walk_for_db_in_loop(
+                        &node.body,
+                        &HashSet::new(),
+                        false,
+                        module,
+                        db_attrs,
+                        session_hints,
+                        issues,
+                        seen_lines,
+                    );
                 }
                 Stmt::If(node) => {
-                    walk_for_db_in_loop(&node.body, loop_names, in_loop, module, db_attrs, session_hints, issues, seen_lines);
-                    walk_for_db_in_loop(&node.orelse, loop_names, in_loop, module, db_attrs, session_hints, issues, seen_lines);
+                    walk_for_db_in_loop(
+                        &node.body,
+                        loop_names,
+                        in_loop,
+                        module,
+                        db_attrs,
+                        session_hints,
+                        issues,
+                        seen_lines,
+                    );
+                    walk_for_db_in_loop(
+                        &node.orelse,
+                        loop_names,
+                        in_loop,
+                        module,
+                        db_attrs,
+                        session_hints,
+                        issues,
+                        seen_lines,
+                    );
                 }
                 Stmt::With(node) => {
-                    walk_for_db_in_loop(&node.body, loop_names, in_loop, module, db_attrs, session_hints, issues, seen_lines);
+                    walk_for_db_in_loop(
+                        &node.body,
+                        loop_names,
+                        in_loop,
+                        module,
+                        db_attrs,
+                        session_hints,
+                        issues,
+                        seen_lines,
+                    );
                 }
                 Stmt::Try(node) => {
-                    walk_for_db_in_loop(&node.body, loop_names, in_loop, module, db_attrs, session_hints, issues, seen_lines);
+                    walk_for_db_in_loop(
+                        &node.body,
+                        loop_names,
+                        in_loop,
+                        module,
+                        db_attrs,
+                        session_hints,
+                        issues,
+                        seen_lines,
+                    );
                     for handler in &node.handlers {
                         let ast::ExceptHandler::ExceptHandler(handler) = handler;
-                        walk_for_db_in_loop(&handler.body, loop_names, in_loop, module, db_attrs, session_hints, issues, seen_lines);
+                        walk_for_db_in_loop(
+                            &handler.body,
+                            loop_names,
+                            in_loop,
+                            module,
+                            db_attrs,
+                            session_hints,
+                            issues,
+                            seen_lines,
+                        );
                     }
                 }
                 _ => {}
@@ -194,7 +409,10 @@ pub(crate) fn collect_n_plus_one_hint_issues(module: &ModuleIndex, suite: &ast::
                             });
                             if refs_loop {
                                 let line = module.line_for_offset(call.range.start().to_usize());
-                                if !seen_lines.contains(&line) && !module.is_rule_suppressed(line, "performance/n-plus-one-hint") {
+                                if !seen_lines.contains(&line)
+                                    && !module
+                                        .is_rule_suppressed(line, "performance/n-plus-one-hint")
+                                {
                                     seen_lines.insert(line);
                                     issues.push(Issue {
                                         check: "performance/n-plus-one-hint",
@@ -216,24 +434,46 @@ pub(crate) fn collect_n_plus_one_hint_issues(module: &ModuleIndex, suite: &ast::
         }
     }
 
-    walk_for_db_in_loop(suite, &HashSet::new(), false, module, &db_attrs, &session_hints, &mut issues, &mut seen_lines);
+    walk_for_db_in_loop(
+        suite,
+        &HashSet::new(),
+        false,
+        module,
+        &db_attrs,
+        &session_hints,
+        &mut issues,
+        &mut seen_lines,
+    );
     issues
 }
 
 // ── Correctness: get-with-side-effect ───────────────────────────────────
 
-pub(crate) fn collect_sequential_awaits_issues(module: &ModuleIndex, suite: &ast::Suite) -> Vec<Issue> {
+pub(crate) fn collect_sequential_awaits_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
     if !module.source.contains("await ") {
         return Vec::new();
     }
     let side_effect_attrs: HashSet<&str> = [
-        "commit", "rollback", "flush", "close", "aclose", "emit",
-        "publish", "send", "save", "delete", "create", "update", "insert",
-    ].into_iter().collect();
+        "commit", "rollback", "flush", "close", "aclose", "emit", "publish", "send", "save",
+        "delete", "create", "update", "insert",
+    ]
+    .into_iter()
+    .collect();
     let session_hints: HashSet<&str> = [
-        "session", "db", "database", "conn", "connection", "cursor",
-        "async_session", "db_session",
-    ].into_iter().collect();
+        "session",
+        "db",
+        "database",
+        "conn",
+        "connection",
+        "cursor",
+        "async_session",
+        "db_session",
+    ]
+    .into_iter()
+    .collect();
 
     let mut issues = Vec::new();
 
@@ -249,8 +489,12 @@ pub(crate) fn collect_sequential_awaits_issues(module: &ModuleIndex, suite: &ast
             }
             _ => return None,
         };
-        let Expr::Await(await_node) = value else { return None };
-        let Expr::Call(call) = &*await_node.value else { return None };
+        let Expr::Await(await_node) = value else {
+            return None;
+        };
+        let Expr::Call(call) = &*await_node.value else {
+            return None;
+        };
         let mut names = HashSet::new();
         for target in targets {
             walk_expr_tree(target, &mut |expr| {
@@ -292,12 +536,18 @@ pub(crate) fn collect_sequential_awaits_issues(module: &ModuleIndex, suite: &ast
             let _run_parallelisable = true;
 
             while i < body.len() {
-                let Some((call, assigned_names)) = is_await_assign(&body[i]) else { break };
+                let Some((call, assigned_names)) = is_await_assign(&body[i]) else {
+                    break;
+                };
 
                 // Check side-effect calls
                 let is_side_effect = match &*call.func {
                     Expr::Attribute(a) => side_effect_attrs.contains(a.attr.as_str()),
-                    Expr::Name(n) => n.id.starts_with("emit_") || n.id.starts_with("log_") || n.id.starts_with("save_"),
+                    Expr::Name(n) => {
+                        n.id.starts_with("emit_")
+                            || n.id.starts_with("log_")
+                            || n.id.starts_with("save_")
+                    }
                     _ => false,
                 };
                 if is_side_effect {

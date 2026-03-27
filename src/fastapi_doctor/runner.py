@@ -89,34 +89,25 @@ def run_python_doctor_checks(
     all_rust_rules = native_core.get_native_rule_ids()
     active_rust_rules = {rule_id for rule_id in all_rust_rules if should_run(rule_id)}
 
-    from .checks.route_checks import (
-        check_duplicate_routes,
-        check_endpoint_docstrings,
-        check_missing_pagination,
-        check_openapi_schema,
-        check_post_status_codes,
-        check_response_models,
-        check_route_dependency_policies,
-        check_route_tags,
-        check_write_route_parameters,
-    )
+    from .checks.route_checks import check_openapi_schema, check_route_dependency_policies
 
     route_list_checks = [
         ("security/missing-auth-dep", check_route_dependency_policies),
-        ("security/forbidden-write-param", check_write_route_parameters),
-        ("correctness/duplicate-route", check_duplicate_routes),
-        ("api-surface/missing-tags", check_route_tags),
-        ("correctness/missing-response-model", check_response_models),
-        ("correctness/post-status-code", check_post_status_codes),
-        ("api-surface/missing-docstring", check_endpoint_docstrings),
-        ("api-surface/missing-pagination", check_missing_pagination),
     ]
+    native_route_rule_ids = {
+        "security/forbidden-write-param",
+        "correctness/duplicate-route",
+        "api-surface/missing-tags",
+        "correctness/missing-response-model",
+        "correctness/post-status-code",
+        "api-surface/missing-docstring",
+        "api-surface/missing-pagination",
+    }
     openapi_rule_ids = {
         "api-surface/missing-operation-id",
         "api-surface/duplicate-operation-id",
         "api-surface/missing-openapi-tags",
     }
-    all_route_rule_ids = {rule_id for rule_id, _ in route_list_checks} | openapi_rule_ids
 
     issues: list[DoctorIssue] = []
     checks_not_evaluated: list[str] = []
@@ -125,16 +116,13 @@ def run_python_doctor_checks(
     openapi_path_count = 0
     live_app = None
 
-    needs_static_routes = skip_app_bootstrap and libraries.fastapi and any(
-        should_run(rule_id) for rule_id, _ in route_list_checks
-    )
+    route_list_rule_ids = {rule_id for rule_id, _ in route_list_checks}
+    needs_static_routes = any(should_run(rule_id) for rule_id in (route_list_rule_ids | native_route_rule_ids))
 
     if skip_app_bootstrap:
         checks_not_evaluated = sorted(rule_id for rule_id in openapi_rule_ids if should_run(rule_id))
     elif not libraries.fastapi:
-        checks_not_evaluated = sorted(
-            rule_id for rule_id in all_route_rule_ids if should_run(rule_id)
-        )
+        checks_not_evaluated = sorted(rule_id for rule_id in openapi_rule_ids if should_run(rule_id))
     else:
         from .app_loader import (
             build_app_for_doctor,
@@ -144,9 +132,7 @@ def run_python_doctor_checks(
         from .static_routes import route_info_from_live_route
 
         if not fastapi_runtime_available():
-            checks_not_evaluated = sorted(
-                rule_id for rule_id in all_route_rule_ids if should_run(rule_id)
-            )
+            checks_not_evaluated = sorted(rule_id for rule_id in openapi_rule_ids if should_run(rule_id))
         else:
             try:
                 live_app = app or build_app_for_doctor()
@@ -169,7 +155,9 @@ def run_python_doctor_checks(
                     )
                 )
                 checks_not_evaluated = sorted(
-                    rule_id for rule_id in all_route_rule_ids if should_run(rule_id)
+                    rule_id
+                    for rule_id in openapi_rule_ids
+                    if should_run(rule_id)
                 )
 
     native_result = native_core.run_native_project_v2(

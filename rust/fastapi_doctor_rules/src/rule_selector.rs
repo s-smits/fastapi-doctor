@@ -12,8 +12,17 @@ pub fn parse_static_rule(rule_id: &str) -> Option<StaticRule> {
         "architecture/passthrough-function" => StaticRule::ArchitecturePassthroughFunction,
         "architecture/avoid-sys-exit" => StaticRule::ArchitectureAvoidSysExit,
         "architecture/engine-pool-pre-ping" => StaticRule::ArchitectureEnginePoolPrePing,
-        "architecture/missing-startup-validation" => StaticRule::ArchitectureMissingStartupValidation,
+        "architecture/missing-startup-validation" => {
+            StaticRule::ArchitectureMissingStartupValidation
+        }
         "architecture/fat-route-handler" => StaticRule::ArchitectureFatRouteHandler,
+        "security/forbidden-write-param" => StaticRule::SecurityForbiddenWriteParam,
+        "correctness/duplicate-route" => StaticRule::CorrectnessDuplicateRoute,
+        "correctness/missing-response-model" => StaticRule::CorrectnessMissingResponseModel,
+        "correctness/post-status-code" => StaticRule::CorrectnessPostStatusCode,
+        "api-surface/missing-tags" => StaticRule::ApiSurfaceMissingTags,
+        "api-surface/missing-docstring" => StaticRule::ApiSurfaceMissingDocstring,
+        "api-surface/missing-pagination" => StaticRule::ApiSurfaceMissingPagination,
         "config/direct-env-access" => StaticRule::ConfigDirectEnvAccess,
         "config/alembic-target-metadata" => StaticRule::ConfigAlembicTargetMetadata,
         "config/alembic-empty-autogen-revision" => StaticRule::ConfigAlembicEmptyAutogenRevision,
@@ -29,7 +38,9 @@ pub fn parse_static_rule(rule_id: &str) -> Option<StaticRule> {
         "correctness/threading-lock-in-async" => StaticRule::CorrectnessThreadingLockInAsync,
         "correctness/unreachable-code" => StaticRule::CorrectnessUnreachableCode,
         "correctness/get-with-side-effect" => StaticRule::CorrectnessGetWithSideEffect,
-        "correctness/serverless-filesystem-write" => StaticRule::CorrectnessServerlessFilesystemWrite,
+        "correctness/serverless-filesystem-write" => {
+            StaticRule::CorrectnessServerlessFilesystemWrite
+        }
         "correctness/missing-http-timeout" => StaticRule::CorrectnessMissingHttpTimeout,
         "performance/heavy-imports" => StaticRule::PerformanceHeavyImports,
         "performance/sequential-awaits" => StaticRule::PerformanceSequentialAwaits,

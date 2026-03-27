@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use fastapi_doctor_core::ast_helpers::{walk_suite_exprs, walk_suite_stmts};
-use fastapi_doctor_core::{Issue, ModuleIndex, ModuleRecord, parse_suite};
+use fastapi_doctor_core::{parse_suite, Issue, ModuleIndex, ModuleRecord};
 use rustpython_parser::ast::{self, Expr, Ranged, Stmt};
 
 use crate::engine::RuleSelection;
@@ -168,10 +168,7 @@ fn extract_alembic_env_facts(module: &ModuleRecord) -> Option<AlembicEnvFacts> {
     })
 }
 
-fn module_level_bindings(
-    index: &ModuleIndex<'_>,
-    suite: &ast::Suite,
-) -> HashMap<String, bool> {
+fn module_level_bindings(index: &ModuleIndex<'_>, suite: &ast::Suite) -> HashMap<String, bool> {
     let mut bindings = HashMap::new();
     for stmt in suite {
         match stmt {
@@ -245,7 +242,8 @@ fn module_has_naming_convention(module: &ModuleRecord) -> bool {
         return true;
     }
 
-    walk_suite_stmts(&suite, &mut |stmt| match stmt {
+    walk_suite_stmts(&suite, &mut |stmt| {
+        match stmt {
         Stmt::Assign(node) => {
             if node.targets.iter().any(|target| {
                 matches!(target, Expr::Attribute(attr) if attr.attr.as_str() == "naming_convention")
@@ -260,6 +258,7 @@ fn module_has_naming_convention(module: &ModuleRecord) -> bool {
             }
         }
         _ => {}
+    }
     });
 
     found

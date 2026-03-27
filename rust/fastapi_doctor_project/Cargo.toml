@@ -10,3 +10,5 @@ description = "Project discovery and source loading for fastapi-doctor."
 [dependencies]
 fastapi_doctor_core = { path = "../fastapi_doctor_core" }
 rayon.workspace = true
+serde.workspace = true
+serde_yaml.workspace = true

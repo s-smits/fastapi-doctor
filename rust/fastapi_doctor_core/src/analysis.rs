@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::ast_helpers;
-use rustpython_parser::Parse;
 use rustpython_parser::ast::{self, Constant, Expr, Ranged, Stmt};
+use rustpython_parser::Parse;
 
 #[derive(Clone, Debug)]
 pub struct ModuleRecord {
@@ -20,6 +20,9 @@ pub struct Config {
     pub god_module_threshold: usize,
     pub fat_route_handler_threshold: usize,
     pub should_be_model_mode: String,
+    pub forbidden_write_params: Vec<String>,
+    pub create_post_prefixes: Vec<String>,
+    pub tag_required_prefixes: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,6 +67,23 @@ pub struct SuppressionRecord {
     pub rule: String,
     pub reason: String,
     pub path: String,
+    pub line: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct RouteRecord {
+    pub path: String,
+    pub methods: Vec<String>,
+    pub dependency_names: Vec<String>,
+    pub param_names: Vec<String>,
+    pub include_in_schema: bool,
+    pub has_response_model: bool,
+    pub response_model_str: Option<String>,
+    pub status_code: Option<usize>,
+    pub tags: Vec<String>,
+    pub endpoint_name: String,
+    pub has_docstring: bool,
+    pub source_file: String,
     pub line: usize,
 }
 
@@ -262,7 +282,11 @@ fn method_names(call: &ast::ExprCall) -> Option<Vec<String>> {
             .into_iter()
             .filter(|method| method != "HEAD" && method != "OPTIONS")
             .collect::<Vec<_>>();
-        return if methods.is_empty() { None } else { Some(methods) };
+        return if methods.is_empty() {
+            None
+        } else {
+            Some(methods)
+        };
     }
     if method_name != "api_route" {
         return None;
@@ -386,7 +410,8 @@ fn collect_route_scan_stmt(
         }
         Stmt::Expr(node) => {
             if let Expr::Call(call) = &*node.value {
-                if matches!(&*call.func, Expr::Attribute(func) if func.attr.as_str() == "include_router") {
+                if matches!(&*call.func, Expr::Attribute(func) if func.attr.as_str() == "include_router")
+                {
                     if let Some(router_expr) = call.args.first() {
                         if let Some(name) = router_name(router_expr) {
                             let prefix = keyword_value(&call.keywords, "prefix")
@@ -524,7 +549,11 @@ fn collect_route_draft(
             Expr::Attribute(node) => router_name(&node.value),
             _ => None,
         };
-        let path = call.args.first().and_then(|expr| parse_string_expr(expr)).unwrap_or_default();
+        let path = call
+            .args
+            .first()
+            .and_then(|expr| parse_string_expr(expr))
+            .unwrap_or_default();
         let include_in_schema = keyword_value(&call.keywords, "include_in_schema")
             .and_then(parse_bool_expr)
             .unwrap_or(true);
@@ -592,7 +621,7 @@ pub fn extract_route_scan(module: &ModuleIndex<'_>, suite: &ast::Suite) -> Route
 pub fn finalize_route(
     draft: RouteDraft,
     include_prefix_map: &HashMap<String, (String, Vec<String>)>,
-) -> RouteTuple {
+) -> RouteRecord {
     if let Some(router_name) = &draft.router_name {
         if let Some((include_prefix, include_tags)) = include_prefix_map.get(router_name) {
             let full_path = format!("{include_prefix}{}{}", draft.local_prefix, draft.path);
@@ -605,20 +634,21 @@ pub fn finalize_route(
             } else {
                 draft.decorator_tags.clone()
             };
-            return (
-                full_path,
-                draft.methods,
-                draft.dependency_names,
-                draft.param_names,
-                draft.include_in_schema,
-                draft.has_response_model,
-                draft.response_model_str,
-                draft.status_code,
+            return RouteRecord {
+                path: full_path,
+                methods: draft.methods,
+                dependency_names: draft.dependency_names,
+                param_names: draft.param_names,
+                include_in_schema: draft.include_in_schema,
+                has_response_model: draft.has_response_model,
+                response_model_str: draft.response_model_str,
+                status_code: draft.status_code,
                 tags,
-                draft.endpoint_name,
-                draft.has_docstring,
-                format!("{}:{}", draft.source_file, draft.line),
-            );
+                endpoint_name: draft.endpoint_name,
+                has_docstring: draft.has_docstring,
+                source_file: draft.source_file,
+                line: draft.line,
+            };
         }
     }
     let tags = if draft.decorator_tags.is_empty() {
@@ -626,19 +656,37 @@ pub fn finalize_route(
     } else {
         draft.decorator_tags.clone()
     };
-    (
-        format!("{}{}", draft.local_prefix, draft.path),
-        draft.methods,
-        draft.dependency_names,
-        draft.param_names,
-        draft.include_in_schema,
-        draft.has_response_model,
-        draft.response_model_str,
-        draft.status_code,
+    RouteRecord {
+        path: format!("{}{}", draft.local_prefix, draft.path),
+        methods: draft.methods,
+        dependency_names: draft.dependency_names,
+        param_names: draft.param_names,
+        include_in_schema: draft.include_in_schema,
+        has_response_model: draft.has_response_model,
+        response_model_str: draft.response_model_str,
+        status_code: draft.status_code,
         tags,
-        draft.endpoint_name,
-        draft.has_docstring,
-        format!("{}:{}", draft.source_file, draft.line),
+        endpoint_name: draft.endpoint_name,
+        has_docstring: draft.has_docstring,
+        source_file: draft.source_file,
+        line: draft.line,
+    }
+}
+
+pub fn route_tuple(route: RouteRecord) -> RouteTuple {
+    (
+        route.path,
+        route.methods,
+        route.dependency_names,
+        route.param_names,
+        route.include_in_schema,
+        route.has_response_model,
+        route.response_model_str,
+        route.status_code,
+        route.tags,
+        route.endpoint_name,
+        route.has_docstring,
+        format!("{}:{}", route.source_file, route.line),
     )
 }
 
@@ -686,9 +734,6 @@ pub fn issue(
         help,
     }
 }
-
-
-
 
 pub fn normalized_no_space(line: &str) -> String {
     line.chars().filter(|ch| !ch.is_whitespace()).collect()
@@ -1473,6 +1518,7 @@ fn analyze_modules(
         god_module_threshold,
         fat_route_handler_threshold,
         should_be_model_mode,
+        ..Default::default()
     };
     let rule_selection = RuleSelection::from_rules(&active_rules);
 
@@ -1551,6 +1597,7 @@ fn analyze_project(
         god_module_threshold,
         fat_route_handler_threshold,
         should_be_model_mode,
+        ..Default::default()
     };
     let rule_selection = RuleSelection::from_rules(&active_rules);
     let repo_root_path = PathBuf::from(repo_root);
@@ -1660,7 +1707,11 @@ mod tests {
             import_bloat_threshold: 3,
             giant_function_threshold: 400,
             large_function_threshold: 200,
-            deep_nesting_threshold: 5, god_module_threshold: 500, fat_route_handler_threshold: 400, should_be_model_mode: "strict".to_string(),
+            deep_nesting_threshold: 5,
+            god_module_threshold: 500,
+            fat_route_handler_threshold: 400,
+            should_be_model_mode: "strict".to_string(),
+            ..Default::default()
         };
         issues_for_with_config(&[rule_id.to_string()], path, source, config)
     }
@@ -1670,7 +1721,11 @@ mod tests {
             import_bloat_threshold: 3,
             giant_function_threshold: 400,
             large_function_threshold: 200,
-            deep_nesting_threshold: 5, god_module_threshold: 500, fat_route_handler_threshold: 400, should_be_model_mode: "strict".to_string(),
+            deep_nesting_threshold: 5,
+            god_module_threshold: 500,
+            fat_route_handler_threshold: 400,
+            should_be_model_mode: "strict".to_string(),
+            ..Default::default()
         };
         issues_for_with_config(
             &rule_ids
@@ -2024,7 +2079,11 @@ mod tests {
             import_bloat_threshold: 3,
             giant_function_threshold: 100,
             large_function_threshold: 3,
-            deep_nesting_threshold: 5, god_module_threshold: 500, fat_route_handler_threshold: 400, should_be_model_mode: "strict".to_string(),
+            deep_nesting_threshold: 5,
+            god_module_threshold: 500,
+            fat_route_handler_threshold: 400,
+            should_be_model_mode: "strict".to_string(),
+            ..Default::default()
         };
         let issues = issues_for_with_config(
             &["architecture/giant-function".to_string()],

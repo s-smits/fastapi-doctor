@@ -1,7 +1,7 @@
-use fastapi_doctor_core::{
-    Config, Issue, ModuleIndex, ModuleRecord, issue, parse_suite,
-};
 use fastapi_doctor_core::ast_helpers::FunctionIndex;
+use fastapi_doctor_core::{
+    issue, parse_suite, Config, Issue, ModuleIndex, ModuleRecord, RouteRecord,
+};
 use rustpython_parser::ast;
 
 use crate::architecture;
@@ -11,6 +11,7 @@ use crate::performance;
 use crate::pydantic;
 use crate::registry::StaticRule;
 use crate::resilience;
+use crate::routes;
 use crate::rule_selector::parse_static_rule;
 use crate::security;
 
@@ -65,6 +66,13 @@ pub struct RuleSelection {
     pub engine_pool_pre_ping: bool,
     pub missing_startup_validation: bool,
     pub fat_route_handler: bool,
+    pub forbidden_write_param: bool,
+    pub duplicate_route: bool,
+    pub missing_response_model: bool,
+    pub post_status_code: bool,
+    pub missing_tags: bool,
+    pub missing_docstring: bool,
+    pub missing_pagination: bool,
     pub config_alembic_target_metadata: bool,
     pub config_alembic_empty_autogen_revision: bool,
     pub config_sqlalchemy_naming_convention: bool,
@@ -91,8 +99,17 @@ impl RuleSelection {
             StaticRule::ArchitecturePassthroughFunction => self.passthrough_function = true,
             StaticRule::ArchitectureAvoidSysExit => self.avoid_sys_exit = true,
             StaticRule::ArchitectureEnginePoolPrePing => self.engine_pool_pre_ping = true,
-            StaticRule::ArchitectureMissingStartupValidation => self.missing_startup_validation = true,
+            StaticRule::ArchitectureMissingStartupValidation => {
+                self.missing_startup_validation = true
+            }
             StaticRule::ArchitectureFatRouteHandler => self.fat_route_handler = true,
+            StaticRule::SecurityForbiddenWriteParam => self.forbidden_write_param = true,
+            StaticRule::CorrectnessDuplicateRoute => self.duplicate_route = true,
+            StaticRule::CorrectnessMissingResponseModel => self.missing_response_model = true,
+            StaticRule::CorrectnessPostStatusCode => self.post_status_code = true,
+            StaticRule::ApiSurfaceMissingTags => self.missing_tags = true,
+            StaticRule::ApiSurfaceMissingDocstring => self.missing_docstring = true,
+            StaticRule::ApiSurfaceMissingPagination => self.missing_pagination = true,
             StaticRule::ConfigDirectEnvAccess => self.direct_env_access = true,
             StaticRule::ConfigAlembicTargetMetadata => self.config_alembic_target_metadata = true,
             StaticRule::ConfigAlembicEmptyAutogenRevision => {
@@ -112,7 +129,9 @@ impl RuleSelection {
             StaticRule::CorrectnessThreadingLockInAsync => self.threading_lock_in_async = true,
             StaticRule::CorrectnessUnreachableCode => self.unreachable_code = true,
             StaticRule::CorrectnessGetWithSideEffect => self.get_with_side_effect = true,
-            StaticRule::CorrectnessServerlessFilesystemWrite => self.serverless_filesystem_write = true,
+            StaticRule::CorrectnessServerlessFilesystemWrite => {
+                self.serverless_filesystem_write = true
+            }
             StaticRule::CorrectnessMissingHttpTimeout => self.missing_http_timeout = true,
             StaticRule::PerformanceHeavyImports => self.heavy_imports = true,
             StaticRule::PerformanceSequentialAwaits => self.sequential_awaits = true,
@@ -192,13 +211,28 @@ impl RuleSelection {
             || self.extra_allow_on_request
             || self.missing_startup_validation
     }
+
+    pub fn any_route_rules(&self) -> bool {
+        self.forbidden_write_param
+            || self.duplicate_route
+            || self.missing_response_model
+            || self.post_status_code
+            || self.missing_tags
+            || self.missing_docstring
+            || self.missing_pagination
+    }
 }
 
-pub fn analyze_project_modules(
-    modules: &[ModuleRecord],
-    rules: &RuleSelection,
-) -> Vec<Issue> {
+pub fn analyze_project_modules(modules: &[ModuleRecord], rules: &RuleSelection) -> Vec<Issue> {
     configuration::collect_project_configuration_issues(modules, rules)
+}
+
+pub fn analyze_routes(
+    routes: &[RouteRecord],
+    rules: &RuleSelection,
+    config: &Config,
+) -> Vec<Issue> {
+    routes::analyze_routes(routes, rules, config)
 }
 
 pub fn analyze_suite(
@@ -212,7 +246,9 @@ pub fn analyze_suite(
     if rules.giant_function
         && (config.giant_function_threshold > 0 || config.large_function_threshold > 0)
     {
-        issues.extend(architecture::collect_giant_function_issues(module, suite, config));
+        issues.extend(architecture::collect_giant_function_issues(
+            module, suite, config,
+        ));
     }
 
     if rules.deep_nesting && config.deep_nesting_threshold > 0 {
@@ -224,13 +260,19 @@ pub fn analyze_suite(
     }
 
     if rules.asyncio_run_in_async {
-        issues.extend(correctness::collect_asyncio_run_in_async_issues(module, suite));
+        issues.extend(correctness::collect_asyncio_run_in_async_issues(
+            module, suite,
+        ));
     }
     if rules.threading_lock_in_async {
-        issues.extend(correctness::collect_threading_lock_in_async_issues(module, suite));
+        issues.extend(correctness::collect_threading_lock_in_async_issues(
+            module, suite,
+        ));
     }
     if rules.mutable_default_arg {
-        issues.extend(correctness::collect_mutable_default_arg_issues(module, suite));
+        issues.extend(correctness::collect_mutable_default_arg_issues(
+            module, suite,
+        ));
     }
     if rules.return_in_finally {
         issues.extend(correctness::collect_return_in_finally_issues(module, suite));
@@ -257,19 +299,27 @@ pub fn analyze_suite(
         || rules.mutable_model_default
         || rules.should_be_model
     {
-        issues.extend(pydantic::collect_pydantic_issues(module, suite, rules, config));
+        issues.extend(pydantic::collect_pydantic_issues(
+            module, suite, rules, config,
+        ));
     }
     if rules.avoid_sys_exit {
         issues.extend(architecture::collect_avoid_sys_exit_issues(module, suite));
     }
     if rules.engine_pool_pre_ping {
-        issues.extend(architecture::collect_engine_pool_pre_ping_issues(module, suite));
+        issues.extend(architecture::collect_engine_pool_pre_ping_issues(
+            module, suite,
+        ));
     }
     if rules.serverless_filesystem_write {
-        issues.extend(correctness::collect_serverless_filesystem_write_issues(module, suite));
+        issues.extend(correctness::collect_serverless_filesystem_write_issues(
+            module, suite,
+        ));
     }
     if rules.missing_http_timeout {
-        issues.extend(correctness::collect_missing_http_timeout_issues(module, suite));
+        issues.extend(correctness::collect_missing_http_timeout_issues(
+            module, suite,
+        ));
     }
     if rules.regex_in_loop {
         issues.extend(performance::collect_regex_in_loop_issues(module, suite));
@@ -278,27 +328,31 @@ pub fn analyze_suite(
         issues.extend(performance::collect_n_plus_one_hint_issues(module, suite));
     }
     if rules.get_with_side_effect {
-        issues.extend(correctness::collect_get_with_side_effect_issues(module, suite));
+        issues.extend(correctness::collect_get_with_side_effect_issues(
+            module, suite,
+        ));
     }
     if rules.fat_route_handler {
-        issues.extend(architecture::collect_fat_route_handler_issues(module, suite, config));
+        issues.extend(architecture::collect_fat_route_handler_issues(
+            module, suite, config,
+        ));
     }
     if rules.passthrough_function {
-        issues.extend(architecture::collect_passthrough_function_issues(module, suite));
+        issues.extend(architecture::collect_passthrough_function_issues(
+            module, suite,
+        ));
     }
     if rules.sequential_awaits {
         issues.extend(performance::collect_sequential_awaits_issues(module, suite));
     }
     if rules.print_in_production {
         issues.extend(architecture::collect_print_in_production_issues(
-            module,
-            suite,
+            module, suite,
         ));
     }
     if rules.exception_detail_leak {
         issues.extend(security::collect_exception_detail_leak_issues(
-            module,
-            suite,
+            module, suite,
         ));
     }
 
@@ -339,7 +393,12 @@ pub fn analyze_module(
     } else {
         None
     };
-    Ok(analyze_module_with_suite(&index, suite.as_ref(), rules, config))
+    Ok(analyze_module_with_suite(
+        &index,
+        suite.as_ref(),
+        rules,
+        config,
+    ))
 }
 
 pub fn analyze_module_with_suite(
@@ -729,7 +788,8 @@ pub fn analyze_module_with_suite(
             && module.file_name.as_deref() == Some("main.py")
             && line.number == 1
         {
-            let has_validation = module.source.contains("validate_") && module.source.contains("startup")
+            let has_validation = module.source.contains("validate_")
+                && module.source.contains("startup")
                 || module.source.contains("settings.validate")
                 || module.source.contains("check_config")
                 || module.source.contains("verify_env");

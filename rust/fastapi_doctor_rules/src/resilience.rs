@@ -1,8 +1,8 @@
 use rustpython_parser::ast::{self, Expr, Ranged, Stmt};
 
-use fastapi_doctor_core::{Issue, ModuleIndex};
-use fastapi_doctor_core::ast_helpers::*;
 use crate::engine::RuleSelection;
+use fastapi_doctor_core::ast_helpers::*;
+use fastapi_doctor_core::{Issue, ModuleIndex};
 
 pub(crate) fn collect_resilience_issues(
     module: &ModuleIndex,
@@ -86,7 +86,8 @@ pub(crate) fn collect_resilience_issues(
                         ) || matches!(s, Stmt::Expr(e) if matches!(&*e.value, Expr::Call(_)))
                     });
                     if !has_useful_work
-                        && !module.is_rule_suppressed(handler_line, "resilience/reraise-without-context")
+                        && !module
+                            .is_rule_suppressed(handler_line, "resilience/reraise-without-context")
                     {
                         issues.push(Issue {
                             check: "resilience/reraise-without-context",
@@ -102,9 +103,10 @@ pub(crate) fn collect_resilience_issues(
             }
 
             // exception-swallowed and broad-except-no-context: only for `except Exception`
-            let is_except_exception = handler.type_.as_ref().is_some_and(|t| {
-                matches!(&**t, Expr::Name(n) if n.id.as_str() == "Exception")
-            });
+            let is_except_exception = handler
+                .type_
+                .as_ref()
+                .is_some_and(|t| matches!(&**t, Expr::Name(n) if n.id.as_str() == "Exception"));
             if !is_except_exception {
                 continue;
             }
@@ -133,13 +135,17 @@ pub(crate) fn collect_resilience_issues(
                                         && matches!(&kw.value, Expr::Constant(c) if matches!(c.value, ast::Constant::Bool(true)))
                                 });
                                 if !has_exc_info
-                                    && matches!(func.attr.as_str(), "warning" | "warn" | "info" | "debug")
+                                    && matches!(
+                                        func.attr.as_str(),
+                                        "warning" | "warn" | "info" | "debug"
+                                    )
                                     && log_call_without_context.is_none()
                                 {
                                     let mut call_refs_exc = false;
                                     if let Some(exc_n) = exc_name {
                                         for arg in &call.args {
-                                            if matches!(arg, Expr::Name(n) if n.id.as_str() == exc_n) {
+                                            if matches!(arg, Expr::Name(n) if n.id.as_str() == exc_n)
+                                            {
                                                 call_refs_exc = true;
                                             }
                                             if let Expr::JoinedStr(fstr) = arg {
@@ -157,8 +163,7 @@ pub(crate) fn collect_resilience_issues(
                                     if !call_refs_exc {
                                         let line =
                                             module.line_for_offset(call.range.start().to_usize());
-                                        log_call_without_context =
-                                            Some((line, func.attr.as_str()));
+                                        log_call_without_context = Some((line, func.attr.as_str()));
                                     }
                                 }
                             }

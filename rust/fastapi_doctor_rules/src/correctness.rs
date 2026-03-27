@@ -1,8 +1,8 @@
-use std::collections::HashSet;
 use rustpython_parser::ast::{self, Expr, Ranged, Stmt};
+use std::collections::HashSet;
 
-use fastapi_doctor_core::{Issue, ModuleIndex};
 use fastapi_doctor_core::ast_helpers::*;
+use fastapi_doctor_core::{Issue, ModuleIndex};
 
 pub(crate) fn collect_sync_io_in_async_issues(
     module: &ModuleIndex,
@@ -169,7 +169,10 @@ pub(crate) fn collect_misused_async_construct_issues(
     issues
 }
 
-pub(crate) fn collect_asyncio_run_in_async_issues(module: &ModuleIndex, suite: &ast::Suite) -> Vec<Issue> {
+pub(crate) fn collect_asyncio_run_in_async_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
     if module.file_name.as_deref() == Some("__main__.py")
         || module.file_name.as_deref() == Some("cli.py")
         || module.rel_path.contains("scripts/")
@@ -217,7 +220,10 @@ pub(crate) fn collect_asyncio_run_in_async_issues(module: &ModuleIndex, suite: &
     issues
 }
 
-pub(crate) fn collect_threading_lock_in_async_issues(module: &ModuleIndex, suite: &ast::Suite) -> Vec<Issue> {
+pub(crate) fn collect_threading_lock_in_async_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
     if !module.source.contains("Lock") || !module_has_async_def(suite) {
         return Vec::new();
     }
@@ -256,7 +262,10 @@ pub(crate) fn collect_threading_lock_in_async_issues(module: &ModuleIndex, suite
     issues
 }
 
-pub(crate) fn collect_mutable_default_arg_issues(module: &ModuleIndex, suite: &ast::Suite) -> Vec<Issue> {
+pub(crate) fn collect_mutable_default_arg_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
     let mut issues = Vec::new();
     for function in all_functions(suite) {
         for default in &function.defaults {
@@ -287,7 +296,10 @@ pub(crate) fn collect_mutable_default_arg_issues(module: &ModuleIndex, suite: &a
     issues
 }
 
-pub(crate) fn collect_return_in_finally_issues(module: &ModuleIndex, suite: &ast::Suite) -> Vec<Issue> {
+pub(crate) fn collect_return_in_finally_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
     let mut issues = Vec::new();
     walk_suite_stmts(suite, &mut |stmt| {
         let finalbody = match stmt {
@@ -317,7 +329,10 @@ pub(crate) fn collect_return_in_finally_issues(module: &ModuleIndex, suite: &ast
     issues
 }
 
-pub(crate) fn collect_unreachable_code_issues(module: &ModuleIndex, suite: &ast::Suite) -> Vec<Issue> {
+pub(crate) fn collect_unreachable_code_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
     let mut issues = Vec::new();
     walk_suite_stmts(suite, &mut |stmt| match stmt {
         Stmt::FunctionDef(node) => collect_unreachable_in_block(module, &node.body, &mut issues),
@@ -527,7 +542,11 @@ pub(crate) fn collect_returns_in_stmt<'a>(stmt: &'a Stmt, returns: &mut Vec<&'a 
     }
 }
 
-pub(crate) fn collect_unreachable_in_block(module: &ModuleIndex, body: &[Stmt], issues: &mut Vec<Issue>) {
+pub(crate) fn collect_unreachable_in_block(
+    module: &ModuleIndex,
+    body: &[Stmt],
+    issues: &mut Vec<Issue>,
+) {
     for (idx, stmt) in body.iter().enumerate() {
         if !is_terminal_stmt(stmt) || idx + 1 >= body.len() {
             continue;
@@ -580,11 +599,23 @@ fn terminal_stmt_name(stmt: &Stmt) -> &'static str {
     }
 }
 
-pub(crate) fn collect_serverless_filesystem_write_issues(module: &ModuleIndex, suite: &ast::Suite) -> Vec<Issue> {
+pub(crate) fn collect_serverless_filesystem_write_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
     if module.rel_path.contains("scripts/") || module.rel_path.contains("tests/") {
         return Vec::new();
     }
-    let write_methods: HashSet<&str> = ["write_text", "write_bytes", "mkdir", "touch", "rename", "replace"].into_iter().collect();
+    let write_methods: HashSet<&str> = [
+        "write_text",
+        "write_bytes",
+        "mkdir",
+        "touch",
+        "rename",
+        "replace",
+    ]
+    .into_iter()
+    .collect();
     let mut issues = Vec::new();
     walk_suite_exprs(suite, &mut |expr| {
         let Expr::Call(call) = expr else { return };
@@ -621,7 +652,9 @@ pub(crate) fn collect_serverless_filesystem_write_issues(module: &ModuleIndex, s
         if is_write {
             // Check if path looks safe (/tmp)
             let source_fragment = module.source_slice(call.range);
-            if source_fragment.contains("/tmp") || source_fragment.to_ascii_lowercase().contains("tempfile") {
+            if source_fragment.contains("/tmp")
+                || source_fragment.to_ascii_lowercase().contains("tempfile")
+            {
                 return;
             }
             let line = module.line_for_offset(call.range.start().to_usize());
@@ -641,12 +674,17 @@ pub(crate) fn collect_serverless_filesystem_write_issues(module: &ModuleIndex, s
 
 // ── Correctness: missing-http-timeout ───────────────────────────────────
 
-pub(crate) fn collect_missing_http_timeout_issues(module: &ModuleIndex, suite: &ast::Suite) -> Vec<Issue> {
+pub(crate) fn collect_missing_http_timeout_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
     if !module.source.contains("requests") && !module.source.contains("httpx") {
         return Vec::new();
     }
     let http_libs: HashSet<&str> = ["requests", "httpx"].into_iter().collect();
-    let http_methods: HashSet<&str> = ["get", "post", "put", "patch", "delete", "head", "request"].into_iter().collect();
+    let http_methods: HashSet<&str> = ["get", "post", "put", "patch", "delete", "head", "request"]
+        .into_iter()
+        .collect();
     let mut issues = Vec::new();
     walk_suite_exprs(suite, &mut |expr| {
         let Expr::Call(call) = expr else { return };
@@ -663,7 +701,10 @@ pub(crate) fn collect_missing_http_timeout_issues(module: &ModuleIndex, suite: &
         if !is_http_call {
             return;
         }
-        let has_timeout = call.keywords.iter().any(|kw| kw.arg.as_deref() == Some("timeout"));
+        let has_timeout = call
+            .keywords
+            .iter()
+            .any(|kw| kw.arg.as_deref() == Some("timeout"));
         if !has_timeout {
             let line = module.line_for_offset(call.range.start().to_usize());
             issues.push(Issue {
@@ -682,15 +723,36 @@ pub(crate) fn collect_missing_http_timeout_issues(module: &ModuleIndex, suite: &
 
 // ── Performance: regex-in-loop ──────────────────────────────────────────
 
-pub(crate) fn collect_get_with_side_effect_issues(module: &ModuleIndex, suite: &ast::Suite) -> Vec<Issue> {
-    if !module.rel_path.contains("routers/") && !module.rel_path.contains("routes/") && !module.rel_path.contains("api/") {
+pub(crate) fn collect_get_with_side_effect_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
+    if !module.rel_path.contains("routers/")
+        && !module.rel_path.contains("routes/")
+        && !module.rel_path.contains("api/")
+    {
         return Vec::new();
     }
     let mutation_attrs: HashSet<&str> = [
-        "add", "delete", "commit", "update", "remove", "send",
-        "post", "put", "patch", "insert", "drop", "create", "save",
-        "bulk_save_objects", "merge", "flush",
-    ].into_iter().collect();
+        "add",
+        "delete",
+        "commit",
+        "update",
+        "remove",
+        "send",
+        "post",
+        "put",
+        "patch",
+        "insert",
+        "drop",
+        "create",
+        "save",
+        "bulk_save_objects",
+        "merge",
+        "flush",
+    ]
+    .into_iter()
+    .collect();
 
     let mut issues = Vec::new();
     for function in all_functions(suite) {
@@ -718,7 +780,9 @@ pub(crate) fn collect_get_with_side_effect_issues(module: &ModuleIndex, suite: &
         // Walk body for mutation calls
         let mut found = false;
         walk_suite_exprs(function.body, &mut |expr| {
-            if found { return; }
+            if found {
+                return;
+            }
             let Expr::Call(call) = expr else { return };
             if let Expr::Attribute(func) = &*call.func {
                 if mutation_attrs.contains(func.attr.as_str()) {

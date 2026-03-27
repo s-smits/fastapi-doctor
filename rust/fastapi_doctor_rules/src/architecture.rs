@@ -1,8 +1,8 @@
-use std::collections::HashSet;
 use rustpython_parser::ast::{self, Expr, Ranged, Stmt};
+use std::collections::HashSet;
 
-use fastapi_doctor_core::{Config, Issue, ModuleIndex};
 use fastapi_doctor_core::ast_helpers::*;
+use fastapi_doctor_core::{Config, Issue, ModuleIndex};
 
 pub(crate) fn collect_async_without_await_issues(
     module: &ModuleIndex,
@@ -173,14 +173,20 @@ pub(crate) fn collect_deep_nesting_issues(
 
 // ── Resilience rules ────────────────────────────────────────────────────
 
-pub(crate) fn collect_avoid_sys_exit_issues(module: &ModuleIndex, suite: &ast::Suite) -> Vec<Issue> {
+pub(crate) fn collect_avoid_sys_exit_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
     if module.file_name.as_deref() == Some("__main__.py")
         || module.file_name.as_deref() == Some("cli.py")
         || module.rel_path.contains("scripts/")
     {
         return Vec::new();
     }
-    if !module.source.contains("sys.exit") && !module.source.contains("exit(") && !module.source.contains("quit(") {
+    if !module.source.contains("sys.exit")
+        && !module.source.contains("exit(")
+        && !module.source.contains("quit(")
+    {
         return Vec::new();
     }
     let mut issues = Vec::new();
@@ -188,7 +194,8 @@ pub(crate) fn collect_avoid_sys_exit_issues(module: &ModuleIndex, suite: &ast::S
         let Expr::Call(call) = expr else { return };
         let is_exit = match &*call.func {
             Expr::Attribute(a) => {
-                matches!(&*a.value, Expr::Name(n) if n.id.as_str() == "sys") && a.attr.as_str() == "exit"
+                matches!(&*a.value, Expr::Name(n) if n.id.as_str() == "sys")
+                    && a.attr.as_str() == "exit"
             }
             Expr::Name(n) => matches!(n.id.as_str(), "exit" | "quit"),
             _ => false,
@@ -211,7 +218,10 @@ pub(crate) fn collect_avoid_sys_exit_issues(module: &ModuleIndex, suite: &ast::S
 
 // ── Architecture: engine-pool-pre-ping ──────────────────────────────────
 
-pub(crate) fn collect_engine_pool_pre_ping_issues(module: &ModuleIndex, suite: &ast::Suite) -> Vec<Issue> {
+pub(crate) fn collect_engine_pool_pre_ping_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
     let mut issues = Vec::new();
     walk_suite_exprs(suite, &mut |expr| {
         let Expr::Call(call) = expr else { return };
@@ -258,7 +268,9 @@ pub(crate) fn collect_print_in_production_issues(
     let mut issues = Vec::new();
     walk_suite_exprs(suite, &mut |expr| {
         let Expr::Call(call) = expr else { return };
-        let Expr::Name(func) = &*call.func else { return };
+        let Expr::Name(func) = &*call.func else {
+            return;
+        };
         if func.id.as_str() != "print" {
             return;
         }
@@ -300,7 +312,8 @@ pub(crate) fn collect_fat_route_handler_issues(
             (dec_start..func_line).any(|l| {
                 if l > 0 && l <= module.lines.len() {
                     let trimmed = &module.lines[l - 1].trimmed;
-                    trimmed.starts_with("@") && (trimmed.contains("router") || trimmed.contains("app"))
+                    trimmed.starts_with("@")
+                        && (trimmed.contains("router") || trimmed.contains("app"))
                 } else {
                     false
                 }
@@ -342,7 +355,10 @@ pub(crate) fn collect_fat_route_handler_issues(
 
 // ── Architecture: passthrough-function ──────────────────────────────────
 
-pub(crate) fn collect_passthrough_function_issues(module: &ModuleIndex, suite: &ast::Suite) -> Vec<Issue> {
+pub(crate) fn collect_passthrough_function_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
     let mut issues = Vec::new();
     // Only check module-level functions (not methods)
     for stmt in suite {
@@ -375,9 +391,13 @@ pub(crate) fn collect_passthrough_function_issues(module: &ModuleIndex, suite: &
         if body.len() != 1 {
             continue;
         }
-        let Stmt::Return(ret) = &body[0] else { continue };
+        let Stmt::Return(ret) = &body[0] else {
+            continue;
+        };
         let Some(ret_val) = &ret.value else { continue };
-        let Expr::Call(call) = &**ret_val else { continue };
+        let Expr::Call(call) = &**ret_val else {
+            continue;
+        };
 
         // Get function param names
         let param_names: HashSet<&str> = args.args.iter().map(|a| a.def.arg.as_str()).collect();

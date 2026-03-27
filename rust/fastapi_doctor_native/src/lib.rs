@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use fastapi_doctor_core::{
-    Config, Issue, IssueTuple, RouteTuple, SuppressionTuple, collect_suppressions,
-    extract_route_scan, finalize_route, parse_suite, score_summary,
+    collect_suppressions, extract_route_scan, finalize_route, parse_suite, route_tuple,
+    score_summary, Config, Issue, IssueTuple, RouteRecord, RouteTuple, SuppressionTuple,
 };
-use fastapi_doctor_project::{ProjectMetadata, load_project_modules, resolve_project_context};
+use fastapi_doctor_project::{load_project_modules, resolve_project_context, ProjectMetadata};
 use fastapi_doctor_rules::{
-    RuleSelection, analyze_module, analyze_module_with_suite, analyze_project_modules,
+    analyze_module, analyze_module_with_suite, analyze_project_modules, analyze_routes,
+    RuleSelection,
 };
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -23,6 +24,9 @@ use rayon::prelude::*;
     god_module_threshold,
     fat_route_handler_threshold,
     should_be_model_mode,
+    forbidden_write_params,
+    create_post_prefixes,
+    tag_required_prefixes,
     active_rules,
     modules
 ))]
@@ -35,6 +39,9 @@ fn analyze_modules(
     god_module_threshold: usize,
     fat_route_handler_threshold: usize,
     should_be_model_mode: String,
+    forbidden_write_params: Vec<String>,
+    create_post_prefixes: Vec<String>,
+    tag_required_prefixes: Vec<String>,
     active_rules: Vec<String>,
     modules: Vec<(String, String)>,
 ) -> PyResult<Vec<IssueTuple>> {
@@ -46,6 +53,9 @@ fn analyze_modules(
         god_module_threshold,
         fat_route_handler_threshold,
         should_be_model_mode,
+        forbidden_write_params,
+        create_post_prefixes,
+        tag_required_prefixes,
     };
     let rule_selection = RuleSelection::from_rules(&active_rules);
 
@@ -79,6 +89,9 @@ fn analyze_modules(
     god_module_threshold,
     fat_route_handler_threshold,
     should_be_model_mode,
+    forbidden_write_params,
+    create_post_prefixes,
+    tag_required_prefixes,
     active_rules,
 ))]
 fn analyze_project(
@@ -93,6 +106,9 @@ fn analyze_project(
     god_module_threshold: usize,
     fat_route_handler_threshold: usize,
     should_be_model_mode: String,
+    forbidden_write_params: Vec<String>,
+    create_post_prefixes: Vec<String>,
+    tag_required_prefixes: Vec<String>,
     active_rules: Vec<String>,
 ) -> PyResult<(Vec<IssueTuple>, Vec<RouteTuple>, Vec<SuppressionTuple>)> {
     let result = analyze_project_bundle(
@@ -107,6 +123,9 @@ fn analyze_project(
         god_module_threshold,
         fat_route_handler_threshold,
         should_be_model_mode,
+        forbidden_write_params,
+        create_post_prefixes,
+        tag_required_prefixes,
         active_rules,
         true,
     )?;
@@ -125,6 +144,9 @@ fn analyze_project(
     god_module_threshold,
     fat_route_handler_threshold,
     should_be_model_mode,
+    forbidden_write_params,
+    create_post_prefixes,
+    tag_required_prefixes,
     active_rules,
     include_routes=true,
 ))]
@@ -140,6 +162,9 @@ fn analyze_project_v2(
     god_module_threshold: usize,
     fat_route_handler_threshold: usize,
     should_be_model_mode: String,
+    forbidden_write_params: Vec<String>,
+    create_post_prefixes: Vec<String>,
+    tag_required_prefixes: Vec<String>,
     active_rules: Vec<String>,
     include_routes: bool,
 ) -> PyResult<Py<PyDict>> {
@@ -155,6 +180,9 @@ fn analyze_project_v2(
         god_module_threshold,
         fat_route_handler_threshold,
         should_be_model_mode,
+        forbidden_write_params,
+        create_post_prefixes,
+        tag_required_prefixes,
         active_rules,
         include_routes,
     )?;
@@ -201,6 +229,9 @@ fn analyze_project_bundle(
     god_module_threshold: usize,
     fat_route_handler_threshold: usize,
     should_be_model_mode: String,
+    forbidden_write_params: Vec<String>,
+    create_post_prefixes: Vec<String>,
+    tag_required_prefixes: Vec<String>,
     active_rules: Vec<String>,
     include_routes: bool,
 ) -> PyResult<ProjectBundleResult> {
@@ -217,10 +248,15 @@ fn analyze_project_bundle(
         god_module_threshold,
         fat_route_handler_threshold,
         should_be_model_mode,
+        forbidden_write_params,
+        create_post_prefixes,
+        tag_required_prefixes,
     };
     let rule_selection = RuleSelection::from_rules(&active_rules);
 
     let project = load_project_modules(metadata).map_err(PyRuntimeError::new_err)?;
+    let needs_routes = include_routes || rule_selection.any_route_rules();
+
     let scans = py.allow_threads(|| {
         project
             .modules
@@ -228,9 +264,13 @@ fn analyze_project_bundle(
             .map(|module| {
                 let index = fastapi_doctor_core::ModuleIndex::new(module);
                 let parsed_suite = parse_suite(module);
-                let issues =
-                    analyze_module_with_suite(&index, parsed_suite.as_ref(), &rule_selection, &config);
-                let route_scan = if include_routes {
+                let issues = analyze_module_with_suite(
+                    &index,
+                    parsed_suite.as_ref(),
+                    &rule_selection,
+                    &config,
+                );
+                let route_scan = if needs_routes {
                     parsed_suite
                         .as_ref()
                         .map(|suite| extract_route_scan(&index, suite))
@@ -265,6 +305,7 @@ fn analyze_project_bundle(
     let mut issues = Vec::new();
     let mut routes = Vec::new();
     let mut suppressions = Vec::new();
+    let mut finalized_routes: Vec<RouteRecord> = Vec::new();
     let mut raw_issues = Vec::new();
     for (module_issues, module_routes, module_suppressions, _) in scans {
         for issue in module_issues {
@@ -272,7 +313,7 @@ fn analyze_project_bundle(
             raw_issues.push(issue);
         }
         for route in module_routes {
-            routes.push(finalize_route(route, &include_prefix_map));
+            finalized_routes.push(finalize_route(route, &include_prefix_map));
         }
         for suppression in module_suppressions {
             suppressions.push((
@@ -286,6 +327,16 @@ fn analyze_project_bundle(
     for issue in project_issues {
         issues.push(issue_tuple(&issue));
         raw_issues.push(issue);
+    }
+
+    let route_issues = analyze_routes(&finalized_routes, &rule_selection, &config);
+    for issue in route_issues {
+        issues.push(issue_tuple(&issue));
+        raw_issues.push(issue);
+    }
+
+    if include_routes {
+        routes = finalized_routes.into_iter().map(route_tuple).collect();
     }
 
     let summary = score_summary(&raw_issues);
@@ -329,9 +380,18 @@ fn get_project_context(py: Python<'_>, static_only: bool) -> PyResult<Py<PyDict>
     let payload = PyDict::new(py);
 
     let layout = PyDict::new(py);
-    layout.set_item("repo_root", context.layout.repo_root.to_string_lossy().to_string())?;
-    layout.set_item("import_root", context.layout.import_root.to_string_lossy().to_string())?;
-    layout.set_item("code_dir", context.layout.code_dir.to_string_lossy().to_string())?;
+    layout.set_item(
+        "repo_root",
+        context.layout.repo_root.to_string_lossy().to_string(),
+    )?;
+    layout.set_item(
+        "import_root",
+        context.layout.import_root.to_string_lossy().to_string(),
+    )?;
+    layout.set_item(
+        "code_dir",
+        context.layout.code_dir.to_string_lossy().to_string(),
+    )?;
     layout.set_item("app_module", context.layout.app_module)?;
     layout.set_item("discovery_source", context.layout.discovery_source)?;
     payload.set_item("layout", layout)?;
@@ -350,6 +410,80 @@ fn get_project_context(py: Python<'_>, static_only: bool) -> PyResult<Py<PyDict>
     libraries.set_item("ruff", context.libraries.ruff)?;
     libraries.set_item("mypy", context.libraries.mypy)?;
     payload.set_item("libraries", libraries)?;
+
+    let effective_config = PyDict::new(py);
+    effective_config.set_item(
+        "config_path",
+        context
+            .effective_config
+            .config_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string()),
+    )?;
+    effective_config.set_item(
+        "uses_legacy_config_name",
+        context.effective_config.uses_legacy_config_name,
+    )?;
+
+    let architecture = PyDict::new(py);
+    architecture.set_item("enabled", context.effective_config.architecture.enabled)?;
+    architecture.set_item(
+        "giant_function",
+        context.effective_config.architecture.giant_function,
+    )?;
+    architecture.set_item(
+        "large_function",
+        context.effective_config.architecture.large_function,
+    )?;
+    architecture.set_item(
+        "god_module",
+        context.effective_config.architecture.god_module,
+    )?;
+    architecture.set_item(
+        "deep_nesting",
+        context.effective_config.architecture.deep_nesting,
+    )?;
+    architecture.set_item(
+        "import_bloat",
+        context.effective_config.architecture.import_bloat,
+    )?;
+    architecture.set_item(
+        "fat_route_handler",
+        context.effective_config.architecture.fat_route_handler,
+    )?;
+    effective_config.set_item("architecture", architecture)?;
+
+    let pydantic = PyDict::new(py);
+    pydantic.set_item(
+        "should_be_model",
+        context.effective_config.pydantic.should_be_model,
+    )?;
+    effective_config.set_item("pydantic", pydantic)?;
+
+    let api = PyDict::new(py);
+    api.set_item(
+        "create_post_prefixes",
+        context.effective_config.api.create_post_prefixes,
+    )?;
+    api.set_item(
+        "tag_required_prefixes",
+        context.effective_config.api.tag_required_prefixes,
+    )?;
+    effective_config.set_item("api", api)?;
+
+    let security = PyDict::new(py);
+    security.set_item(
+        "forbidden_write_params",
+        context.effective_config.security.forbidden_write_params,
+    )?;
+    effective_config.set_item("security", security)?;
+
+    let scan = PyDict::new(py);
+    scan.set_item("exclude_dirs", context.effective_config.scan.exclude_dirs)?;
+    scan.set_item("exclude_rules", context.effective_config.scan.exclude_rules)?;
+    effective_config.set_item("scan", scan)?;
+
+    payload.set_item("effective_config", effective_config)?;
 
     Ok(payload.unbind())
 }

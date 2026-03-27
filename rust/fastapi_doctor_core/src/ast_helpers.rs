@@ -593,7 +593,11 @@ pub fn walk_expr(
     }
 }
 
-pub fn call_site(module: &ModuleIndex, call: &ast::ExprCall, owner_class: Option<&str>) -> CallSite {
+pub fn call_site(
+    module: &ModuleIndex,
+    call: &ast::ExprCall,
+    owner_class: Option<&str>,
+) -> CallSite {
     let callee = match &*call.func {
         Expr::Name(node) => Callee::Name(node.id.to_string()),
         Expr::Attribute(node) => {

@@ -8,7 +8,11 @@ mod correctness;
 mod performance;
 mod pydantic;
 mod resilience;
+mod routes;
 mod security;
 
-pub use engine::{RuleSelection, analyze_module, analyze_module_with_suite, analyze_project_modules};
+pub use engine::{
+    analyze_module, analyze_module_with_suite, analyze_project_modules, analyze_routes,
+    RuleSelection,
+};
 pub use registry::StaticRule;

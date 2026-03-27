@@ -73,7 +73,7 @@ def main() -> int:
 
     tool_jobs: dict[str, tuple[str, list[str]]] = {}
     if not args.skip_ruff:
-        tool_jobs["ruff"] = ("ruff", ["uv", "run", "ruff", "check", ".", "--output-format", "json"])
+        tool_jobs["ruff"] = ("ruff", ["uvx", "ruff", "check", ".", "--output-format", "json"])
     if not args.skip_ty:
         tool_jobs["ty"] = ("ty", ["uvx", "ty", "check", ".", "--output-format", "concise"])
     if args.with_bandit:

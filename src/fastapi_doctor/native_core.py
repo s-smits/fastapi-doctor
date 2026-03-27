@@ -10,6 +10,15 @@ if TYPE_CHECKING:
     from .static_routes import RouteInfo
 
 _LAST_NATIVE_REASON = "native not evaluated yet"
+_NATIVE_ROUTE_RULES = frozenset({
+    "security/forbidden-write-param",
+    "correctness/duplicate-route",
+    "correctness/missing-response-model",
+    "correctness/post-status-code",
+    "api-surface/missing-tags",
+    "api-surface/missing-docstring",
+    "api-surface/missing-pagination",
+})
 
 
 def _set_last_native_reason(reason: str) -> None:
@@ -67,6 +76,7 @@ def run_native_project_v2(active_rules: set[str], *, include_routes: bool = True
         return None
 
     from . import project
+    include_routes = include_routes or bool(active_rules.intersection(_NATIVE_ROUTE_RULES))
 
     try:
         raw = _fastapi_doctor_native.analyze_project_v2(
@@ -80,6 +90,9 @@ def run_native_project_v2(active_rules: set[str], *, include_routes: bool = True
             project.GOD_MODULE_THRESHOLD,
             project._FAT_ROUTE_HANDLER_THRESHOLD,
             project.SHOULD_BE_MODEL_MODE,
+            sorted(project.FORBIDDEN_WRITE_PARAMS),
+            list(project.POST_CREATE_PREFIXES),
+            list(project.TAG_REQUIRED_PREFIXES),
             sorted(active_rules),
             include_routes,
         )

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use fastapi_doctor_core::{ModuleRecord, path_to_string};
+use fastapi_doctor_core::{path_to_string, ModuleRecord};
 use rayon::prelude::*;
 
 use crate::metadata::ProjectMetadata;
@@ -110,8 +110,14 @@ pub fn find_alembic_env_files(repo_root: &Path) -> Vec<PathBuf> {
 
     // Shallow scan: look one and two levels deep for migration dirs
     let skip = [
-        "__pycache__", "node_modules", "site-packages", "dist", "build",
-        ".venv", "venv", ".git",
+        "__pycache__",
+        "node_modules",
+        "site-packages",
+        "dist",
+        "build",
+        ".venv",
+        "venv",
+        ".git",
     ];
     for search_root in &search_roots {
         let Ok(entries) = fs::read_dir(search_root) else {
@@ -141,7 +147,9 @@ pub fn find_alembic_env_files(repo_root: &Path) -> Vec<PathBuf> {
                 continue;
             };
             for nested_entry in nested.flatten() {
-                let Ok(nft) = nested_entry.file_type() else { continue };
+                let Ok(nft) = nested_entry.file_type() else {
+                    continue;
+                };
                 if !nft.is_dir() {
                     continue;
                 }
@@ -184,7 +192,11 @@ fn collect_python_files(root: &Path, filter: &ProjectFilesFilter, out: &mut Vec<
 }
 
 fn collect_alembic_env_files(repo_root: &Path, out: &mut Vec<PathBuf>) {
-    for root in [repo_root.to_path_buf(), repo_root.join("backend"), repo_root.join("src")] {
+    for root in [
+        repo_root.to_path_buf(),
+        repo_root.join("backend"),
+        repo_root.join("src"),
+    ] {
         if !root.is_dir() {
             continue;
         }

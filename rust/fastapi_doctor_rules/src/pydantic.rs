@@ -1,9 +1,9 @@
-use std::collections::HashSet;
 use rustpython_parser::ast::{self, Expr, Stmt};
+use std::collections::HashSet;
 
-use fastapi_doctor_core::{Config, Issue, ModuleIndex};
-use fastapi_doctor_core::ast_helpers::*;
 use crate::engine::RuleSelection;
+use fastapi_doctor_core::ast_helpers::*;
+use fastapi_doctor_core::{Config, Issue, ModuleIndex};
 
 fn is_base_model_class(node: &ast::StmtClassDef) -> bool {
     node.bases.iter().any(|base| match base {
@@ -15,9 +15,19 @@ fn is_base_model_class(node: &ast::StmtClassDef) -> bool {
 
 fn is_sensitive_field_name(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
-    ["api_key", "apikey", "password", "secret", "auth_token", "authtoken", "credential", "private_key", "privatekey"]
-        .iter()
-        .any(|p| lower.contains(p))
+    [
+        "api_key",
+        "apikey",
+        "password",
+        "secret",
+        "auth_token",
+        "authtoken",
+        "credential",
+        "private_key",
+        "privatekey",
+    ]
+    .iter()
+    .any(|p| lower.contains(p))
 }
 
 fn annotation_contains_secret_str(ann: &Expr) -> bool {
@@ -66,17 +76,52 @@ pub(crate) fn collect_pydantic_issues(
     }
 
     let api_boundary_dirs: HashSet<&str> = [
-        "routers", "router", "interfaces", "interface",
-        "schemas", "schema", "endpoints", "endpoint", "api", "views",
-    ].into_iter().collect();
+        "routers",
+        "router",
+        "interfaces",
+        "interface",
+        "schemas",
+        "schema",
+        "endpoints",
+        "endpoint",
+        "api",
+        "views",
+    ]
+    .into_iter()
+    .collect();
     let internal_dirs: HashSet<&str> = [
-        "services", "service", "utils", "util", "helpers", "helper",
-        "internal", "core", "domain", "agents", "agent",
-        "state", "workflows", "workflow", "lib", "scripts", "script",
-        "tests", "test", "migrations", "middleware",
-    ].into_iter().collect();
-    let is_at_boundary = module.path_parts.iter().any(|p| api_boundary_dirs.contains(p.to_ascii_lowercase().as_str()));
-    let is_internal = module.path_parts.iter().any(|p| internal_dirs.contains(p.to_ascii_lowercase().as_str()));
+        "services",
+        "service",
+        "utils",
+        "util",
+        "helpers",
+        "helper",
+        "internal",
+        "core",
+        "domain",
+        "agents",
+        "agent",
+        "state",
+        "workflows",
+        "workflow",
+        "lib",
+        "scripts",
+        "script",
+        "tests",
+        "test",
+        "migrations",
+        "middleware",
+    ]
+    .into_iter()
+    .collect();
+    let is_at_boundary = module
+        .path_parts
+        .iter()
+        .any(|p| api_boundary_dirs.contains(p.to_ascii_lowercase().as_str()));
+    let is_internal = module
+        .path_parts
+        .iter()
+        .any(|p| internal_dirs.contains(p.to_ascii_lowercase().as_str()));
     let everywhere = config.should_be_model_mode == "everywhere";
 
     walk_suite_stmts(suite, &mut |stmt| {
@@ -190,7 +235,12 @@ pub(crate) fn collect_pydantic_issues(
                 if has_total_false {
                     return;
                 }
-                let should_flag = everywhere || is_at_boundary || class_name.ends_with("Request") || class_name.ends_with("Response") || class_name.ends_with("Schema") || class_name.ends_with("Payload");
+                let should_flag = everywhere
+                    || is_at_boundary
+                    || class_name.ends_with("Request")
+                    || class_name.ends_with("Response")
+                    || class_name.ends_with("Schema")
+                    || class_name.ends_with("Payload");
                 if should_flag {
                     issues.push(Issue {
                         check: "pydantic/should-be-model",
@@ -214,8 +264,15 @@ pub(crate) fn collect_pydantic_issues(
                 _ => false,
             });
             if is_named_tuple {
-                let field_count = node.body.iter().filter(|s| matches!(s, Stmt::AnnAssign(_))).count();
-                let has_api_name = class_name.ends_with("Request") || class_name.ends_with("Response") || class_name.ends_with("Schema") || class_name.ends_with("Payload");
+                let field_count = node
+                    .body
+                    .iter()
+                    .filter(|s| matches!(s, Stmt::AnnAssign(_)))
+                    .count();
+                let has_api_name = class_name.ends_with("Request")
+                    || class_name.ends_with("Response")
+                    || class_name.ends_with("Schema")
+                    || class_name.ends_with("Payload");
                 if field_count <= 3 && !has_api_name {
                     return;
                 }
@@ -237,17 +294,15 @@ pub(crate) fn collect_pydantic_issues(
             }
 
             // @dataclass
-            let is_dataclass = node.decorator_list.iter().any(|dec| {
-                match dec {
+            let is_dataclass = node.decorator_list.iter().any(|dec| match dec {
+                Expr::Name(n) => n.id.as_str() == "dataclass",
+                Expr::Attribute(a) => a.attr.as_str() == "dataclass",
+                Expr::Call(c) => match &*c.func {
                     Expr::Name(n) => n.id.as_str() == "dataclass",
                     Expr::Attribute(a) => a.attr.as_str() == "dataclass",
-                    Expr::Call(c) => match &*c.func {
-                        Expr::Name(n) => n.id.as_str() == "dataclass",
-                        Expr::Attribute(a) => a.attr.as_str() == "dataclass",
-                        _ => false,
-                    },
                     _ => false,
-                }
+                },
+                _ => false,
             });
             if is_dataclass {
                 // Skip slots=True or frozen=True
@@ -267,7 +322,10 @@ pub(crate) fn collect_pydantic_issues(
                 if !everywhere && is_internal {
                     return;
                 }
-                let has_api_name = class_name.ends_with("Request") || class_name.ends_with("Response") || class_name.ends_with("Schema") || class_name.ends_with("Payload");
+                let has_api_name = class_name.ends_with("Request")
+                    || class_name.ends_with("Response")
+                    || class_name.ends_with("Schema")
+                    || class_name.ends_with("Payload");
                 let should_flag = everywhere || is_at_boundary || has_api_name;
                 if should_flag {
                     issues.push(Issue {

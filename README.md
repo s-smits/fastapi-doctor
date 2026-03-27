@@ -85,7 +85,7 @@ uv run fastapi-doctor --app-module my_pkg.main:app
 | `strict` | All checks, including opinionated architecture and performance rules. |
 
 ## Performance
-`0.3.1` moves the static-only path to a native project scan that performs file discovery, source loading, static issue analysis, route extraction, and suppression collection in Rust.
+`0.4.0` keeps the static-only path in the native project bundle and tightens the Rust-owned boundary around project discovery, config loading, route extraction, route-policy checks, and suppression collection.
 
 Measured with:
 
@@ -93,12 +93,7 @@ Measured with:
 uv run fastapi-doctor --static-only --profile strict --skip-ruff --skip-ty --repo-root /path/to/project
 ```
 
-| Engine | Strict Static Scan | vs Legacy |
-| :--- | :--- | :--- |
-| Legacy Python | ~28.0s | 1x |
-| Rust subprocess (~0.1.x) | ~11.7s | ~2.4x |
-| PyO3 extension (0.2.x) | ~5.9s | ~4.8x |
-| Native project bundle (0.3.1) | ~2.1s to ~2.4s | ~11x to ~13x |
+On the maintainer repo, import time dropped from `0.1936s` with the legacy Python runner to `0.0521s` with the current native path, and a strict static-only self-scan dropped from `0.6355s` cold / `0.6275s` warm to `0.2228s` cold / `0.2073s` warm. On a representative external backend, the same strict static-only run held score parity while improving from `9.7251s` cold / `9.8521s` warm to `1.0967s` cold / `1.0202s` warm.
 
 ## Native Runtime
 Runtime selection order:
@@ -107,7 +102,7 @@ Runtime selection order:
 
 ## Internal Layout
 - `src/fastapi_doctor/`: CLI, report assembly, live route checks, Python fallback logic.
-- `rust/doctor_core/`: Rust static engine and native extension.
+- `rust/`: Rust workspace for the static engine, project model, rules, and native extension.
 - `.github/workflows/`: wheel build and GitHub Release publishing.
 - `tests/`: unit and integration tests.
 
@@ -117,7 +112,7 @@ Runtime selection order:
 uv run pytest -q
 
 # Rust tests
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo test --manifest-path rust/doctor_core/Cargo.toml
+PYO3_PYTHON=.venv/bin/python cargo test --manifest-path rust/Cargo.toml
 ```
 
 ### Local Native Development
@@ -130,8 +125,8 @@ PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv build
 ```
 
 ## Release Flow
-Push a tag like `v0.3.1` and GitHub Actions will:
-- Validate that the tag matches `rust/doctor_core/Cargo.toml`
+Push a tag like `v0.4.0` and GitHub Actions will:
+- Validate that the tag matches `rust/Cargo.toml`
 - Build platform wheels
 - Build an sdist
 - Attach all artifacts to a GitHub Release

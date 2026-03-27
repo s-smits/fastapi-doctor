@@ -162,6 +162,62 @@ def _library_info_from_payload(payload: dict[str, Any]) -> LibraryInfo:
     )
 
 
+def _native_effective_config(native_context: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not native_context:
+        return None
+    payload = native_context.get("effective_config")
+    return payload if isinstance(payload, dict) else None
+
+
+def _as_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def _as_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _apply_effective_config(effective_config: dict[str, Any]) -> None:
+    global _CONFIG_PATH
+    global _DOCTOR_CONFIG, _ARCH_CONFIG, _PYDANTIC_CONFIG, _API_CONFIG, _SECURITY_CONFIG, _SCAN_CONFIG
+    global ARCHITECTURE_ENABLED, GIANT_FUNCTION_THRESHOLD, LARGE_FUNCTION_THRESHOLD
+    global GOD_MODULE_THRESHOLD, DEEP_NESTING_THRESHOLD, _IMPORT_BLOAT_THRESHOLD
+    global _FAT_ROUTE_HANDLER_THRESHOLD, SHOULD_BE_MODEL_MODE
+    global FORBIDDEN_WRITE_PARAMS, POST_CREATE_PREFIXES, TAG_REQUIRED_PREFIXES, SCAN_EXCLUDED_DIRS
+    global EXCLUDE_RULES
+
+    _DOCTOR_CONFIG = effective_config
+    config_path = effective_config.get("config_path")
+    _CONFIG_PATH = Path(config_path) if isinstance(config_path, str) and config_path else None
+
+    _ARCH_CONFIG = effective_config.get("architecture", {}) if isinstance(effective_config.get("architecture"), dict) else {}
+    _PYDANTIC_CONFIG = effective_config.get("pydantic", {}) if isinstance(effective_config.get("pydantic"), dict) else {}
+    _API_CONFIG = effective_config.get("api", {}) if isinstance(effective_config.get("api"), dict) else {}
+    _SECURITY_CONFIG = effective_config.get("security", {}) if isinstance(effective_config.get("security"), dict) else {}
+    _SCAN_CONFIG = effective_config.get("scan", {}) if isinstance(effective_config.get("scan"), dict) else {}
+
+    ARCHITECTURE_ENABLED = bool(_ARCH_CONFIG.get("enabled", True))
+    GIANT_FUNCTION_THRESHOLD = _as_int(_ARCH_CONFIG.get("giant_function"), 400)
+    LARGE_FUNCTION_THRESHOLD = _as_int(_ARCH_CONFIG.get("large_function"), 200)
+    GOD_MODULE_THRESHOLD = _as_int(_ARCH_CONFIG.get("god_module"), 1500)
+    DEEP_NESTING_THRESHOLD = _as_int(_ARCH_CONFIG.get("deep_nesting"), 5)
+    _IMPORT_BLOAT_THRESHOLD = _as_int(_ARCH_CONFIG.get("import_bloat"), 30)
+    _FAT_ROUTE_HANDLER_THRESHOLD = _as_int(_ARCH_CONFIG.get("fat_route_handler"), 100)
+    SHOULD_BE_MODEL_MODE = str(_PYDANTIC_CONFIG.get("should_be_model") or "boundary")
+    FORBIDDEN_WRITE_PARAMS = frozenset(_as_string_list(_SECURITY_CONFIG.get("forbidden_write_params")))
+    POST_CREATE_PREFIXES = tuple(_as_string_list(_API_CONFIG.get("create_post_prefixes")))
+    tag_required_prefixes = _as_string_list(_API_CONFIG.get("tag_required_prefixes"))
+    TAG_REQUIRED_PREFIXES = tuple(tag_required_prefixes or ["/api/"])
+    scan_excluded_dirs = _as_string_list(_SCAN_CONFIG.get("exclude_dirs"))
+    SCAN_EXCLUDED_DIRS = frozenset(scan_excluded_dirs or ["lib", "vendor", "vendored", "third_party"])
+    EXCLUDE_RULES = frozenset(_as_string_list(_SCAN_CONFIG.get("exclude_rules")))
+
+
 def _load_doctor_config() -> dict[str, Any]:
     global _CONFIG_PATH
     config_path = next(
@@ -180,7 +236,16 @@ def _load_doctor_config() -> dict[str, Any]:
 
         with config_path.open() as f:
             data = yaml.safe_load(f)
-        return data if isinstance(data, dict) else {}
+        loaded = data if isinstance(data, dict) else {}
+        return {
+            "config_path": str(config_path),
+            "uses_legacy_config_name": config_path.name == ".python-doctor.yml",
+            "architecture": loaded.get("architecture", {}) if isinstance(loaded.get("architecture"), dict) else {},
+            "pydantic": loaded.get("pydantic", {}) if isinstance(loaded.get("pydantic"), dict) else {},
+            "api": loaded.get("api", {}) if isinstance(loaded.get("api"), dict) else {},
+            "security": loaded.get("security", {}) if isinstance(loaded.get("security"), dict) else {},
+            "scan": loaded.get("scan", {}) if isinstance(loaded.get("scan"), dict) else {},
+        }
     except Exception:
         return {}
 
@@ -313,9 +378,36 @@ def _discover_code_dir(repo_root: Path) -> Path:
             score += 30
         if (child / "main.py").is_file() or (child / "app.py").is_file():
             score += 25
+        score += min(_count_py_files(child), 20)
         if score:
             candidates.append((score, child))
     return max(candidates, key=lambda item: item[0])[1] if candidates else repo_root
+
+
+def _count_py_files(directory: Path, *, cap: int = 20) -> int:
+    count = 0
+
+    def _walk(current_path: str) -> None:
+        nonlocal count
+        if count >= cap:
+            return
+        try:
+            with os.scandir(current_path) as entries:
+                for entry in entries:
+                    if count >= cap:
+                        return
+                    name = entry.name
+                    if name.startswith(".") or name in _EXCLUDED_DISCOVERY_DIRS:
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        _walk(entry.path)
+                    elif entry.is_file(follow_symlinks=False) and name.endswith(".py"):
+                        count += 1
+        except (PermissionError, OSError):
+            return
+
+    _walk(str(directory))
+    return count
 
 
 def _fallback_project_layout(*, static_only: bool = False) -> ProjectLayout:
@@ -375,12 +467,6 @@ def _fallback_project_layout(*, static_only: bool = False) -> ProjectLayout:
 def refresh_runtime_config(*, static_only: bool = False) -> ProjectLayout:
     global REPO_ROOT, IMPORT_ROOT, OWN_CODE_DIR, APP_MODULE, VENDORED_LIB
     global _PROJECT_LAYOUT
-    global _DOCTOR_CONFIG, _ARCH_CONFIG, _PYDANTIC_CONFIG, _API_CONFIG, _SECURITY_CONFIG, _SCAN_CONFIG
-    global ARCHITECTURE_ENABLED, GIANT_FUNCTION_THRESHOLD, LARGE_FUNCTION_THRESHOLD
-    global GOD_MODULE_THRESHOLD, DEEP_NESTING_THRESHOLD, _IMPORT_BLOAT_THRESHOLD
-    global _FAT_ROUTE_HANDLER_THRESHOLD, SHOULD_BE_MODEL_MODE
-    global FORBIDDEN_WRITE_PARAMS, POST_CREATE_PREFIXES, TAG_REQUIRED_PREFIXES, SCAN_EXCLUDED_DIRS
-    global EXCLUDE_RULES
     global _CONFIG_SIGNATURE, _PARSED_MODULE_CACHE, _LIBRARY_INFO_CACHE, _STATIC_ONLY_DISCOVERY
     global _NATIVE_PROJECT_CONTEXT
 
@@ -406,28 +492,11 @@ def refresh_runtime_config(*, static_only: bool = False) -> ProjectLayout:
     VENDORED_LIB = None
     _PROJECT_LAYOUT = layout
 
-    _DOCTOR_CONFIG = _load_doctor_config()
-    _ARCH_CONFIG = _DOCTOR_CONFIG.get("architecture", {})
-    _PYDANTIC_CONFIG = _DOCTOR_CONFIG.get("pydantic", {})
-    _API_CONFIG = _DOCTOR_CONFIG.get("api", {})
-    _SECURITY_CONFIG = _DOCTOR_CONFIG.get("security", {})
-    _SCAN_CONFIG = _DOCTOR_CONFIG.get("scan", {})
-
-    ARCHITECTURE_ENABLED = _ARCH_CONFIG.get("enabled", True)
-    GIANT_FUNCTION_THRESHOLD = _ARCH_CONFIG.get("giant_function", 400)
-    LARGE_FUNCTION_THRESHOLD = _ARCH_CONFIG.get("large_function", 200)
-    GOD_MODULE_THRESHOLD = _ARCH_CONFIG.get("god_module", 1500)
-    DEEP_NESTING_THRESHOLD = _ARCH_CONFIG.get("deep_nesting", 5)
-    _IMPORT_BLOAT_THRESHOLD = _ARCH_CONFIG.get("import_bloat", 30)
-    _FAT_ROUTE_HANDLER_THRESHOLD = _ARCH_CONFIG.get("fat_route_handler", 100)
-    SHOULD_BE_MODEL_MODE = _PYDANTIC_CONFIG.get("should_be_model", "boundary")
-    FORBIDDEN_WRITE_PARAMS = frozenset(_SECURITY_CONFIG.get("forbidden_write_params", []))
-    POST_CREATE_PREFIXES = tuple(_API_CONFIG.get("create_post_prefixes", []))
-    TAG_REQUIRED_PREFIXES = tuple(_API_CONFIG.get("tag_required_prefixes", ["/api/"]))
-    SCAN_EXCLUDED_DIRS = frozenset(
-        _SCAN_CONFIG.get("exclude_dirs", ["lib", "vendor", "vendored", "third_party"])
-    )
-    EXCLUDE_RULES = frozenset(_SCAN_CONFIG.get("exclude_rules", []))
+    native_effective_config = _native_effective_config(_NATIVE_PROJECT_CONTEXT)
+    if native_effective_config is not None:
+        _apply_effective_config(native_effective_config)
+    else:
+        _apply_effective_config(_load_doctor_config())
     _STATIC_ONLY_DISCOVERY = static_only
     _CONFIG_SIGNATURE = _current_config_signature(static_only=static_only)
     _PARSED_MODULE_CACHE = None

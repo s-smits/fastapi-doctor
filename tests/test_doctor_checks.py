@@ -14,6 +14,7 @@ if str(SRC) not in sys.path:
 
 import fastapi_doctor.app_loader as app_loader_module  # noqa: E402
 import fastapi_doctor.checks.architecture as architecture_module  # noqa: E402
+import fastapi_doctor.checks.route_checks as route_checks_module  # noqa: E402
 import fastapi_doctor.cli as cli_module  # noqa: E402
 import fastapi_doctor.external_tools as external_tools_module  # noqa: E402
 import fastapi_doctor.checks.static_checks as static_checks_module  # noqa: E402
@@ -198,6 +199,22 @@ def test_skip_app_bootstrap_skips_app_discovery(monkeypatch, tmp_path: Path) -> 
     assert module.get_project_layout().discovery_source == "static-only heuristics"
 
 
+def test_static_only_prefers_src_code_dir_over_repo_root(monkeypatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "src" / "fastapi_doctor"
+    _write(package_dir / "__init__.py", "")
+    _write(package_dir / "cli.py", "def main() -> int:\n    return 0\n")
+    _write(tmp_path / "tests" / "test_fixture.py", "assert True\n")
+
+    module = _reload_doctor(monkeypatch, tmp_path)
+    project_module.refresh_runtime_config(static_only=True)
+
+    layout = module.get_project_layout()
+    parsed = module.parsed_python_modules()
+
+    assert layout.code_dir == tmp_path / "src"
+    assert not any(parsed_module.rel_path.startswith("tests/") for parsed_module in parsed)
+
+
 def test_missing_fastapi_runtime_skips_live_app_import(monkeypatch, tmp_path: Path) -> None:
     package_dir = tmp_path / "pkg"
     _write(package_dir / "__init__.py", "")
@@ -216,9 +233,55 @@ def test_missing_fastapi_runtime_skips_live_app_import(monkeypatch, tmp_path: Pa
 
     report = module.run_python_doctor_checks(profile="strict")
 
-    assert "security/missing-auth-dep" in report.checks_not_evaluated
+    assert "security/missing-auth-dep" not in report.checks_not_evaluated
     assert "api-surface/missing-operation-id" in report.checks_not_evaluated
     assert not any(issue.check == "doctor/app-bootstrap-failed" for issue in report.issues)
+
+
+def test_static_native_route_policy_rules_are_reported(monkeypatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "pkg"
+    _write(package_dir / "__init__.py", "")
+    _write(
+        tmp_path / ".fastapi-doctor.yml",
+        (
+            "api:\n"
+            "  create_post_prefixes: ['/api/items']\n"
+            "security:\n"
+            "  forbidden_write_params: ['user_id']\n"
+        ),
+    )
+    _write(
+        package_dir / "api.py",
+        (
+            "from fastapi import APIRouter\n\n"
+            "router = APIRouter(prefix='/api/items')\n\n"
+            "@router.post('')\n"
+            "async def create_item(user_id: int):\n"
+            "    return {'ok': True}\n\n"
+            "@router.get('')\n"
+            "async def list_items():\n"
+            "    return ['a']\n"
+        ),
+    )
+
+    module = _reload_doctor(monkeypatch, tmp_path, code_dir="pkg")
+    report = module.run_python_doctor_checks(
+        only_rules={
+            "security/forbidden-write-param",
+            "correctness/missing-response-model",
+            "correctness/post-status-code",
+            "api-surface/missing-tags",
+            "api-surface/missing-docstring",
+        },
+        skip_app_bootstrap=True,
+    )
+
+    found = {issue.check for issue in report.issues}
+    assert "security/forbidden-write-param" in found
+    assert "correctness/missing-response-model" in found
+    assert "correctness/post-status-code" in found
+    assert "api-surface/missing-tags" in found
+    assert "api-surface/missing-docstring" in found
 
 
 def test_get_with_side_effect_ignores_read_only_execute(monkeypatch, tmp_path: Path) -> None:
@@ -317,6 +380,63 @@ def test_map_ruff_findings_to_doctor() -> None:
     assert issues[1].line == 3
 
 
+def test_main_bootstraps_ruff_with_uvx(monkeypatch, tmp_path: Path, capsys) -> None:
+    commands: list[list[str]] = []
+
+    monkeypatch.setattr(
+        cli_module,
+        "parse_args",
+        lambda: SimpleNamespace(
+            static_only=False,
+            json=False,
+            score=True,
+            skip_ruff=False,
+            skip_ty=True,
+            with_bandit=False,
+            with_tests=False,
+            skip_structure=True,
+            skip_openapi=True,
+            fail_on="none",
+            profile="medium",
+            only_rules=None,
+            ignore_rules=None,
+            verbose=False,
+            repo_root=None,
+            code_dir=None,
+            import_root=None,
+            app_module=None,
+            skip_app_bootstrap=False,
+            pytest_args="",
+        ),
+    )
+    monkeypatch.setattr(cli_module, "configure_environment_from_args", lambda args: None)
+    monkeypatch.setattr(cli_module, "resolve_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(cli_module, "get_cli_version", lambda: "test")
+
+    def _fake_run_command(name: str, command: list[str], cwd: Path) -> external_tools_module.CommandResult:
+        commands.append(command)
+        return external_tools_module.CommandResult(
+            name=name,
+            command=command,
+            returncode=0,
+            stdout="[]",
+            stderr="",
+        )
+
+    monkeypatch.setattr(cli_module, "run_command", _fake_run_command)
+
+    assert cli_module.main() == 0
+    assert commands == [["uvx", "ruff", "check", ".", "--output-format", "json"]]
+    assert capsys.readouterr().out.strip() == "100"
+
+
+def test_route_checks_legacy_exports_are_lazy() -> None:
+    route_checks = importlib.reload(route_checks_module)
+
+    assert route_checks.check_route_dependency_policies.__module__ == "fastapi_doctor.checks.route_checks"
+    assert route_checks.check_duplicate_routes.__module__ == "fastapi_doctor.checks._legacy_route_checks"
+
+
 def test_report_dict_includes_next_actions() -> None:
     report = models_module.DoctorReport(
         route_count=2,
@@ -390,6 +510,68 @@ def test_build_json_payload_includes_effective_config(monkeypatch, tmp_path: Pat
     assert payload["project"]["app_module"] == "pkg.main:app"
     assert payload["requested"]["static_only"] is False
     assert payload["requested"]["skip_app_bootstrap"] is True
+
+
+def test_native_project_context_includes_effective_config(monkeypatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "pkg"
+    _write(package_dir / "__init__.py", "")
+    _write(package_dir / "main.py", "from fastapi import FastAPI\n\napp = FastAPI()\n")
+    _write(
+        tmp_path / ".fastapi-doctor.yml",
+        (
+            "architecture:\n"
+            "  giant_function: 123\n"
+            "pydantic:\n"
+            "  should_be_model: everywhere\n"
+            "api:\n"
+            "  tag_required_prefixes: ['/api/', '/internal/']\n"
+            "security:\n"
+            "  forbidden_write_params: ['user_id']\n"
+            "scan:\n"
+            "  exclude_dirs: ['generated']\n"
+            "  exclude_rules: ['security/*']\n"
+        ),
+    )
+
+    _reload_doctor(monkeypatch, tmp_path)
+
+    from fastapi_doctor import _fastapi_doctor_native
+
+    payload = _fastapi_doctor_native.get_project_context(static_only=False)
+
+    assert payload["effective_config"]["architecture"]["giant_function"] == 123
+    assert payload["effective_config"]["pydantic"]["should_be_model"] == "everywhere"
+    assert payload["effective_config"]["api"]["tag_required_prefixes"] == ["/api/", "/internal/"]
+    assert payload["effective_config"]["security"]["forbidden_write_params"] == ["user_id"]
+    assert payload["effective_config"]["scan"]["exclude_dirs"] == ["generated"]
+    assert payload["effective_config"]["scan"]["exclude_rules"] == ["security/*"]
+
+
+def test_refresh_runtime_config_prefers_native_effective_config(monkeypatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "pkg"
+    _write(package_dir / "__init__.py", "")
+    _write(package_dir / "main.py", "from fastapi import FastAPI\n\napp = FastAPI()\n")
+    _write(
+        tmp_path / ".fastapi-doctor.yml",
+        (
+            "architecture:\n"
+            "  giant_function: 321\n"
+            "scan:\n"
+            "  exclude_dirs: ['generated']\n"
+        ),
+    )
+
+    _reload_doctor(monkeypatch, tmp_path)
+
+    def _boom() -> dict[str, object]:
+        raise AssertionError("Python config parsing should be bypassed when native effective config is available")
+
+    monkeypatch.setattr(project_module, "_load_doctor_config", _boom)
+
+    project_module.refresh_runtime_config()
+
+    assert project_module.GIANT_FUNCTION_THRESHOLD == 321
+    assert project_module.SCAN_EXCLUDED_DIRS == frozenset({"generated"})
 
 
 def test_get_project_layout_refreshes_when_env_changes(monkeypatch, tmp_path: Path) -> None:
