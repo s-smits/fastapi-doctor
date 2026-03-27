@@ -25,17 +25,23 @@ LLM agents are good at local edits and weak at repo-wide invariants. `fastapi-do
 
 ## Installation
 
-### From PyPI or a Built Wheel
-```bash
-python -m pip install fastapi-doctor
-```
-
 ### From Source
 ```bash
 git clone https://github.com/s-smits/fastapi-doctor.git
 cd fastapi-doctor
 uv sync --extra dev
+```
+
+Run it from the checked-out repo with:
+```bash
 uv run fastapi-doctor --profile strict --repo-root /path/to/your/project
+```
+
+### From GitHub Release Assets
+If you want a prebuilt wheel instead of building from source, install from a GitHub Release artifact:
+
+```bash
+uv tool install --from "https://github.com/s-smits/fastapi-doctor/releases/download/v0.3.0/<wheel-file-name>.whl" fastapi-doctor
 ```
 
 ## GitHub Release Artifacts
@@ -52,12 +58,7 @@ The native extension is built with `abi3` for Python `3.12+`, so each platform o
 
 To install from a downloaded GitHub Release asset:
 ```bash
-python -m pip install /path/to/fastapi_doctor-0.3.0-*.whl
-```
-
-Or install directly from a specific release URL:
-```bash
-python -m pip install "https://github.com/s-smits/fastapi-doctor/releases/download/v0.3.0/<wheel-file-name>.whl"
+uv tool install --from /path/to/fastapi_doctor-0.3.0-*.whl fastapi-doctor
 ```
 
 ## Common Invocations
