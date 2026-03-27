@@ -1,0 +1,58 @@
+name: Publish Package Index
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: package-index-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  publish-package-index:
+    name: Publish Simple Package Index
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v6.0.0
+        with:
+          enablement: true
+
+      - name: Render simple package index
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh api --paginate --slurp repos/${{ github.repository }}/releases > releases.json
+          python scripts/build_simple_index.py \
+            --repository "${{ github.repository }}" \
+            --releases-json releases.json \
+            --output-dir site
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v4.0.0
+        with:
+          path: site
+
+      - name: Deploy GitHub Pages artifact
+        id: deploy
+        uses: actions/deploy-pages@v5.0.0
