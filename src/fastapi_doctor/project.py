@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import os
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -240,6 +241,10 @@ def _discover_app_candidate(repo_root: Path) -> tuple[Path, str, str] | None:
     return file_path, attr_name, reason
 
 def _discover_code_dir(repo_root: Path) -> Path:
+    packaged_code_dir = _discover_code_dir_from_pyproject(repo_root)
+    if packaged_code_dir is not None:
+        return packaged_code_dir
+
     candidates: list[tuple[int, Path]] = []
     for child in repo_root.iterdir():
         if not child.is_dir() or child.name in _EXCLUDED_DISCOVERY_DIRS or child.name.startswith("."):
@@ -259,6 +264,44 @@ def _discover_code_dir(repo_root: Path) -> Path:
     if candidates:
         return max(candidates, key=lambda item: item[0])[1]
     return repo_root
+
+
+def _discover_code_dir_from_pyproject(repo_root: Path) -> Path | None:
+    pyproject_path = repo_root / "pyproject.toml"
+    if not pyproject_path.is_file():
+        return None
+    try:
+        pyproject = tomllib.loads(pyproject_path.read_text())
+    except Exception:
+        return None
+
+    search_roots = (repo_root, repo_root / "src", repo_root / "backend")
+
+    def resolve_package_dir(package_name: str) -> Path | None:
+        package_parts = tuple(part for part in package_name.replace("-", "_").split("/") if part)
+        if not package_parts:
+            return None
+        for search_root in search_roots:
+            candidate = search_root.joinpath(*package_parts)
+            if candidate.is_dir():
+                return candidate
+        return None
+
+    wheel_cfg = (
+        pyproject.get("tool", {})
+        .get("hatch", {})
+        .get("build", {})
+        .get("targets", {})
+        .get("wheel", {})
+    )
+    for package_name in wheel_cfg.get("packages", []):
+        if isinstance(package_name, str) and (candidate := resolve_package_dir(package_name)) is not None:
+            return candidate
+
+    project_name = pyproject.get("project", {}).get("name")
+    if isinstance(project_name, str):
+        return resolve_package_dir(project_name)
+    return None
 
 
 def _count_py_files(directory: Path, *, cap: int = 20) -> int:
@@ -329,7 +372,13 @@ def _discover_project_layout(*, static_only: bool = False) -> ProjectLayout:
             candidate_import_root, candidate_code_dir = inferred_layout
             candidate_module = explicit_app_module.split(":", 1)[0]
             discovery_source = "explicit app module"
-    if (
+    if explicit_code_dir and not explicit_import_root and inferred_layout is None:
+        candidate_code_dir = explicit_code_dir
+        candidate_import_root = explicit_code_dir.parent
+        candidate_module = explicit_code_dir.name if (explicit_code_dir / "__init__.py").is_file() else None
+        candidate_attr = "app"
+        discovery_source = "explicit code dir"
+    elif (
         not static_only
         and inferred_layout is None
         and (not explicit_app_module or not explicit_code_dir or not explicit_import_root)

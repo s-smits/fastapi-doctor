@@ -1,109 +1,138 @@
 # fastapi-doctor
 
-`fastapi-doctor` is an agent-first backend verifier for FastAPI and Python services. It provides a deterministic "quality gate" that agents and developers use to validate backend patterns, security, and structural correctness.
+`fastapi-doctor` is an agent-first backend verifier for FastAPI and Python services. It enforces route contracts, async safety, security boundaries, and structural correctness with deterministic static analysis.
 
 ## Why This Exists
-While AI agents excel at local implementation, they often miss system-wide patterns like missing auth dependencies, blocking I/O in async handlers, OpenAPI drift, or Pydantic version mismatches. `fastapi-doctor` fills this gap by:
-- Using **AST-based checks** rather than relying on LLM memory.
-- Scoring backend health (0-100) across multiple categories.
-- Emitting **stable JSON** for automated agent self-correction.
-- Prioritizing **minimal semantic fixes** over broad style rewrites.
+LLM agents are good at local edits and weak at repo-wide invariants. `fastapi-doctor` closes that gap by:
+- Using AST-based checks instead of style heuristics or prompt memory.
+- Scoring backend health from `0-100`.
+- Emitting stable JSON for automated remediation loops.
+- Catching security and correctness issues that are easy to miss in review.
 
 ## Agent Quick Start
-1. **Profile:** Ask the user for a **Security**, **Balanced**, or **Strict** audit profile.
-2. **Execute:** Run `uv run fastapi-doctor --json --profile <profile>`.
-3. **Remediate:** If the score is below 80, resolve findings in `next_actions` using the smallest possible diff.
+1. Ask the user for a `security`, `medium`, or `strict` audit profile.
+2. Run `uv run fastapi-doctor --json --profile <profile>`.
+3. If the score is below `80`, fix findings with the smallest semantic diff.
 
 > [!IMPORTANT]
-> **Integration Hint:** Ask the user before adding these rules to `CLAUDE.md` or `AGENTS.md`.
+> Ask before copying these rules into `CLAUDE.md`, `AGENTS.md`, or similar custom agent instructions.
 
 ## Key Features
-- **Auto-Discovery:** Detects layouts like `repo-root`, `src/<pkg>`, or `backend/<pkg>`.
-- **Hybrid Engine:** Rust-powered static analysis (`v0.2.0+`) with transparent Python fallback.
-- **Context Aware:** Works inside the target repo's own environment for accurate importing.
-- **Category Split:** Checks route/OpenAPI, architecture, security, performance, and Pydantic usage.
+- Auto-discovers `repo-root`, `src/<pkg>`, and `backend/<pkg>` layouts.
+- Uses a Rust-powered static engine with Python fallback.
+- Runs route/OpenAPI checks, architecture checks, security checks, performance checks, and Pydantic checks.
+- Supports machine-readable JSON for agent workflows.
 
-## Installation & Setup
+## Installation
 
-To install and run `fastapi-doctor` for development or as an agent skill:
+### From PyPI or a Built Wheel
+```bash
+python -m pip install fastapi-doctor
+```
 
+### From Source
 ```bash
 git clone https://github.com/s-smits/fastapi-doctor.git
 cd fastapi-doctor
 uv sync --extra dev
-
-# Run from source
 uv run fastapi-doctor --profile strict --repo-root /path/to/your/project
 ```
 
-*Note: Run `uv run maturin develop --release` if you want to rebuild the high-performance native extension locally. macOS and Linux wheels built from this repo bundle it automatically.*
+## GitHub Release Artifacts
+Tagged releases publish wheel files and an sdist to [GitHub Releases](https://github.com/s-smits/fastapi-doctor/releases).
 
-## Audit Profiles
-| Profile | Focus |
-| :--- | :--- |
-| **`security`** | CORS, secrets, auth dependencies, PII leakage, and env access. |
-| **`medium`** | *(Default)* Security + correctness, resilience, and async safety. |
-| **`strict`** | All checks + opinionated architecture and performance micro-optimizations. |
+Each release uploads:
+- Linux wheel
+- Windows wheel
+- macOS Intel wheel
+- macOS Apple Silicon wheel
+- Source distribution
+
+The native extension is built with `abi3` for Python `3.12+`, so each platform only needs one wheel per architecture instead of one wheel per Python minor version.
+
+To install from a downloaded GitHub Release asset:
+```bash
+python -m pip install /path/to/fastapi_doctor-0.3.0-*.whl
+```
+
+Or install directly from a specific release URL:
+```bash
+python -m pip install "https://github.com/s-smits/fastapi-doctor/releases/download/v0.3.0/<wheel-file-name>.whl"
+```
 
 ## Common Invocations
 ```bash
 # Standard machine-readable report
 uv run fastapi-doctor --json
 
-# Fast static-only scan (skips app import/bootstrap)
+# Fast static-only scan
 uv run fastapi-doctor --json --static-only
 
 # Comprehensive audit with external tools
 uv run fastapi-doctor --json --with-bandit --with-tests
 
-# Explicitly point to a specific app
+# Explicit app entrypoint
 uv run fastapi-doctor --app-module my_pkg.main:app
 ```
 
-## Performance
-Version 0.2.0 replaces the subprocess-based sidecar with a high-performance PyO3 native extension. This eliminates process startup latency and IPC overhead, enabling direct memory access between Python and the Rust engine.
+## Audit Profiles
+| Profile | Focus |
+| :--- | :--- |
+| `security` | Auth dependencies, CORS, secrets, env access, error leaks. |
+| `medium` | Security plus correctness, resilience, and async safety. |
+| `strict` | All checks, including opinionated architecture and performance rules. |
 
-| Engine | Strict Scan (proprietary codebase) | vs Legacy |
+## Performance
+`0.3.0` moves the static-only path to a native project scan that performs file discovery, source loading, static issue analysis, route extraction, and suppression collection in Rust.
+
+Measured on `toto-scope` with:
+
+```bash
+uv run fastapi-doctor --static-only --profile strict --skip-ruff --skip-ty --repo-root /Users/air/Developer/toto-scope
+```
+
+| Engine | Strict Static Scan | vs Legacy |
 | :--- | :--- | :--- |
-| **Legacy Python** | **~28.0s** | **1x** |
-| **Rust Subprocess (~0.1.x)** | **~11.7s** | **~2.4x** |
-| **Rust PyO3 Extension (0.2.0)** | **~5.9s** | **~4.8x** |
+| Legacy Python | ~28.0s | 1x |
+| Rust subprocess (~0.1.x) | ~11.7s | ~2.4x |
+| PyO3 extension (0.2.x) | ~5.9s | ~4.8x |
+| Native project bundle (0.3.0) | ~2.1s to ~2.4s | ~11x to ~13x |
 
 ## Native Runtime
-Version 0.2.0 introduces a modularized Rust engine and expanded rule coverage. The engine is now a compiled C extension (`_fastapi_doctor_native`) rather than a standalone binary.
-
 Runtime selection order:
-1. **Native Extension:** PyO3 module `_fastapi_doctor_native` is imported directly.
-2. **fallback:** pure-Python implementation.
+1. Native PyO3 extension: `fastapi_doctor._fastapi_doctor_native`
+2. Pure-Python fallback
 
 ## Internal Layout
-- `src/fastapi_doctor/`: Python wrapper, CLI, and live FastAPI route/OpenAPI checks.
-- `rust/doctor_core/`: Modularized Rust engine for high-performance static analysis.
-- `scripts/`: Staging and release utilities.
-- `tests/`: End-to-end and unit tests.
+- `src/fastapi_doctor/`: CLI, report assembly, live route checks, Python fallback logic.
+- `rust/doctor_core/`: Rust static engine and native extension.
+- `.github/workflows/`: wheel build and GitHub Release publishing.
+- `tests/`: unit and integration tests.
 
 ## Development
 ```bash
-# Run Python tests
+# Python tests
 uv run pytest -q
 
-# Run Rust tests
-cargo test --manifest-path rust/doctor_core/Cargo.toml
+# Rust tests
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 cargo test --manifest-path rust/doctor_core/Cargo.toml
 ```
 
-### Rust Development
-The native extension lives under [rust/doctor_core/Cargo.toml](/Users/air/Developer/fastapi-doctor/rust/doctor_core/Cargo.toml).
-
-Useful commands:
+### Local Native Development
 ```bash
-# Build and install into the current venv for testing
-uv run maturin develop --release
+# Build and install the extension into the active environment
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uvx maturin develop --release
 
-# Run Rust unit tests
-cargo test --manifest-path rust/doctor_core/Cargo.toml
+# Build local wheel artifacts
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv build --wheel
+
+# Build an sdist
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv build --sdist
 ```
 
-To build a wheel for the current platform:
-```bash
-uv run maturin build --release
-```
+## Release Flow
+Push a tag like `v0.3.0` and GitHub Actions will:
+- Validate that the tag matches `rust/doctor_core/Cargo.toml`
+- Build platform wheels
+- Build an sdist
+- Attach all artifacts to a GitHub Release

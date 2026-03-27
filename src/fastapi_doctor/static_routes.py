@@ -154,55 +154,104 @@ class _RouterMeta:
     tags: list[str] = field(default_factory=list)
 
 
-def _scan_infrastructure(modules: list[project.ParsedModule]):
-    """Find router variables and include_router() calls across all modules."""
-    file_routers: dict[str, dict[str, _RouterMeta]] = {}
-    # router_var_name -> (include_prefix, include_tags) from include_router() calls
-    prefix_map: dict[str, tuple[str, list[str]]] = {}
+@dataclass(slots=True)
+class _PendingRoute:
+    function: ast.FunctionDef | ast.AsyncFunctionDef
+    decorator: ast.Call
 
-    for mod in modules:
-        local: dict[str, _RouterMeta] = {}
-        for node in ast.walk(mod.tree):
-            # APIRouter() / FastAPI() assignments
-            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
-                fname = None
-                f = node.value.func
-                if isinstance(f, ast.Name):
-                    fname = f.id
-                elif isinstance(f, ast.Attribute):
-                    fname = f.attr
-                if fname in ("APIRouter", "FastAPI"):
-                    for target in node.targets:
-                        if isinstance(target, ast.Name):
-                            prefix = _str(_kw(node.value.keywords, "prefix") or _EMPTY_STR) or ""
-                            tags = _str_list(_kw(node.value.keywords, "tags") or _EMPTY_LIST)
-                            local[target.id] = _RouterMeta(prefix=prefix, tags=tags)
 
-            # app.include_router(router, prefix=..., tags=...)
-            if (
-                isinstance(node, ast.Expr)
-                and isinstance(node.value, ast.Call)
-                and isinstance(node.value.func, ast.Attribute)
-                and node.value.func.attr == "include_router"
-                and node.value.args
-            ):
-                call = node.value
-                rarg = call.args[0]
-                rname = None
-                if isinstance(rarg, ast.Name):
-                    rname = rarg.id
-                elif isinstance(rarg, ast.Attribute):
-                    rname = rarg.attr
-                if rname:
-                    inc_prefix = _str(_kw(call.keywords, "prefix") or _EMPTY_STR) or ""
-                    inc_tags = _str_list(_kw(call.keywords, "tags") or _EMPTY_LIST)
-                    existing = prefix_map.get(rname)
-                    if existing is None or len(inc_prefix) > len(existing[0]):
-                        prefix_map[rname] = (inc_prefix, inc_tags)
+@dataclass(slots=True)
+class _ModuleScan:
+    routers: dict[str, _RouterMeta] = field(default_factory=dict)
+    includes: list[tuple[str, str, list[str]]] = field(default_factory=list)
+    pending_routes: list[_PendingRoute] = field(default_factory=list)
 
-        file_routers[mod.rel_path] = local
 
-    return file_routers, prefix_map
+class _ModuleScanner(ast.NodeVisitor):
+    def __init__(self) -> None:
+        self.scan = _ModuleScan()
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if isinstance(node.value, ast.Call):
+            fname = None
+            func = node.value.func
+            if isinstance(func, ast.Name):
+                fname = func.id
+            elif isinstance(func, ast.Attribute):
+                fname = func.attr
+            if fname in ("APIRouter", "FastAPI"):
+                prefix = _str(_kw(node.value.keywords, "prefix") or _EMPTY_STR) or ""
+                tags = _str_list(_kw(node.value.keywords, "tags") or _EMPTY_LIST)
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        self.scan.routers[target.id] = _RouterMeta(prefix=prefix, tags=tags)
+
+    def visit_Expr(self, node: ast.Expr) -> None:
+        value = node.value
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr == "include_router"
+            and value.args
+        ):
+            router_arg = value.args[0]
+            router_name = None
+            if isinstance(router_arg, ast.Name):
+                router_name = router_arg.id
+            elif isinstance(router_arg, ast.Attribute):
+                router_name = router_arg.attr
+            if router_name:
+                include_prefix = _str(_kw(value.keywords, "prefix") or _EMPTY_STR) or ""
+                include_tags = _str_list(_kw(value.keywords, "tags") or _EMPTY_LIST)
+                self.scan.includes.append((router_name, include_prefix, include_tags))
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._collect_route_decorators(node)
+        self._visit_nested_definitions(node.body)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+        self._collect_route_decorators(node)
+        self._visit_nested_definitions(node.body)
+
+    def _collect_route_decorators(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
+        for decorator in node.decorator_list:
+            if not isinstance(decorator, ast.Call) or not isinstance(decorator.func, ast.Attribute):
+                continue
+            method_name = decorator.func.attr.lower()
+            if method_name in _HTTP_METHODS or method_name == "api_route":
+                self.scan.pending_routes.append(_PendingRoute(function=node, decorator=decorator))
+                return
+
+    def _visit_nested_definitions(self, statements: list[ast.stmt]) -> None:
+        for statement in statements:
+            match statement:
+                case ast.FunctionDef() | ast.AsyncFunctionDef() | ast.ClassDef():
+                    self.visit(statement)
+                case ast.If(body=body, orelse=orelse):
+                    self._visit_nested_definitions(body)
+                    self._visit_nested_definitions(orelse)
+                case ast.For(body=body, orelse=orelse) | ast.AsyncFor(body=body, orelse=orelse) | ast.While(body=body, orelse=orelse):
+                    self._visit_nested_definitions(body)
+                    self._visit_nested_definitions(orelse)
+                case ast.With(body=body) | ast.AsyncWith(body=body):
+                    self._visit_nested_definitions(body)
+                case ast.Try(body=body, orelse=orelse, finalbody=finalbody, handlers=handlers):
+                    self._visit_nested_definitions(body)
+                    self._visit_nested_definitions(orelse)
+                    self._visit_nested_definitions(finalbody)
+                    for handler in handlers:
+                        self._visit_nested_definitions(handler.body)
+                case ast.Match(cases=cases):
+                    for case in cases:
+                        self._visit_nested_definitions(case.body)
+                case _:
+                    continue
+
+
+def _scan_module(mod: project.ParsedModule) -> _ModuleScan:
+    scanner = _ModuleScanner()
+    scanner.visit(mod.tree)
+    return scanner.scan
 
 
 # ---------------------------------------------------------------------------
@@ -212,19 +261,29 @@ def _scan_infrastructure(modules: list[project.ParsedModule]):
 def extract_static_routes() -> tuple[list[RouteInfo], int]:
     """Extract route metadata from AST. Returns ``(routes, count)``."""
     modules = project.parsed_python_modules()
-    file_routers, prefix_map = _scan_infrastructure(modules)
+    module_scans = {mod.rel_path: _scan_module(mod) for mod in modules}
+    prefix_map: dict[str, tuple[str, list[str]]] = {}
+    for scan in module_scans.values():
+        for router_name, include_prefix, include_tags in scan.includes:
+            existing = prefix_map.get(router_name)
+            if existing is None or len(include_prefix) > len(existing[0]):
+                prefix_map[router_name] = (include_prefix, include_tags)
 
     routes: list[RouteInfo] = []
     for mod in modules:
-        local = file_routers.get(mod.rel_path, {})
-        for node in ast.walk(mod.tree):
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            for dec in node.decorator_list:
-                info = _parse_decorator(dec, node, mod, local, prefix_map)
-                if info is not None:
-                    routes.append(info)
-                    break  # one route per function
+        scan = module_scans.get(mod.rel_path)
+        if scan is None:
+            continue
+        for pending in scan.pending_routes:
+            info = _parse_decorator(
+                pending.decorator,
+                pending.function,
+                mod,
+                scan.routers,
+                prefix_map,
+            )
+            if info is not None:
+                routes.append(info)
     return routes, len(routes)
 
 

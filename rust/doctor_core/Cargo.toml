@@ -1,7 +1,11 @@
 [package]
 name = "fastapi-doctor-native"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
+description = "Native PyO3 engine for fastapi-doctor."
+license = "MIT"
+repository = "https://github.com/s-smits/fastapi-doctor"
+homepage = "https://github.com/s-smits/fastapi-doctor"
 
 [lib]
 name = "_fastapi_doctor_native"
@@ -10,4 +14,4 @@ crate-type = ["cdylib"]
 [dependencies]
 rustpython-parser = "0.4.0"
 rayon = "1.10.0"
-pyo3 = { version = "0.23.5", features = ["extension-module"] }
+pyo3 = { version = "0.23.5", features = ["abi3-py312"] }

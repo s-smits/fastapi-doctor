@@ -1,7 +1,12 @@
 mod ast_helpers;
 mod rules;
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use rustpython_parser::Parse;
+use rustpython_parser::ast::{self, Constant, Expr, Ranged, Stmt};
 
 #[derive(Clone)]
 struct ModuleRecord {
@@ -30,6 +35,57 @@ struct Issue {
     message: &'static str,
     help: &'static str,
 }
+
+#[derive(Clone, Default)]
+struct RouterMeta {
+    prefix: String,
+    tags: Vec<String>,
+}
+
+#[derive(Clone)]
+struct RouteDraft {
+    router_name: Option<String>,
+    path: String,
+    methods: Vec<String>,
+    dependency_names: Vec<String>,
+    param_names: Vec<String>,
+    include_in_schema: bool,
+    has_response_model: bool,
+    response_model_str: Option<String>,
+    status_code: Option<usize>,
+    decorator_tags: Vec<String>,
+    endpoint_name: String,
+    has_docstring: bool,
+    source_file: String,
+    line: usize,
+    local_prefix: String,
+    local_tags: Vec<String>,
+}
+
+#[derive(Clone)]
+struct SuppressionRecord {
+    rule: String,
+    reason: String,
+    path: String,
+    line: usize,
+}
+
+type IssueTuple = (String, String, String, usize, String, String, String);
+type RouteTuple = (
+    String,
+    Vec<String>,
+    Vec<String>,
+    Vec<String>,
+    bool,
+    bool,
+    Option<String>,
+    Option<usize>,
+    Vec<String>,
+    String,
+    bool,
+    String,
+);
+type SuppressionTuple = (String, String, String, usize);
 
 struct LineRecord<'a> {
     number: usize,
@@ -117,6 +173,519 @@ impl<'a> ModuleIndex<'a> {
         }
         line_suppresses_rule(&self.lines[line_number - 1].raw, rule_id)
     }
+}
+
+fn path_to_string(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn collect_python_files(root: &Path, excluded_dirs: &[String], out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            if name.starts_with('.')
+                || name.as_ref() == "__pycache__"
+                || excluded_dirs.iter().any(|candidate| candidate == name.as_ref())
+            {
+                continue;
+            }
+            collect_python_files(&path, excluded_dirs, out);
+        } else if file_type.is_file() && name.ends_with(".py") {
+            out.push(path);
+        }
+    }
+}
+
+fn rel_path(repo_root: &Path, path: &Path) -> String {
+    path.strip_prefix(repo_root)
+        .map(path_to_string)
+        .unwrap_or_else(|_| path_to_string(path))
+}
+
+fn parse_bool_expr(expr: &Expr) -> Option<bool> {
+    match expr {
+        Expr::Constant(node) => match &node.value {
+            Constant::Bool(value) => Some(*value),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn parse_string_expr(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Constant(node) => match &node.value {
+            Constant::Str(value) => Some(value.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn parse_string_list(expr: &Expr) -> Vec<String> {
+    match expr {
+        Expr::List(node) => node.elts.iter().filter_map(parse_string_expr).collect(),
+        Expr::Tuple(node) => node.elts.iter().filter_map(parse_string_expr).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn parse_usize_expr(module: &ModuleIndex<'_>, expr: &Expr) -> Option<usize> {
+    module
+        .source_slice(expr.range())
+        .trim()
+        .parse::<usize>()
+        .ok()
+}
+
+fn keyword_value<'a>(keywords: &'a [ast::Keyword], name: &str) -> Option<&'a Expr> {
+    keywords
+        .iter()
+        .find(|kw| kw.arg.as_deref() == Some(name))
+        .map(|kw| &kw.value)
+}
+
+fn call_name(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Name(node) => Some(node.id.to_string()),
+        Expr::Attribute(node) => Some(node.attr.to_string()),
+        _ => None,
+    }
+}
+
+fn router_name(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Name(node) => Some(node.id.to_string()),
+        Expr::Attribute(node) => Some(node.attr.to_string()),
+        _ => None,
+    }
+}
+
+fn method_names(call: &ast::ExprCall) -> Option<Vec<String>> {
+    let Expr::Attribute(func) = &*call.func else {
+        return None;
+    };
+    let method_name = func.attr.to_ascii_lowercase();
+    if [
+        "get", "post", "put", "patch", "delete", "head", "options", "trace",
+    ]
+    .contains(&method_name.as_str())
+    {
+        let methods = vec![method_name.to_ascii_uppercase()]
+            .into_iter()
+            .filter(|method| method != "HEAD" && method != "OPTIONS")
+            .collect::<Vec<_>>();
+        return if methods.is_empty() { None } else { Some(methods) };
+    }
+    if method_name != "api_route" {
+        return None;
+    }
+    let methods = keyword_value(&call.keywords, "methods")
+        .map(parse_string_list)
+        .unwrap_or_else(|| vec!["GET".to_string()])
+        .into_iter()
+        .map(|method| method.to_ascii_uppercase())
+        .filter(|method| method != "HEAD" && method != "OPTIONS")
+        .collect::<Vec<_>>();
+    if methods.is_empty() {
+        None
+    } else {
+        Some(methods)
+    }
+}
+
+fn depends_name(call: &ast::ExprCall) -> Option<String> {
+    call.args.first().and_then(|expr| match expr {
+        Expr::Name(node) => Some(node.id.to_string()),
+        Expr::Attribute(node) => Some(node.attr.to_string()),
+        _ => None,
+    })
+}
+
+fn is_depends_call(expr: &Expr) -> bool {
+    match expr {
+        Expr::Call(call) => match &*call.func {
+            Expr::Name(node) => node.id.as_str() == "Depends",
+            Expr::Attribute(node) => node.attr.as_str() == "Depends",
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn function_dependency_names(args: &ast::Arguments) -> Vec<String> {
+    ast_helpers::function_default_exprs(args)
+        .into_iter()
+        .filter_map(|expr| match expr {
+            Expr::Call(call) if is_depends_call(expr) => depends_name(call),
+            _ => None,
+        })
+        .collect()
+}
+
+fn decorator_dependency_names(call: &ast::ExprCall) -> Vec<String> {
+    let Some(expr) = keyword_value(&call.keywords, "dependencies") else {
+        return Vec::new();
+    };
+    match expr {
+        Expr::List(node) => node
+            .elts
+            .iter()
+            .filter_map(|elt| match elt {
+                Expr::Call(call) if is_depends_call(elt) => depends_name(call),
+                _ => None,
+            })
+            .collect(),
+        Expr::Tuple(node) => node
+            .elts
+            .iter()
+            .filter_map(|elt| match elt {
+                Expr::Call(call) if is_depends_call(elt) => depends_name(call),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn function_param_names(args: &ast::Arguments) -> Vec<String> {
+    args.posonlyargs
+        .iter()
+        .chain(args.args.iter())
+        .map(|arg| arg.def.arg.to_string())
+        .chain(args.kwonlyargs.iter().map(|arg| arg.def.arg.to_string()))
+        .filter(|arg| arg != "self")
+        .collect()
+}
+
+fn has_docstring(body: &[Stmt]) -> bool {
+    body.first().is_some_and(|stmt| {
+        matches!(stmt, Stmt::Expr(expr) if matches!(&*expr.value, Expr::Constant(node) if matches!(node.value, Constant::Str(_))))
+    })
+}
+
+fn collect_route_scan_stmt(
+    module: &ModuleIndex<'_>,
+    stmt: &Stmt,
+    routers: &mut HashMap<String, RouterMeta>,
+    includes: &mut Vec<(String, String, Vec<String>)>,
+    drafts: &mut Vec<RouteDraft>,
+) {
+    match stmt {
+        Stmt::Assign(node) => {
+            if let Expr::Call(call) = &*node.value {
+                if let Some(name) = call_name(&call.func) {
+                    if name == "APIRouter" || name == "FastAPI" {
+                        let prefix = keyword_value(&call.keywords, "prefix")
+                            .and_then(parse_string_expr)
+                            .unwrap_or_default();
+                        let tags = keyword_value(&call.keywords, "tags")
+                            .map(parse_string_list)
+                            .unwrap_or_default();
+                        for target in &node.targets {
+                            if let Expr::Name(name) = target {
+                                routers.insert(
+                                    name.id.to_string(),
+                                    RouterMeta {
+                                        prefix: prefix.clone(),
+                                        tags: tags.clone(),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Stmt::Expr(node) => {
+            if let Expr::Call(call) = &*node.value {
+                if matches!(&*call.func, Expr::Attribute(func) if func.attr.as_str() == "include_router") {
+                    if let Some(router_expr) = call.args.first() {
+                        if let Some(name) = router_name(router_expr) {
+                            let prefix = keyword_value(&call.keywords, "prefix")
+                                .and_then(parse_string_expr)
+                                .unwrap_or_default();
+                            let tags = keyword_value(&call.keywords, "tags")
+                                .map(parse_string_list)
+                                .unwrap_or_default();
+                            includes.push((name, prefix, tags));
+                        }
+                    }
+                }
+            }
+        }
+        Stmt::FunctionDef(node) => {
+            collect_route_draft(
+                module,
+                &node.name,
+                &node.args,
+                &node.decorator_list,
+                &node.body,
+                node.range(),
+                drafts,
+            );
+            for inner in &node.body {
+                collect_route_scan_stmt(module, inner, routers, includes, drafts);
+            }
+        }
+        Stmt::AsyncFunctionDef(node) => {
+            collect_route_draft(
+                module,
+                &node.name,
+                &node.args,
+                &node.decorator_list,
+                &node.body,
+                node.range(),
+                drafts,
+            );
+            for inner in &node.body {
+                collect_route_scan_stmt(module, inner, routers, includes, drafts);
+            }
+        }
+        Stmt::ClassDef(node) => {
+            for inner in &node.body {
+                collect_route_scan_stmt(module, inner, routers, includes, drafts);
+            }
+        }
+        Stmt::If(node) => {
+            for inner in &node.body {
+                collect_route_scan_stmt(module, inner, routers, includes, drafts);
+            }
+            for inner in &node.orelse {
+                collect_route_scan_stmt(module, inner, routers, includes, drafts);
+            }
+        }
+        Stmt::For(node) => {
+            for inner in &node.body {
+                collect_route_scan_stmt(module, inner, routers, includes, drafts);
+            }
+            for inner in &node.orelse {
+                collect_route_scan_stmt(module, inner, routers, includes, drafts);
+            }
+        }
+        Stmt::AsyncFor(node) => {
+            for inner in &node.body {
+                collect_route_scan_stmt(module, inner, routers, includes, drafts);
+            }
+            for inner in &node.orelse {
+                collect_route_scan_stmt(module, inner, routers, includes, drafts);
+            }
+        }
+        Stmt::While(node) => {
+            for inner in &node.body {
+                collect_route_scan_stmt(module, inner, routers, includes, drafts);
+            }
+            for inner in &node.orelse {
+                collect_route_scan_stmt(module, inner, routers, includes, drafts);
+            }
+        }
+        Stmt::With(node) => {
+            for inner in &node.body {
+                collect_route_scan_stmt(module, inner, routers, includes, drafts);
+            }
+        }
+        Stmt::AsyncWith(node) => {
+            for inner in &node.body {
+                collect_route_scan_stmt(module, inner, routers, includes, drafts);
+            }
+        }
+        Stmt::Try(node) => {
+            for inner in &node.body {
+                collect_route_scan_stmt(module, inner, routers, includes, drafts);
+            }
+            for handler in &node.handlers {
+                let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                for inner in &handler.body {
+                    collect_route_scan_stmt(module, inner, routers, includes, drafts);
+                }
+            }
+            for inner in &node.orelse {
+                collect_route_scan_stmt(module, inner, routers, includes, drafts);
+            }
+            for inner in &node.finalbody {
+                collect_route_scan_stmt(module, inner, routers, includes, drafts);
+            }
+        }
+        Stmt::Match(node) => {
+            for case in &node.cases {
+                for inner in &case.body {
+                    collect_route_scan_stmt(module, inner, routers, includes, drafts);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_route_draft(
+    module: &ModuleIndex<'_>,
+    name: &str,
+    args: &ast::Arguments,
+    decorators: &[Expr],
+    body: &[Stmt],
+    range: rustpython_parser::ast::text_size::TextRange,
+    drafts: &mut Vec<RouteDraft>,
+) {
+    for decorator in decorators {
+        let Expr::Call(call) = decorator else {
+            continue;
+        };
+        let Some(methods) = method_names(call) else {
+            continue;
+        };
+        let router_name = match &*call.func {
+            Expr::Attribute(node) => router_name(&node.value),
+            _ => None,
+        };
+        let path = call.args.first().and_then(|expr| parse_string_expr(expr)).unwrap_or_default();
+        let include_in_schema = keyword_value(&call.keywords, "include_in_schema")
+            .and_then(parse_bool_expr)
+            .unwrap_or(true);
+        let response_model = keyword_value(&call.keywords, "response_model");
+        let status_code = keyword_value(&call.keywords, "status_code")
+            .and_then(|expr| parse_usize_expr(module, expr));
+        let decorator_tags = keyword_value(&call.keywords, "tags")
+            .map(parse_string_list)
+            .unwrap_or_default();
+        let local_router = router_name
+            .as_ref()
+            .and_then(|router| Some(router.clone()))
+            .unwrap_or_default();
+        drafts.push(RouteDraft {
+            router_name,
+            path,
+            methods,
+            dependency_names: {
+                let mut deps = function_dependency_names(args);
+                deps.extend(decorator_dependency_names(call));
+                deps
+            },
+            param_names: function_param_names(args),
+            include_in_schema,
+            has_response_model: response_model.is_some(),
+            response_model_str: response_model
+                .map(|expr| module.source_slice(expr.range()).to_ascii_lowercase()),
+            status_code,
+            decorator_tags,
+            endpoint_name: name.to_string(),
+            has_docstring: has_docstring(body),
+            source_file: module.rel_path.to_string(),
+            line: module.line_for_offset(range.start().to_usize()),
+            local_prefix: local_router,
+            local_tags: Vec::new(),
+        });
+        return;
+    }
+}
+
+fn extract_route_drafts(module: &ModuleIndex<'_>, suite: &ast::Suite) -> Vec<RouteDraft> {
+    let mut routers = HashMap::new();
+    let mut includes = Vec::new();
+    let mut drafts = Vec::new();
+    for stmt in suite {
+        collect_route_scan_stmt(module, stmt, &mut routers, &mut includes, &mut drafts);
+    }
+    for draft in &mut drafts {
+        if let Some(router_name) = &draft.router_name {
+            if let Some(router) = routers.get(router_name) {
+                draft.local_prefix = router.prefix.clone();
+                draft.local_tags = router.tags.clone();
+            } else {
+                draft.local_prefix.clear();
+                draft.local_tags.clear();
+            }
+        } else {
+            draft.local_prefix.clear();
+            draft.local_tags.clear();
+        }
+    }
+    drafts
+}
+
+fn finalize_route(
+    draft: RouteDraft,
+    include_prefix_map: &HashMap<String, (String, Vec<String>)>,
+) -> RouteTuple {
+    if let Some(router_name) = &draft.router_name {
+        if let Some((include_prefix, include_tags)) = include_prefix_map.get(router_name) {
+            let full_path = format!("{include_prefix}{}{}", draft.local_prefix, draft.path);
+            let tags = if draft.decorator_tags.is_empty() {
+                include_tags
+                    .iter()
+                    .cloned()
+                    .chain(draft.local_tags.iter().cloned())
+                    .collect()
+            } else {
+                draft.decorator_tags.clone()
+            };
+            return (
+                full_path,
+                draft.methods,
+                draft.dependency_names,
+                draft.param_names,
+                draft.include_in_schema,
+                draft.has_response_model,
+                draft.response_model_str,
+                draft.status_code,
+                tags,
+                draft.endpoint_name,
+                draft.has_docstring,
+                format!("{}:{}", draft.source_file, draft.line),
+            );
+        }
+    }
+    let tags = if draft.decorator_tags.is_empty() {
+        draft.local_tags.clone()
+    } else {
+        draft.decorator_tags.clone()
+    };
+    (
+        format!("{}{}", draft.local_prefix, draft.path),
+        draft.methods,
+        draft.dependency_names,
+        draft.param_names,
+        draft.include_in_schema,
+        draft.has_response_model,
+        draft.response_model_str,
+        draft.status_code,
+        tags,
+        draft.endpoint_name,
+        draft.has_docstring,
+        format!("{}:{}", draft.source_file, draft.line),
+    )
+}
+
+fn collect_suppressions(source: &str, path: &str) -> Vec<SuppressionRecord> {
+    source
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let comment = line.split('#').nth(1)?.trim();
+            let rest = comment.strip_prefix("doctor:ignore ")?;
+            let mut parts = rest.split_whitespace();
+            let rule = parts.next()?.to_string();
+            let reason = rest
+                .split("reason=\"")
+                .nth(1)
+                .and_then(|tail| tail.split('"').next())
+                .unwrap_or("")
+                .to_string();
+            Some(SuppressionRecord {
+                rule,
+                reason,
+                path: path.to_string(),
+                line: index + 1,
+            })
+        })
+        .collect()
 }
 
 fn issue(
@@ -385,10 +954,24 @@ fn analyze_module<'a>(
     rules: &RuleSelection,
     config: &Config,
 ) -> Result<Vec<Issue>, String> {
+    let suite = if rules.any_ast_rules() {
+        ast::Suite::parse(&module.source, &module.rel_path).ok()
+    } else {
+        None
+    };
+    Ok(analyze_module_with_suite(module, suite.as_ref(), rules, config))
+}
+
+fn analyze_module_with_suite<'a>(
+    module: &ModuleIndex<'a>,
+    suite: Option<&ast::Suite>,
+    rules: &RuleSelection,
+    config: &Config,
+) -> Vec<Issue> {
     let mut issues = Vec::new();
 
-    if rules.any_ast_rules() {
-        issues.extend(rules::analyze_module_ast(module, rules, config)?);
+    if let Some(parsed_suite) = suite {
+        issues.extend(rules::analyze_suite(module, parsed_suite, rules, config));
     }
 
     if rules.import_bloat
@@ -440,7 +1023,7 @@ fn analyze_module<'a>(
     }
 
     if !rules.any_line_rules() {
-        return Ok(issues);
+        return issues;
     }
 
     let allow_print = rules.print_in_production && !module.has_path_part(&["scripts", "lib"]);
@@ -823,7 +1406,7 @@ fn analyze_module<'a>(
         }
     }
 
-    Ok(issues)
+    issues
 }
 
 use pyo3::prelude::*;
@@ -900,9 +1483,134 @@ fn analyze_modules(
     Ok(out)
 }
 
+#[pyfunction]
+#[pyo3(signature = (
+    repo_root,
+    code_dir,
+    excluded_dirs,
+    import_bloat_threshold,
+    giant_function_threshold,
+    large_function_threshold,
+    deep_nesting_threshold,
+    god_module_threshold,
+    fat_route_handler_threshold,
+    should_be_model_mode,
+    active_rules,
+))]
+fn analyze_project(
+    py: Python<'_>,
+    repo_root: String,
+    code_dir: String,
+    excluded_dirs: Vec<String>,
+    import_bloat_threshold: usize,
+    giant_function_threshold: usize,
+    large_function_threshold: usize,
+    deep_nesting_threshold: usize,
+    god_module_threshold: usize,
+    fat_route_handler_threshold: usize,
+    should_be_model_mode: String,
+    active_rules: Vec<String>,
+) -> PyResult<(Vec<IssueTuple>, Vec<RouteTuple>, Vec<SuppressionTuple>)> {
+    use rayon::prelude::*;
+
+    let config = Config {
+        import_bloat_threshold,
+        giant_function_threshold,
+        large_function_threshold,
+        deep_nesting_threshold,
+        god_module_threshold,
+        fat_route_handler_threshold,
+        should_be_model_mode,
+    };
+    let rule_selection = RuleSelection::from_rules(&active_rules);
+    let repo_root_path = PathBuf::from(repo_root);
+    let code_dir_path = PathBuf::from(code_dir);
+    let mut files = Vec::new();
+    collect_python_files(&code_dir_path, &excluded_dirs, &mut files);
+
+    let scans = py.allow_threads(|| {
+        files
+            .par_iter()
+            .map(|path| {
+                let source = fs::read_to_string(path).map_err(|err| err.to_string())?;
+                let rel_path = rel_path(&repo_root_path, path);
+                let module = ModuleRecord { rel_path, source };
+                let index = ModuleIndex::new(&module);
+                let parsed_suite = ast::Suite::parse(&module.source, &module.rel_path).ok();
+                let issues = analyze_module_with_suite(&index, parsed_suite.as_ref(), &rule_selection, &config);
+                let routes = parsed_suite
+                    .as_ref()
+                    .map(|suite| extract_route_drafts(&index, suite))
+                    .unwrap_or_default();
+                let suppressions = collect_suppressions(&module.source, &module.rel_path);
+                let includes = parsed_suite
+                    .as_ref()
+                    .map(|suite| {
+                        let mut routers = HashMap::new();
+                        let mut includes = Vec::new();
+                        let mut drafts = Vec::new();
+                        for stmt in suite {
+                            collect_route_scan_stmt(&index, stmt, &mut routers, &mut includes, &mut drafts);
+                        }
+                        includes
+                    })
+                    .unwrap_or_default();
+                Ok::<_, String>((issues, routes, suppressions, includes))
+            })
+            .collect::<Result<Vec<_>, String>>()
+    });
+
+    let scans = scans.map_err(|err| pyo3::exceptions::PyRuntimeError::new_err(err))?;
+    let mut include_prefix_map: HashMap<String, (String, Vec<String>)> = HashMap::new();
+    for (_, _, _, includes) in &scans {
+        for (router_name, include_prefix, include_tags) in includes {
+            match include_prefix_map.get(router_name) {
+                Some((existing_prefix, _)) if existing_prefix.len() >= include_prefix.len() => {}
+                _ => {
+                    include_prefix_map.insert(
+                        router_name.clone(),
+                        (include_prefix.clone(), include_tags.clone()),
+                    );
+                }
+            }
+        }
+    }
+
+    let mut issues_out = Vec::new();
+    let mut routes_out = Vec::new();
+    let mut suppressions_out = Vec::new();
+    for (issues, routes, suppressions, _) in scans {
+        for issue in issues {
+            issues_out.push((
+                issue.check.to_string(),
+                issue.severity.to_string(),
+                issue.category.to_string(),
+                issue.line,
+                issue.path,
+                issue.message.to_string(),
+                issue.help.to_string(),
+            ));
+        }
+        for route in routes {
+            routes_out.push(finalize_route(route, &include_prefix_map));
+        }
+        for suppression in suppressions {
+            suppressions_out.push((
+                suppression.rule,
+                suppression.reason,
+                suppression.path,
+                suppression.line,
+            ));
+        }
+    }
+
+    Ok((issues_out, routes_out, suppressions_out))
+}
+
 #[pymodule]
 fn _fastapi_doctor_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(analyze_modules, m)?)?;
+    m.add_function(wrap_pyfunction!(analyze_project, m)?)?;
     Ok(())
 }
 

@@ -136,8 +136,101 @@ def run_native_static_checks(requested_rules: set[str]) -> list[DoctorIssue] | N
     return issues
 
 
+def run_native_static_project_bundle(
+    requested_rules: set[str],
+) -> tuple[list[DoctorIssue], list[object], list[dict[str, object]]] | None:
+    """Run native static checks plus route and suppression extraction from the project tree."""
+    if not requested_rules:
+        return [], [], []
+    if not _native_enabled():
+        _set_last_native_reason("native disabled by FASTAPI_DOCTOR_DISABLE_NATIVE")
+        return None
+
+    try:
+        from . import _fastapi_doctor_native
+        from .static_routes import RouteInfo
+    except ImportError as e:
+        _set_last_native_reason(f"failed to import native PyO3 module: {e}")
+        return None
+
+    active_rules = sorted(requested_rules)
+    try:
+        raw_issues, raw_routes, raw_suppressions = _fastapi_doctor_native.analyze_project(
+            str(project.REPO_ROOT),
+            str(project.OWN_CODE_DIR),
+            sorted(project.SCAN_EXCLUDED_DIRS),
+            project._IMPORT_BLOAT_THRESHOLD,
+            project.GIANT_FUNCTION_THRESHOLD,
+            project.LARGE_FUNCTION_THRESHOLD,
+            project.DEEP_NESTING_THRESHOLD,
+            project.GOD_MODULE_THRESHOLD,
+            project._FAT_ROUTE_HANDLER_THRESHOLD,
+            project.SHOULD_BE_MODEL_MODE,
+            active_rules,
+        )
+    except Exception as e:
+        _set_last_native_reason(f"native project execution failed: {e}")
+        return None
+
+    issues: list[DoctorIssue] = []
+    for check, severity, category, line, path, message, help_text in raw_issues:
+        issues.append(
+            DoctorIssue(
+                check=check,
+                severity=severity,
+                message=message,
+                path=path,
+                category=category,
+                help=help_text,
+                line=line,
+            )
+        )
+
+    routes = []
+    for (
+        path,
+        methods,
+        dependency_names,
+        param_names,
+        include_in_schema,
+        has_response_model,
+        response_model_str,
+        status_code,
+        tags,
+        endpoint_name,
+        has_docstring,
+        source_ref,
+    ) in raw_routes:
+        source_file, _, line_str = source_ref.rpartition(":")
+        routes.append(
+            RouteInfo(
+                path=path,
+                methods=tuple(methods),
+                dependency_names=frozenset(dependency_names),
+                param_names=frozenset(param_names),
+                include_in_schema=include_in_schema,
+                has_response_model=has_response_model,
+                response_model_str=response_model_str,
+                status_code=status_code,
+                tags=list(tags),
+                endpoint_name=endpoint_name,
+                has_docstring=has_docstring,
+                source_file=source_file or source_ref,
+                line=int(line_str) if line_str.isdigit() else 0,
+            )
+        )
+
+    suppressions = [
+        {"rule": rule, "reason": reason, "path": path, "line": line}
+        for rule, reason, path, line in raw_suppressions
+    ]
+    _set_last_native_reason("using PyO3 native project module")
+    return issues, routes, suppressions
+
+
 __all__ = [
     "NATIVE_STATIC_RULES",
     "last_native_reason",
+    "run_native_static_project_bundle",
     "run_native_static_checks",
 ]

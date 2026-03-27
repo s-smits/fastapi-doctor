@@ -23,6 +23,12 @@ dependencies = [
     "PyYAML>=6.0.2",
 ]
 
+[project.urls]
+Homepage = "https://github.com/s-smits/fastapi-doctor"
+Repository = "https://github.com/s-smits/fastapi-doctor"
+Issues = "https://github.com/s-smits/fastapi-doctor/issues"
+Releases = "https://github.com/s-smits/fastapi-doctor/releases"
+
 [project.optional-dependencies]
 dev = [
     "fastapi>=0.116.0",
@@ -41,6 +47,7 @@ features = ["pyo3/extension-module"]
 python-source = "src"
 module-name = "fastapi_doctor._fastapi_doctor_native"
 manifest-path = "rust/doctor_core/Cargo.toml"
+strip = true
 
 [dependency-groups]
 dev = [

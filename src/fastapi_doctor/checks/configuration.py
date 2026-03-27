@@ -28,8 +28,74 @@ def _iter_alembic_env_files() -> list[Path]:
     """Find alembic env.py files via os.scandir (avoids slow rglob)."""
     import os
 
+    common_roots = (
+        project.REPO_ROOT,
+        project.REPO_ROOT / "backend",
+        project.REPO_ROOT / "src",
+    )
+    common_candidates = [
+        root / dirname / "env.py"
+        for root in common_roots
+        for dirname in ("alembic", "migrations")
+    ]
+    existing_candidates = [path for path in common_candidates if path.is_file()]
+    if existing_candidates:
+        return sorted(existing_candidates)
+
+    shallow_candidates: list[Path] = []
+    for root in common_roots:
+        if not root.is_dir():
+            continue
+        try:
+            with os.scandir(root) as entries:
+                for entry in entries:
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                    if entry.name not in {"alembic", "migrations"}:
+                        continue
+                    candidate = Path(entry.path) / "env.py"
+                    if candidate.is_file():
+                        shallow_candidates.append(candidate)
+        except (PermissionError, OSError):
+            continue
+    if shallow_candidates:
+        return sorted(shallow_candidates)
+
     env_files: list[Path] = []
     skip = _NOISY_SCAN_DIRS
+    candidate_roots: list[Path] = []
+
+    def _collect_candidate_roots(root: Path) -> None:
+        if not root.is_dir():
+            return
+        try:
+            with os.scandir(root) as entries:
+                for entry in entries:
+                    if not entry.is_dir(follow_symlinks=False):
+                        continue
+                    if entry.name.startswith(".") or entry.name in skip:
+                        continue
+                    entry_path = Path(entry.path)
+                    if entry.name in {"alembic", "migrations"}:
+                        candidate_roots.append(entry_path)
+                        continue
+                    try:
+                        with os.scandir(entry.path) as nested_entries:
+                            for nested in nested_entries:
+                                if not nested.is_dir(follow_symlinks=False):
+                                    continue
+                                if nested.name in {"alembic", "migrations"}:
+                                    candidate_roots.append(Path(nested.path))
+                    except (PermissionError, OSError):
+                        continue
+        except (PermissionError, OSError):
+            return
+
+    for root in common_roots:
+        _collect_candidate_roots(root)
+
+    if not candidate_roots:
+        return []
 
     def _walk(current: str) -> None:
         try:
@@ -51,7 +117,8 @@ def _iter_alembic_env_files() -> list[Path]:
         except (PermissionError, OSError):
             pass
 
-    _walk(str(project.REPO_ROOT))
+    for candidate_root in candidate_roots:
+        _walk(str(candidate_root))
     return sorted(env_files)
 
 
