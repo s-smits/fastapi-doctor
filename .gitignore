@@ -16,4 +16,3 @@ rust/target/
 
 .pytest_setup_done
 state/
-src/fastapi_doctor/_version.py

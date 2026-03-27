@@ -95,7 +95,7 @@ jobs:
           import fastapi_doctor.native_core as native_core
 
           print(fastapi_doctor.__version__)
-          print(native_core.last_native_reason())
+          print(native_core.get_native_rule_ids())
           PY
 
       - name: Upload wheel artifact
