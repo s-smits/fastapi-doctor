@@ -205,6 +205,300 @@ fn collect_python_files(root: &Path, filter: &ProjectFilesFilter, out: &mut Vec<
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn make_metadata(
+        repo_root: PathBuf,
+        code_root: PathBuf,
+        excluded_dirs: Vec<String>,
+    ) -> ProjectMetadata {
+        ProjectMetadata::new(repo_root, code_root, excluded_dirs)
+    }
+
+    // ── ProjectFilesFilter ───────────────────────────────────────────────
+
+    #[test]
+    fn test_filter_includes_python_files() {
+        let meta = make_metadata(
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo/src"),
+            vec!["vendor".to_string()],
+        );
+        let filter = ProjectFilesFilter::from_metadata(&meta);
+
+        assert!(filter.is_file_included("main.py"));
+        assert!(filter.is_file_included("routes.py"));
+        assert!(!filter.is_file_included("readme.md"));
+        assert!(!filter.is_file_included("config.yaml"));
+        assert!(!filter.is_file_included("data.json"));
+        assert!(!filter.is_file_included("Makefile"));
+    }
+
+    #[test]
+    fn test_filter_excludes_hidden_and_pycache() {
+        let meta = make_metadata(
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            vec![],
+        );
+        let filter = ProjectFilesFilter::from_metadata(&meta);
+
+        assert!(!filter.is_directory_included(".git"));
+        assert!(!filter.is_directory_included(".hidden"));
+        assert!(!filter.is_directory_included("__pycache__"));
+        assert!(filter.is_directory_included("myapp"));
+        assert!(filter.is_directory_included("routers"));
+    }
+
+    #[test]
+    fn test_filter_excludes_custom_dirs() {
+        let meta = make_metadata(
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            vec!["vendor".to_string(), "generated".to_string()],
+        );
+        let filter = ProjectFilesFilter::from_metadata(&meta);
+
+        assert!(!filter.is_directory_included("vendor"));
+        assert!(!filter.is_directory_included("generated"));
+        assert!(filter.is_directory_included("src"));
+        assert!(filter.is_directory_included("api"));
+    }
+
+    #[test]
+    fn test_filter_empty_exclude_dirs() {
+        let meta = make_metadata(
+            PathBuf::from("/tmp/repo"),
+            PathBuf::from("/tmp/repo"),
+            vec![],
+        );
+        let filter = ProjectFilesFilter::from_metadata(&meta);
+
+        // Only hidden dirs and __pycache__ are excluded
+        assert!(filter.is_directory_included("vendor"));
+        assert!(filter.is_directory_included("lib"));
+        assert!(!filter.is_directory_included(".git"));
+        assert!(!filter.is_directory_included("__pycache__"));
+    }
+
+    // ── ProjectFilesWalker ───────────────────────────────────────────────
+
+    #[test]
+    fn test_walker_collects_python_files_recursively() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let src = root.join("src");
+        let sub = src.join("api");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(src.join("main.py"), "print('hello')").unwrap();
+        fs::write(sub.join("routes.py"), "# routes").unwrap();
+        fs::write(src.join("readme.md"), "# readme").unwrap();
+
+        let meta = make_metadata(root.to_path_buf(), src.clone(), vec![]);
+        let walker = ProjectFilesWalker::new(&meta);
+        let paths = walker.collect_paths();
+
+        let names: Vec<String> = paths
+            .iter()
+            .map(|p| {
+                p.strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect();
+        assert!(names.iter().any(|n| n.contains("main.py")));
+        assert!(names.iter().any(|n| n.contains("routes.py")));
+        assert!(!names.iter().any(|n| n.contains("readme.md")));
+    }
+
+    #[test]
+    fn test_walker_respects_exclude_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let src = root.join("src");
+        let vendor = src.join("vendor");
+        let good = src.join("app");
+        fs::create_dir_all(&vendor).unwrap();
+        fs::create_dir_all(&good).unwrap();
+        fs::write(vendor.join("external.py"), "").unwrap();
+        fs::write(good.join("main.py"), "").unwrap();
+
+        let meta = make_metadata(
+            root.to_path_buf(),
+            src.clone(),
+            vec!["vendor".to_string()],
+        );
+        let walker = ProjectFilesWalker::new(&meta);
+        let paths = walker.collect_paths();
+
+        let names: Vec<String> = paths
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert!(names.contains(&"main.py".to_string()));
+        assert!(!names.contains(&"external.py".to_string()));
+    }
+
+    #[test]
+    fn test_walker_deduplicates_and_sorts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::write(root.join("b.py"), "").unwrap();
+        fs::write(root.join("a.py"), "").unwrap();
+
+        let meta = make_metadata(root.to_path_buf(), root.to_path_buf(), vec![]);
+        let walker = ProjectFilesWalker::new(&meta);
+        let paths = walker.collect_paths();
+        let names: Vec<String> = paths
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        // Should be sorted
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(names, sorted);
+    }
+
+    #[test]
+    fn test_walker_empty_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let meta = make_metadata(tmp.path().to_path_buf(), tmp.path().to_path_buf(), vec![]);
+        let walker = ProjectFilesWalker::new(&meta);
+        let paths = walker.collect_paths();
+        assert!(paths.is_empty());
+    }
+
+    #[test]
+    fn test_walker_skips_hidden_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let hidden = root.join(".hidden");
+        fs::create_dir(&hidden).unwrap();
+        fs::write(hidden.join("secret.py"), "").unwrap();
+        fs::write(root.join("visible.py"), "").unwrap();
+
+        let meta = make_metadata(root.to_path_buf(), root.to_path_buf(), vec![]);
+        let walker = ProjectFilesWalker::new(&meta);
+        let paths = walker.collect_paths();
+        let names: Vec<String> = paths
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert!(names.contains(&"visible.py".to_string()));
+        assert!(!names.contains(&"secret.py".to_string()));
+    }
+
+    // ── find_alembic_env_files ───────────────────────────────────────────
+
+    #[test]
+    fn test_find_alembic_env_direct() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let alembic = root.join("alembic");
+        fs::create_dir(&alembic).unwrap();
+        fs::write(alembic.join("env.py"), "# alembic env").unwrap();
+
+        let results = find_alembic_env_files(root);
+        assert!(!results.is_empty());
+        assert!(results[0].ends_with("env.py"));
+    }
+
+    #[test]
+    fn test_find_alembic_env_in_src() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let migrations = root.join("src").join("migrations");
+        fs::create_dir_all(&migrations).unwrap();
+        fs::write(migrations.join("env.py"), "# migrations env").unwrap();
+
+        let results = find_alembic_env_files(root);
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_find_alembic_env_nested() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // Nested: myapp/alembic/env.py (two levels deep from repo root)
+        let nested = root.join("myapp").join("alembic");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("env.py"), "# nested env").unwrap();
+
+        let results = find_alembic_env_files(root);
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_find_alembic_env_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let results = find_alembic_env_files(tmp.path());
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_find_alembic_env_deduplicates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let alembic = root.join("alembic");
+        fs::create_dir(&alembic).unwrap();
+        fs::write(alembic.join("env.py"), "# env").unwrap();
+
+        let results = find_alembic_env_files(root);
+        // The same file may be found by both the fast path and the walker.
+        // Either way, results should be deduplicated.
+        let unique: std::collections::HashSet<_> = results.iter().collect();
+        assert_eq!(unique.len(), results.len());
+    }
+
+    // ── load_project_modules ─────────────────────────────────────────────
+
+    #[test]
+    fn test_load_project_modules_reads_sources() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::write(root.join("main.py"), "app = FastAPI()").unwrap();
+        fs::write(root.join("utils.py"), "def helper(): pass").unwrap();
+
+        let meta = make_metadata(root.to_path_buf(), root.to_path_buf(), vec![]);
+        let loaded = load_project_modules(meta).unwrap();
+
+        assert_eq!(loaded.modules.len(), 2);
+        // Modules should have relative paths and source content
+        for module in &loaded.modules {
+            assert!(module.rel_path.ends_with(".py"));
+            assert!(!module.source.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_load_project_modules_empty_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        let meta = make_metadata(tmp.path().to_path_buf(), tmp.path().to_path_buf(), vec![]);
+        let loaded = load_project_modules(meta).unwrap();
+        assert!(loaded.modules.is_empty());
+    }
+
+    #[test]
+    fn test_load_project_modules_relative_paths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let sub = root.join("myapp");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("core.py"), "x = 1").unwrap();
+
+        let meta = make_metadata(root.to_path_buf(), sub.clone(), vec![]);
+        let loaded = load_project_modules(meta).unwrap();
+
+        assert_eq!(loaded.modules.len(), 1);
+        // rel_path should be relative to repo_root, using forward slashes
+        assert_eq!(loaded.modules[0].rel_path, "myapp/core.py");
+    }
+}
+
 fn collect_alembic_env_files(repo_root: &Path, out: &mut Vec<PathBuf>) {
     for root in [
         repo_root.to_path_buf(),

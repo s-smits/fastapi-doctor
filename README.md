@@ -47,6 +47,13 @@ fastapi-doctor --fail-on warning
 fastapi-doctor --only-rules "security/*"
 fastapi-doctor --ignore-rules "architecture/giant-function"
 
+# Output formats
+fastapi-doctor --output-format sarif   # SARIF 2.1.0 for code scanning
+fastapi-doctor --output-format github  # GitHub Actions annotations
+
+# List all available rules
+fastapi-doctor --list-rules
+
 # Run external tools alongside
 fastapi-doctor --with-bandit --with-tests
 ```
@@ -65,6 +72,72 @@ fastapi-doctor --repo-root . --code-dir src/myapp
 - **API surface** — missing pagination, missing OpenAPI tags, duplicate operation IDs
 - **Pydantic** — deprecated validators, sensitive field types, extra-allow on request models
 - **Resilience** — missing timeouts, bare exception handlers
+
+## Suppressing Findings
+
+Suppress a single rule on one line:
+
+```python
+x = yaml.load(data)  # doctor:ignore security/unsafe-yaml-load reason="input is trusted"
+```
+
+The `# noqa` syntax also works:
+
+```python
+x = yaml.load(data)  # noqa: security/unsafe-yaml-load
+
+# Suppress all rules in a category
+x = yaml.load(data)  # noqa: security/*
+
+# Suppress everything on this line (not recommended)
+x = yaml.load(data)  # noqa
+```
+
+To exclude rules globally, use `--ignore-rules` or the config file's `scan.exclude_rules` list.
+
+## Scoring
+
+fastapi-doctor produces a score from 0 to 100:
+
+```
+score = 100 - (unique_error_rules × 2) - (unique_warning_rules × 1)
+```
+
+Key details:
+- **Unique rules** — multiple findings of the same rule count once
+- **Errors** cost 2 points per unique rule, **warnings** cost 1
+- Score floors at 0
+- External tool penalties (when `--with-bandit`, ruff, or ty fail) subtract additional points
+
+Labels:
+- **Great** — score >= 80
+- **Needs work** — score 60–79
+- **Critical** — score < 60
+
+## CI Integration
+
+Add to your GitHub Actions workflow:
+
+```yaml
+- name: Run fastapi-doctor
+  run: |
+    uvx --index https://s-smits.github.io/fastapi-doctor/simple/ \
+      fastapi-doctor --output-format github --fail-on error --skip-ruff --skip-ty
+```
+
+For GitHub Code Scanning with SARIF:
+
+```yaml
+- name: Run fastapi-doctor
+  run: |
+    uvx --index https://s-smits.github.io/fastapi-doctor/simple/ \
+      fastapi-doctor --output-format sarif --skip-ruff --skip-ty > results.sarif
+
+- name: Upload SARIF
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: results.sarif
+```
 
 ## Configuration
 
@@ -99,8 +172,11 @@ uv sync --extra dev
 Run tests:
 
 ```bash
+# Rust tests (110+ tests across core, rules, and project crates)
+PYO3_PYTHON="$PWD/.venv/bin/python" cargo test --workspace --manifest-path rust/Cargo.toml
+
+# Python integration tests
 uv run pytest -q
-PYO3_PYTHON="$PWD/.venv/bin/python" cargo test --manifest-path rust/Cargo.toml
 ```
 
 Build a wheel locally:

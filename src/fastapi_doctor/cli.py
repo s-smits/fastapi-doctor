@@ -13,7 +13,7 @@ from importlib.metadata import PackageNotFoundError, version as metadata_version
 from pathlib import Path
 from typing import Any
 
-from .native_core import NativeEngineUnavailable, analyze_selected_current_project_v2
+from .native_core import NativeEngineUnavailable, analyze_selected_current_project_v2, get_rule_metadata
 
 SCHEMA_VERSION = "1.2"
 _SECURITY_SELECTORS = frozenset(
@@ -350,8 +350,17 @@ def parse_args() -> argparse.Namespace:
         description="Rust-native backend doctor for FastAPI and Python codebases."
     )
     parser.add_argument("-v", "--version", action="version", version=f"%(prog)s {get_cli_version()}")
+    parser.add_argument("--list-rules", action="store_true", help="List all available rules and exit.")
+    parser.add_argument("--init", action="store_true", help="Create a .fastapi-doctor.yml config file and exit.")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON output.")
+    parser.add_argument(
+        "--output-format",
+        choices=["text", "json", "sarif", "github"],
+        default=None,
+        help="Output format: text (default), json, sarif, or github (annotations).",
+    )
     parser.add_argument("--score", action="store_true", help="Output only the final score.")
+    parser.add_argument("--explain-score", action="store_true", help="Show score breakdown.")
     parser.add_argument("--verbose", action="store_true", help="Show repeated findings.")
     parser.add_argument(
         "--fail-on",
@@ -399,8 +408,67 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _print_rule_table() -> int:
+    try:
+        rules = get_rule_metadata()
+    except NativeEngineUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    categories: dict[str, list[tuple[str, str]]] = {}
+    for rule_id, severity, category in rules:
+        categories.setdefault(category, []).append((rule_id, severity))
+    for category in sorted(categories):
+        print(f"\n{category}:")
+        for rule_id, severity in sorted(categories[category]):
+            print(f"  {rule_id:<50} {severity}")
+    print(f"\n{len(rules)} rules total")
+    return 0
+
+
+_DEFAULT_CONFIG = """\
+architecture:
+  enabled: true
+  giant_function: 400
+  large_function: 200
+  god_module: 1500
+  deep_nesting: 5
+  import_bloat: 30
+  fat_route_handler: 100
+
+pydantic:
+  should_be_model: boundary
+
+api:
+  create_post_prefixes: []
+  tag_required_prefixes:
+    - /api/
+
+security:
+  forbidden_write_params: []
+
+scan:
+  exclude_dirs:
+    - vendor
+    - third_party
+    - generated
+  exclude_rules: []
+"""
+
+
 def main() -> int:
     args = parse_args()
+
+    if args.list_rules:
+        return _print_rule_table()
+
+    if args.init:
+        config_path = Path(".fastapi-doctor.yml")
+        if config_path.exists():
+            print(f"{config_path} already exists", file=sys.stderr)
+            return 1
+        config_path.write_text(_DEFAULT_CONFIG)
+        print(f"Created {config_path}")
+        return 0
 
     if args.repo_root:
         os.environ["DOCTOR_REPO_ROOT"] = args.repo_root
@@ -481,7 +549,53 @@ def main() -> int:
         print(final_score)
         return 0
 
-    if args.json:
+    if args.explain_score:
+        all_issues = native_result["issues"] if native_result else []
+        error_rules: dict[str, int] = {}
+        warning_rules: dict[str, int] = {}
+        for issue in all_issues:
+            bucket = error_rules if issue["severity"] == "error" else warning_rules
+            bucket[issue["check"]] = bucket.get(issue["check"], 0) + 1
+        base_score = native_result["score"] if native_result else 100
+        print(f"Base score: {base_score}/100")
+        if error_rules:
+            print(f"\nErrors ({len(error_rules)} unique rules, -{len(error_rules) * 2} points):")
+            for rule_id, count in sorted(error_rules.items()):
+                print(f"  {rule_id} ({count} finding{'s' if count > 1 else ''})")
+        if warning_rules:
+            print(f"\nWarnings ({len(warning_rules)} unique rules, -{len(warning_rules)} points):")
+            for rule_id, count in sorted(warning_rules.items()):
+                print(f"  {rule_id} ({count} finding{'s' if count > 1 else ''})")
+        penalties = []
+        ruff_passed = tool_results.get("ruff", {}).get("passed")
+        ty_passed = tool_results.get("ty", {}).get("passed")
+        if ruff_passed is False:
+            penalties.append("ruff failed: -5")
+        if ty_passed is False:
+            penalties.append("ty failed: -5")
+        bandit_highs = _count_bandit_highs(tool_results["bandit"]["stdout"]) if "bandit" in tool_results else 0
+        if bandit_highs:
+            penalties.append(f"bandit {bandit_highs} high findings: -{min(15, bandit_highs * 5)}")
+        if penalties:
+            print(f"\nTool penalties:")
+            for p in penalties:
+                print(f"  {p}")
+        print(f"\nFinal score: {final_score}/100 ({final_label})")
+        return 0
+
+    output_format = args.output_format or ("json" if args.json else "text")
+    all_issues = native_result["issues"] if native_result else []
+
+    if output_format == "sarif":
+        from .sarif import to_sarif
+        sarif_log = to_sarif(issues=all_issues, version=get_cli_version())
+        print(json.dumps(sarif_log, indent=2))
+    elif output_format == "github":
+        from .sarif import to_github_annotations
+        annotations = to_github_annotations(all_issues)
+        if annotations:
+            print(annotations)
+    elif output_format == "json":
         payload = _build_json_payload(
             args=args,
             command_results=command_results,

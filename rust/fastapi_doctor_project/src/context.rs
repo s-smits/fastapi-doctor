@@ -742,6 +742,636 @@ fn shallow_python_density_score(directory: &Path, cap: usize) -> usize {
     score.min(cap)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    /// Helper: create a temp directory with the given YAML config file content.
+    fn tmp_project(yaml: &str) -> tempfile::TempDir {
+        let tmp = tempfile::tempdir().unwrap();
+        let config_path = tmp.path().join(".fastapi-doctor.yml");
+        fs::write(&config_path, yaml).unwrap();
+        tmp
+    }
+
+    // ── Config YAML parsing ──────────────────────────────────────────────
+
+    #[test]
+    fn test_default_config_when_no_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = load_effective_project_config(tmp.path());
+
+        assert!(config.config_path.is_none());
+        assert!(!config.uses_legacy_config_name);
+
+        // Architecture defaults
+        assert!(config.architecture.enabled);
+        assert_eq!(config.architecture.giant_function, 400);
+        assert_eq!(config.architecture.large_function, 200);
+        assert_eq!(config.architecture.god_module, 1500);
+        assert_eq!(config.architecture.deep_nesting, 5);
+        assert_eq!(config.architecture.import_bloat, 30);
+        assert_eq!(config.architecture.fat_route_handler, 100);
+
+        // Pydantic defaults
+        assert_eq!(config.pydantic.should_be_model, "boundary");
+
+        // API defaults
+        assert!(config.api.create_post_prefixes.is_empty());
+        assert_eq!(config.api.tag_required_prefixes, vec!["/api/"]);
+
+        // Security defaults
+        assert!(config.security.forbidden_write_params.is_empty());
+
+        // Scan defaults
+        assert_eq!(
+            config.scan.exclude_dirs,
+            vec!["lib", "vendor", "vendored", "third_party"]
+        );
+        assert!(config.scan.exclude_rules.is_empty());
+    }
+
+    #[test]
+    fn test_full_custom_config() {
+        let yaml = r#"
+architecture:
+  enabled: false
+  giant_function: 500
+  large_function: 250
+  god_module: 2000
+  deep_nesting: 8
+  import_bloat: 50
+  fat_route_handler: 120
+pydantic:
+  should_be_model: strict
+api:
+  create_post_prefixes:
+    - /v1/
+    - /v2/
+  tag_required_prefixes:
+    - /public/
+security:
+  forbidden_write_params:
+    - password
+    - secret
+scan:
+  exclude_dirs:
+    - generated
+    - proto
+  exclude_rules:
+    - R001
+    - R002
+"#;
+        let tmp = tmp_project(yaml);
+        let config = load_effective_project_config(tmp.path());
+
+        assert!(config.config_path.is_some());
+        assert!(!config.uses_legacy_config_name);
+
+        assert!(!config.architecture.enabled);
+        assert_eq!(config.architecture.giant_function, 500);
+        assert_eq!(config.architecture.large_function, 250);
+        assert_eq!(config.architecture.god_module, 2000);
+        assert_eq!(config.architecture.deep_nesting, 8);
+        assert_eq!(config.architecture.import_bloat, 50);
+        assert_eq!(config.architecture.fat_route_handler, 120);
+
+        assert_eq!(config.pydantic.should_be_model, "strict");
+
+        assert_eq!(config.api.create_post_prefixes, vec!["/v1/", "/v2/"]);
+        assert_eq!(config.api.tag_required_prefixes, vec!["/public/"]);
+
+        assert_eq!(
+            config.security.forbidden_write_params,
+            vec!["password", "secret"]
+        );
+
+        assert_eq!(config.scan.exclude_dirs, vec!["generated", "proto"]);
+        assert_eq!(config.scan.exclude_rules, vec!["R001", "R002"]);
+    }
+
+    #[test]
+    fn test_partial_config_preserves_defaults() {
+        let yaml = r#"
+architecture:
+  giant_function: 600
+scan:
+  exclude_rules:
+    - R100
+"#;
+        let tmp = tmp_project(yaml);
+        let config = load_effective_project_config(tmp.path());
+
+        // Overridden field
+        assert_eq!(config.architecture.giant_function, 600);
+        // Other architecture fields keep defaults
+        assert!(config.architecture.enabled);
+        assert_eq!(config.architecture.large_function, 200);
+        assert_eq!(config.architecture.god_module, 1500);
+        assert_eq!(config.architecture.deep_nesting, 5);
+        assert_eq!(config.architecture.import_bloat, 30);
+        assert_eq!(config.architecture.fat_route_handler, 100);
+
+        // Scan: exclude_dirs keeps default, exclude_rules is overridden
+        assert_eq!(
+            config.scan.exclude_dirs,
+            vec!["lib", "vendor", "vendored", "third_party"]
+        );
+        assert_eq!(config.scan.exclude_rules, vec!["R100"]);
+
+        // API keeps defaults
+        assert_eq!(config.api.tag_required_prefixes, vec!["/api/"]);
+    }
+
+    #[test]
+    fn test_empty_yaml_gives_defaults() {
+        let tmp = tmp_project("");
+        let config = load_effective_project_config(tmp.path());
+
+        assert!(config.config_path.is_some());
+        assert!(config.architecture.enabled);
+        assert_eq!(config.architecture.giant_function, 400);
+        assert_eq!(config.pydantic.should_be_model, "boundary");
+    }
+
+    #[test]
+    fn test_empty_exclude_dirs_keeps_default() {
+        // An empty list should be treated as "not specified" since the code
+        // checks `!values.is_empty()` before overwriting.
+        let yaml = r#"
+scan:
+  exclude_dirs: []
+"#;
+        let tmp = tmp_project(yaml);
+        let config = load_effective_project_config(tmp.path());
+        assert_eq!(
+            config.scan.exclude_dirs,
+            vec!["lib", "vendor", "vendored", "third_party"]
+        );
+    }
+
+    #[test]
+    fn test_empty_tag_required_prefixes_keeps_default() {
+        let yaml = r#"
+api:
+  tag_required_prefixes: []
+"#;
+        let tmp = tmp_project(yaml);
+        let config = load_effective_project_config(tmp.path());
+        assert_eq!(config.api.tag_required_prefixes, vec!["/api/"]);
+    }
+
+    #[test]
+    fn test_whitespace_trimming_in_string_lists() {
+        let yaml = r#"
+scan:
+  exclude_dirs:
+    - "  mydir  "
+    - ""
+    - "  "
+    - valid
+"#;
+        let tmp = tmp_project(yaml);
+        let config = load_effective_project_config(tmp.path());
+        assert_eq!(config.scan.exclude_dirs, vec!["mydir", "valid"]);
+    }
+
+    #[test]
+    fn test_should_be_model_whitespace_trimmed() {
+        let yaml = r#"
+pydantic:
+  should_be_model: "  strict  "
+"#;
+        let tmp = tmp_project(yaml);
+        let config = load_effective_project_config(tmp.path());
+        assert_eq!(config.pydantic.should_be_model, "strict");
+    }
+
+    #[test]
+    fn test_legacy_config_name_detection() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config_path = tmp.path().join(".python-doctor.yml");
+        fs::write(&config_path, "architecture:\n  giant_function: 999\n").unwrap();
+
+        let config = load_effective_project_config(tmp.path());
+        assert!(config.uses_legacy_config_name);
+        assert_eq!(config.architecture.giant_function, 999);
+    }
+
+    #[test]
+    fn test_fastapi_doctor_yml_preferred_over_legacy() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Write both config files; the new name should be preferred.
+        fs::write(
+            tmp.path().join(".fastapi-doctor.yml"),
+            "architecture:\n  giant_function: 111\n",
+        )
+        .unwrap();
+        fs::write(
+            tmp.path().join(".python-doctor.yml"),
+            "architecture:\n  giant_function: 222\n",
+        )
+        .unwrap();
+
+        let config = load_effective_project_config(tmp.path());
+        assert!(!config.uses_legacy_config_name);
+        assert_eq!(config.architecture.giant_function, 111);
+    }
+
+    #[test]
+    fn test_invalid_yaml_returns_defaults() {
+        let yaml = "{{{{invalid yaml!!!!";
+        let tmp = tmp_project(yaml);
+        let config = load_effective_project_config(tmp.path());
+
+        // serde_yaml::from_str returns an error, so unwrap_or_default kicks in.
+        assert!(config.architecture.enabled);
+        assert_eq!(config.architecture.giant_function, 400);
+    }
+
+    // ── to_core_config ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_to_core_config_maps_all_fields() {
+        let yaml = r#"
+architecture:
+  import_bloat: 42
+  giant_function: 500
+  large_function: 250
+  deep_nesting: 7
+  god_module: 2000
+  fat_route_handler: 120
+pydantic:
+  should_be_model: strict
+security:
+  forbidden_write_params:
+    - secret
+api:
+  create_post_prefixes:
+    - /v1/
+  tag_required_prefixes:
+    - /public/
+"#;
+        let tmp = tmp_project(yaml);
+        let effective = load_effective_project_config(tmp.path());
+        let core = effective.to_core_config();
+
+        assert_eq!(core.import_bloat_threshold, 42);
+        assert_eq!(core.giant_function_threshold, 500);
+        assert_eq!(core.large_function_threshold, 250);
+        assert_eq!(core.deep_nesting_threshold, 7);
+        assert_eq!(core.god_module_threshold, 2000);
+        assert_eq!(core.fat_route_handler_threshold, 120);
+        assert_eq!(core.should_be_model_mode, "strict");
+        assert_eq!(core.forbidden_write_params, vec!["secret"]);
+        assert_eq!(core.create_post_prefixes, vec!["/v1/"]);
+        assert_eq!(core.tag_required_prefixes, vec!["/public/"]);
+    }
+
+    // ── sanitize_string_list ─────────────────────────────────────────────
+
+    #[test]
+    fn test_sanitize_string_list_basic() {
+        let input = vec![
+            " hello ".to_string(),
+            "".to_string(),
+            "  ".to_string(),
+            "world".to_string(),
+        ];
+        let result = sanitize_string_list(input);
+        assert_eq!(result, vec!["hello", "world"]);
+    }
+
+    #[test]
+    fn test_sanitize_string_list_empty_input() {
+        let result = sanitize_string_list(Vec::new());
+        assert!(result.is_empty());
+    }
+
+    // ── should_skip_name ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_should_skip_dotfiles() {
+        assert!(should_skip_name(".git"));
+        assert!(should_skip_name(".hidden"));
+        assert!(should_skip_name("."));
+    }
+
+    #[test]
+    fn test_should_skip_excluded_dirs() {
+        assert!(should_skip_name("__pycache__"));
+        assert!(should_skip_name("node_modules"));
+        assert!(should_skip_name(".venv"));
+        assert!(should_skip_name("venv"));
+        assert!(should_skip_name("dist"));
+        assert!(should_skip_name("build"));
+        assert!(should_skip_name("tests"));
+        assert!(should_skip_name("migrations"));
+    }
+
+    #[test]
+    fn test_should_not_skip_regular_dirs() {
+        assert!(!should_skip_name("src"));
+        assert!(!should_skip_name("myapp"));
+        assert!(!should_skip_name("routers"));
+        assert!(!should_skip_name("api"));
+    }
+
+    // ── resolve_path ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_path_absolute() {
+        let base = PathBuf::from("/some/base");
+        let result = resolve_path("/absolute/path", &base);
+        // The absolute path is returned as-is (not joined with base).
+        // Since /absolute/path likely doesn't exist, it's returned un-canonicalized.
+        assert_eq!(result, PathBuf::from("/absolute/path"));
+    }
+
+    #[test]
+    fn test_resolve_path_relative() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sub = tmp.path().join("sub");
+        fs::create_dir(&sub).unwrap();
+        // Relative path is joined with base
+        let result = resolve_path("sub", tmp.path());
+        // Since the path exists, it should be canonicalized
+        assert!(result.ends_with("sub"));
+        assert!(result.is_absolute());
+    }
+
+    // ── score_app_candidate ──────────────────────────────────────────────
+
+    #[test]
+    fn test_score_app_candidate_main_py_with_app() {
+        let score = score_app_candidate(Path::new("/project/main.py"), "app");
+        // base 100 + "app" 40 + "main.py" 40 = 180
+        assert_eq!(score, 180);
+    }
+
+    #[test]
+    fn test_score_app_candidate_app_py_with_factory() {
+        let score = score_app_candidate(Path::new("/project/app.py"), "create_app()");
+        // base 100 + factory "()" 10 + "app.py" 35 = 145
+        assert_eq!(score, 145);
+    }
+
+    #[test]
+    fn test_score_app_candidate_in_api_directory() {
+        let score = score_app_candidate(Path::new("/project/api/server.py"), "app");
+        // base 100 + "app" 40 + "server.py" 20 + api dir 10 = 170
+        assert_eq!(score, 170);
+    }
+
+    #[test]
+    fn test_score_app_candidate_unknown_filename() {
+        let score = score_app_candidate(Path::new("/project/something.py"), "my_app");
+        // base 100 + nothing extra = 100
+        assert_eq!(score, 100);
+    }
+
+    // ── module_context_from_file ─────────────────────────────────────────
+
+    #[test]
+    fn test_module_context_flat_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let file = repo_root.join("main.py");
+        fs::write(&file, "").unwrap();
+
+        let (import_root, code_dir, module_name) = module_context_from_file(&file, repo_root);
+        assert_eq!(import_root, repo_root);
+        assert_eq!(code_dir, repo_root);
+        assert_eq!(module_name, "main");
+    }
+
+    #[test]
+    fn test_module_context_in_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let package = repo_root.join("myapp");
+        fs::create_dir(&package).unwrap();
+        fs::write(package.join("__init__.py"), "").unwrap();
+        let file = package.join("main.py");
+        fs::write(&file, "").unwrap();
+
+        let (import_root, code_dir, module_name) = module_context_from_file(&file, repo_root);
+        assert_eq!(import_root, repo_root.to_path_buf());
+        assert_eq!(code_dir, package);
+        assert_eq!(module_name, "myapp.main");
+    }
+
+    #[test]
+    fn test_module_context_nested_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo_root = tmp.path();
+        let pkg = repo_root.join("myapp");
+        let sub = pkg.join("api");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(pkg.join("__init__.py"), "").unwrap();
+        fs::write(sub.join("__init__.py"), "").unwrap();
+        let file = sub.join("routes.py");
+        fs::write(&file, "").unwrap();
+
+        let (import_root, code_dir, module_name) = module_context_from_file(&file, repo_root);
+        assert_eq!(import_root, repo_root.to_path_buf());
+        assert_eq!(code_dir, pkg);
+        assert_eq!(module_name, "myapp.api.routes");
+    }
+
+    // ── discover_code_dir & iter_code_dir_candidates ─────────────────────
+
+    #[test]
+    fn test_discover_code_dir_prefers_package_with_router() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let app_dir = repo.join("myapp");
+        fs::create_dir_all(app_dir.join("routers")).unwrap();
+        fs::write(app_dir.join("__init__.py"), "").unwrap();
+        fs::write(app_dir.join("main.py"), "").unwrap();
+
+        // Also create a less interesting directory
+        let scripts = repo.join("utils");
+        fs::create_dir(&scripts).unwrap();
+
+        let result = discover_code_dir(repo);
+        assert_eq!(result, app_dir);
+    }
+
+    #[test]
+    fn test_discover_code_dir_falls_back_to_repo_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No interesting subdirectories
+        let result = discover_code_dir(tmp.path());
+        assert_eq!(result, tmp.path().to_path_buf());
+    }
+
+    // ── discover_libraries ───────────────────────────────────────────────
+
+    #[test]
+    fn test_discover_libraries_from_pyproject_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let pyproject = r#"
+[project]
+dependencies = [
+    "fastapi>=0.100",
+    "pydantic>=2",
+    "sqlalchemy[asyncio]",
+    "httpx",
+    "alembic",
+]
+
+[tool.pytest]
+testpaths = ["tests"]
+"#;
+        fs::write(repo.join("pyproject.toml"), pyproject).unwrap();
+
+        let layout = ProjectLayout {
+            repo_root: repo.to_path_buf(),
+            import_root: repo.to_path_buf(),
+            code_dir: repo.to_path_buf(),
+            app_module: None,
+            discovery_source: "test".to_string(),
+        };
+        let libs = discover_libraries(&layout);
+
+        assert!(libs.fastapi);
+        assert!(libs.pydantic);
+        assert!(libs.sqlalchemy);
+        assert!(libs.httpx);
+        assert!(libs.alembic);
+        assert!(libs.pytest);
+        assert!(!libs.django);
+        assert!(!libs.flask);
+        assert!(!libs.sqlmodel);
+    }
+
+    #[test]
+    fn test_discover_libraries_from_requirements_txt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        fs::write(repo.join("requirements.txt"), "Flask\nrequests\nmypy\n").unwrap();
+
+        let layout = ProjectLayout {
+            repo_root: repo.to_path_buf(),
+            import_root: repo.to_path_buf(),
+            code_dir: repo.to_path_buf(),
+            app_module: None,
+            discovery_source: "test".to_string(),
+        };
+        let libs = discover_libraries(&layout);
+
+        assert!(libs.flask);
+        assert!(libs.requests);
+        assert!(libs.mypy);
+        assert!(!libs.fastapi);
+    }
+
+    #[test]
+    fn test_discover_libraries_no_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let layout = ProjectLayout {
+            repo_root: tmp.path().to_path_buf(),
+            import_root: tmp.path().to_path_buf(),
+            code_dir: tmp.path().to_path_buf(),
+            app_module: None,
+            discovery_source: "test".to_string(),
+        };
+        let libs = discover_libraries(&layout);
+
+        assert!(!libs.fastapi);
+        assert!(!libs.pydantic);
+        assert!(!libs.sqlalchemy);
+    }
+
+    // ── iter_repo_python_files ───────────────────────────────────────────
+
+    #[test]
+    fn test_iter_repo_python_files_basic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        fs::write(root.join("main.py"), "").unwrap();
+        fs::write(root.join("readme.md"), "").unwrap();
+        let sub = root.join("myapp");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("routes.py"), "").unwrap();
+
+        let mut files = Vec::new();
+        iter_repo_python_files(root, &mut files);
+        let names: Vec<&str> = files
+            .iter()
+            .map(|f| f.file_name().unwrap().to_str().unwrap())
+            .collect();
+        assert!(names.contains(&"main.py"));
+        assert!(names.contains(&"routes.py"));
+        assert!(!names.contains(&"readme.md"));
+    }
+
+    #[test]
+    fn test_iter_repo_python_files_skips_excluded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        // File in a directory that should be skipped
+        let venv = root.join(".venv");
+        fs::create_dir(&venv).unwrap();
+        fs::write(venv.join("some.py"), "").unwrap();
+
+        let cache = root.join("__pycache__");
+        fs::create_dir(&cache).unwrap();
+        fs::write(cache.join("cached.py"), "").unwrap();
+
+        // File in a normal directory
+        fs::write(root.join("good.py"), "").unwrap();
+
+        let mut files = Vec::new();
+        iter_repo_python_files(root, &mut files);
+        assert_eq!(files.len(), 1);
+        assert!(files[0].ends_with("good.py"));
+    }
+
+    // ── infer_layout_from_app_module ─────────────────────────────────────
+
+    #[test]
+    fn test_infer_layout_simple_module() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let myapp = repo.join("myapp");
+        fs::create_dir(&myapp).unwrap();
+        fs::write(myapp.join("main.py"), "").unwrap();
+
+        let result = infer_layout_from_app_module(repo, "myapp.main:app");
+        assert!(result.is_some());
+        let (import_root, code_dir) = result.unwrap();
+        assert_eq!(import_root, repo.to_path_buf());
+        assert_eq!(code_dir, myapp);
+    }
+
+    #[test]
+    fn test_infer_layout_src_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path();
+        let src = repo.join("src");
+        let myapp = src.join("myapp");
+        fs::create_dir_all(&myapp).unwrap();
+        fs::write(myapp.join("main.py"), "").unwrap();
+
+        let result = infer_layout_from_app_module(repo, "myapp.main:app");
+        assert!(result.is_some());
+        let (import_root, code_dir) = result.unwrap();
+        assert_eq!(import_root, src);
+        assert_eq!(code_dir, src.join("myapp"));
+    }
+
+    #[test]
+    fn test_infer_layout_not_found() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = infer_layout_from_app_module(tmp.path(), "nonexistent.module:app");
+        assert!(result.is_none());
+    }
+}
+
 fn discover_libraries(layout: &ProjectLayout) -> LibraryInfo {
     let mut info = LibraryInfo::default();
     let mut dep_text = String::new();

@@ -190,4 +190,88 @@ impl StaticRule {
             Self::ResilienceBroadExceptNoContext => "resilience/broad-except-no-context",
         }
     }
+
+    pub const fn severity(self) -> &'static str {
+        match self {
+            Self::SecurityForbiddenWriteParam
+            | Self::SecurityAssertInProduction
+            | Self::SecuritySubprocessShellTrue
+            | Self::SecurityUnsafeYamlLoad
+            | Self::SecuritySqlFstringInterpolation
+            | Self::SecurityHardcodedSecret
+            | Self::SecurityPydanticSecretStr => "error",
+            _ => "warning",
+        }
+    }
+
+    pub const fn category(self) -> &'static str {
+        match self {
+            Self::ArchitectureGiantFunction
+            | Self::ArchitectureDeepNesting
+            | Self::ArchitectureAsyncWithoutAwait
+            | Self::ArchitectureImportBloat
+            | Self::ArchitecturePrintInProduction
+            | Self::ArchitectureStarImport
+            | Self::ArchitectureGodModule
+            | Self::ArchitecturePassthroughFunction
+            | Self::ArchitectureAvoidSysExit
+            | Self::ArchitectureEnginePoolPrePing
+            | Self::ArchitectureMissingStartupValidation
+            | Self::ArchitectureFatRouteHandler => "Architecture",
+
+            Self::SecurityForbiddenWriteParam
+            | Self::SecurityAssertInProduction
+            | Self::SecurityCorsWildcard
+            | Self::SecurityExceptionDetailLeak
+            | Self::SecuritySubprocessShellTrue
+            | Self::SecurityUnsafeYamlLoad
+            | Self::SecurityWeakHashWithoutFlag
+            | Self::SecuritySqlFstringInterpolation
+            | Self::SecurityHardcodedSecret
+            | Self::SecurityPydanticSecretStr => "Security",
+
+            Self::CorrectnessDuplicateRoute
+            | Self::CorrectnessMissingResponseModel
+            | Self::CorrectnessPostStatusCode
+            | Self::CorrectnessAsyncioRunInAsync
+            | Self::CorrectnessSyncIoInAsync
+            | Self::CorrectnessMisusedAsyncConstructs
+            | Self::CorrectnessAvoidOsPath
+            | Self::CorrectnessDeprecatedTypingImports
+            | Self::CorrectnessMutableDefaultArg
+            | Self::CorrectnessNaiveDatetime
+            | Self::CorrectnessReturnInFinally
+            | Self::CorrectnessThreadingLockInAsync
+            | Self::CorrectnessUnreachableCode
+            | Self::CorrectnessGetWithSideEffect
+            | Self::CorrectnessServerlessFilesystemWrite
+            | Self::CorrectnessMissingHttpTimeout => "Correctness",
+
+            Self::ApiSurfaceMissingTags
+            | Self::ApiSurfaceMissingDocstring
+            | Self::ApiSurfaceMissingPagination => "API Surface",
+
+            Self::ConfigDirectEnvAccess
+            | Self::ConfigAlembicTargetMetadata
+            | Self::ConfigAlembicEmptyAutogenRevision
+            | Self::ConfigSqlalchemyNamingConvention => "Configuration",
+
+            Self::PerformanceHeavyImports
+            | Self::PerformanceSequentialAwaits
+            | Self::PerformanceRegexInLoop
+            | Self::PerformanceNPlusOneHint => "Performance",
+
+            Self::PydanticDeprecatedValidator
+            | Self::PydanticMutableDefault
+            | Self::PydanticExtraAllowOnRequest
+            | Self::PydanticShouldBeModel
+            | Self::PydanticSensitiveFieldType => "Pydantic",
+
+            Self::ResilienceSqlalchemyPoolPrePing
+            | Self::ResilienceBareExceptPass
+            | Self::ResilienceReraiseWithoutContext
+            | Self::ResilienceExceptionSwallowed
+            | Self::ResilienceBroadExceptNoContext => "Resilience",
+        }
+    }
 }

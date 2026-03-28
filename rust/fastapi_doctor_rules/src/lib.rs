@@ -11,6 +11,9 @@ mod resilience;
 mod routes;
 mod security;
 
+#[cfg(test)]
+mod tests;
+
 pub use engine::{
     analyze_module, analyze_module_with_suite, analyze_project_modules, analyze_routes,
     RuleSelection,

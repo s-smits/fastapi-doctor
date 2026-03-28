@@ -12,3 +12,6 @@ fastapi_doctor_core = { path = "../fastapi_doctor_core" }
 rayon.workspace = true
 serde.workspace = true
 serde_yaml.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

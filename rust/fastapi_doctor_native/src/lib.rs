@@ -722,6 +722,39 @@ fn get_all_rule_ids() -> Vec<&'static str> {
 }
 
 #[pyfunction]
+fn get_all_rule_metadata() -> Vec<(&'static str, &'static str, &'static str)> {
+    fastapi_doctor_rules::registry::StaticRule::all()
+        .iter()
+        .map(|r| (r.rule_id(), r.severity(), r.category()))
+        .collect()
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    profile=None,
+    only_rules=None,
+    ignore_rules=None,
+    skip_structure=false,
+    skip_openapi=false,
+))]
+fn get_profile_rule_ids(
+    profile: Option<String>,
+    only_rules: Option<Vec<String>>,
+    ignore_rules: Option<Vec<String>>,
+    skip_structure: bool,
+    skip_openapi: bool,
+) -> Vec<String> {
+    select_rule_ids(
+        profile.as_deref(),
+        only_rules.as_deref().unwrap_or(&[]),
+        ignore_rules.as_deref().unwrap_or(&[]),
+        &[],
+        skip_structure,
+        skip_openapi,
+    )
+}
+
+#[pyfunction]
 #[pyo3(signature = (static_only=false))]
 fn get_project_context(py: Python<'_>, static_only: bool) -> PyResult<Py<PyDict>> {
     let context = resolve_project_context(static_only);
@@ -737,6 +770,8 @@ fn _fastapi_doctor_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(analyze_selected_current_project_v2, m)?)?;
     m.add_function(wrap_pyfunction!(score_current_project_v2, m)?)?;
     m.add_function(wrap_pyfunction!(get_all_rule_ids, m)?)?;
+    m.add_function(wrap_pyfunction!(get_all_rule_metadata, m)?)?;
+    m.add_function(wrap_pyfunction!(get_profile_rule_ids, m)?)?;
     m.add_function(wrap_pyfunction!(get_project_context, m)?)?;
     Ok(())
 }

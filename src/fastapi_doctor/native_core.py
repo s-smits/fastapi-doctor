@@ -155,9 +155,32 @@ def score_current_project_v2(
     )
 
 
+def get_rule_metadata() -> list[tuple[str, str, str]]:
+    """Return all rule metadata as (rule_id, severity, category) tuples."""
+    native_module = _load_native_module()
+    return native_module.get_all_rule_metadata()
+
+
+def get_profile_rule_ids(
+    *,
+    profile: str | None = None,
+    only_rules: list[str] | None = None,
+    ignore_rules: list[str] | None = None,
+    skip_structure: bool = False,
+    skip_openapi: bool = False,
+) -> list[str]:
+    """Return the resolved rule IDs for a given profile through the Rust engine."""
+    native_module = _load_native_module()
+    return native_module.get_profile_rule_ids(
+        profile, only_rules, ignore_rules, skip_structure, skip_openapi
+    )
+
+
 __all__ = [
     "NativeEngineUnavailable",
     "analyze_selected_current_project_v2",
     "get_native_rule_ids",
+    "get_profile_rule_ids",
+    "get_rule_metadata",
     "score_current_project_v2",
 ]
