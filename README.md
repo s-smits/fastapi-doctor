@@ -64,12 +64,15 @@ If your source code lives in a subdirectory:
 fastapi-doctor --repo-root . --code-dir src/myapp
 ```
 
+When `--code-dir` is set, or when discovery resolves a project code root, Ruff, ty, and Bandit run against that target instead of scanning the entire repository.
+
 ## What It Checks
 
 - **Security** — unsafe yaml/pickle loads, SQL injection patterns, hardcoded secrets, CORS misconfiguration
 - **Correctness** — naive datetimes, mutable defaults, unvalidated path params
+- **Serverless correctness** — local writes outside `/tmp`, with `/tmp` and temp-helper flows treated as safe
 - **Architecture** — giant functions, god modules, deep nesting, sync-in-async, print in production
-- **API surface** — missing pagination, missing OpenAPI tags, duplicate operation IDs
+- **API surface** — missing pagination, missing route tags, missing endpoint docstrings
 - **Pydantic** — deprecated validators, sensitive field types, extra-allow on request models
 - **Resilience** — missing timeouts, bare exception handlers
 
@@ -94,6 +97,7 @@ x = yaml.load(data)  # noqa
 ```
 
 To exclude rules globally, use `--ignore-rules` or the config file's `scan.exclude_rules` list.
+For intentional serverless-safe temp writes that still need a local suppression, prefer a narrow `doctor:ignore correctness/serverless-filesystem-write reason="..."`.
 
 ## Scoring
 

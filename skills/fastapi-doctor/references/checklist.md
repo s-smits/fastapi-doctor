@@ -102,5 +102,5 @@ uv run pytest tests/routers/ -q
 uv run pytest tests/interfaces/ -q
 uv run pytest tests/test_doctor_checks.py -q
 uv run pyright
-uv run ruff check .
+uv run ruff check <code-dir-or-package>
 ```

@@ -35,6 +35,7 @@ def test_sarif_tool_metadata() -> None:
     driver = result["runs"][0]["tool"]["driver"]
     assert driver["name"] == "fastapi-doctor"
     assert driver["version"] == "0.6.0"
+    assert "helpUri" not in driver["rules"][0]
 
 
 def test_sarif_rules_deduplication() -> None:
@@ -91,6 +92,26 @@ def test_github_annotations_format() -> None:
     assert "line=5" in lines[0]
     assert "title=security/unsafe-yaml-load" in lines[0]
     assert lines[1].startswith("::warning ")
+
+
+def test_github_annotations_escape_special_characters() -> None:
+    output = to_github_annotations(
+        [
+            {
+                "check": "security/unsafe,yaml:load",
+                "severity": "error",
+                "category": "Security",
+                "line": 0,
+                "path": "app,main.py",
+                "message": "bad\nnext%line",
+                "help": "Use yaml.safe_load().",
+            }
+        ]
+    )
+    assert "file=app%2Cmain.py" in output
+    assert "title=security/unsafe%2Cyaml%3Aload" in output
+    assert "line=0" not in output
+    assert output.endswith("::bad%0Anext%25line")
 
 
 def test_github_annotations_empty() -> None:

@@ -25,7 +25,6 @@ def _build_rule_descriptors(issues: list[dict[str, Any]]) -> list[dict[str, Any]
             },
         }
         if issue.get("help"):
-            seen[rule_id]["helpUri"] = None
             seen[rule_id]["help"] = {"text": issue["help"]}
     return list(seen.values())
 
@@ -86,9 +85,25 @@ def to_github_annotations(issues: list[dict[str, Any]]) -> str:
     lines = []
     for issue in issues:
         level = "error" if issue["severity"] == "error" else "warning"
-        path = issue.get("path", "")
-        line = issue.get("line", 0)
-        message = issue["message"]
-        title = issue["check"]
-        lines.append(f"::{level} file={path},line={line},title={title}::{message}")
+        properties = []
+        if issue.get("path"):
+            properties.append(f"file={_escape_annotation_property(str(issue['path']))}")
+        if isinstance(issue.get("line"), int) and issue["line"] > 0:
+            properties.append(f"line={issue['line']}")
+        properties.append(f"title={_escape_annotation_property(str(issue['check']))}")
+        property_string = f" {','.join(properties)}" if properties else ""
+        message = _escape_annotation_message(str(issue["message"]))
+        lines.append(f"::{level}{property_string}::{message}")
     return "\n".join(lines)
+
+
+def _escape_annotation_message(value: str) -> str:
+    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def _escape_annotation_property(value: str) -> str:
+    return (
+        _escape_annotation_message(value)
+        .replace(":", "%3A")
+        .replace(",", "%2C")
+    )

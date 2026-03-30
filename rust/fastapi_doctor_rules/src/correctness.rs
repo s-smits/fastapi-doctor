@@ -616,10 +616,12 @@ pub(crate) fn collect_serverless_filesystem_write_issues(
     ]
     .into_iter()
     .collect();
+    let safe_temp_names = collect_safe_temp_path_names(suite);
     let mut issues = Vec::new();
     walk_suite_exprs(suite, &mut |expr| {
         let Expr::Call(call) = expr else { return };
         let mut is_write = false;
+        let mut write_target = None;
         match &*call.func {
             Expr::Name(n) if n.id.as_str() == "open" => {
                 // Check mode arg
@@ -631,6 +633,9 @@ pub(crate) fn collect_serverless_filesystem_write_issues(
                             }
                         }
                     }
+                }
+                if let Some(first_arg) = call.args.first() {
+                    write_target = Some(first_arg);
                 }
                 for kw in &call.keywords {
                     if kw.arg.as_deref() == Some("mode") {
@@ -644,17 +649,22 @@ pub(crate) fn collect_serverless_filesystem_write_issues(
                     }
                 }
             }
+            Expr::Name(n)
+                if matches!(n.id.as_str(), "atomic_write_text" | "atomic_write_bytes") =>
+            {
+                is_write = true;
+                if let Some(first_arg) = call.args.first() {
+                    write_target = Some(first_arg);
+                }
+            }
             Expr::Attribute(a) if write_methods.contains(a.attr.as_str()) => {
                 is_write = true;
+                write_target = Some(&a.value);
             }
             _ => {}
         }
         if is_write {
-            // Check if path looks safe (/tmp)
-            let source_fragment = module.source_slice(call.range);
-            if source_fragment.contains("/tmp")
-                || source_fragment.to_ascii_lowercase().contains("tempfile")
-            {
+            if write_target.is_some_and(|target| expr_is_safe_temp_path(target, &safe_temp_names)) {
                 return;
             }
             let line = module.line_for_offset(call.range.start().to_usize());
@@ -670,6 +680,94 @@ pub(crate) fn collect_serverless_filesystem_write_issues(
         }
     });
     issues
+}
+
+fn collect_safe_temp_path_names(suite: &ast::Suite) -> HashSet<String> {
+    let mut safe_names = HashSet::new();
+
+    loop {
+        let mut changed = false;
+        walk_suite_stmts(suite, &mut |stmt| {
+            let (targets, value) = match stmt {
+                Stmt::Assign(node) => (node.targets.as_slice(), Some(&*node.value)),
+                Stmt::AnnAssign(node) => {
+                    if let Some(value) = node.value.as_deref() {
+                        (std::slice::from_ref(&*node.target), Some(value))
+                    } else {
+                        (&[][..], None)
+                    }
+                }
+                _ => (&[][..], None),
+            };
+            let Some(value) = value else {
+                return;
+            };
+            if !expr_is_safe_temp_path(value, &safe_names) {
+                return;
+            }
+            for target in targets {
+                if let Expr::Name(name) = target {
+                    changed |= safe_names.insert(name.id.to_string());
+                }
+            }
+        });
+        if !changed {
+            break;
+        }
+    }
+
+    safe_names
+}
+
+fn expr_is_safe_temp_path(expr: &Expr, safe_names: &HashSet<String>) -> bool {
+    match expr {
+        Expr::Name(node) => safe_names.contains(node.id.as_str()),
+        Expr::Constant(node) => matches!(
+            &node.value,
+            ast::Constant::Str(value) if value == "/tmp" || value.starts_with("/tmp/")
+        ),
+        Expr::Attribute(node) => expr_is_safe_temp_path(&node.value, safe_names),
+        Expr::Call(node) => call_returns_safe_temp_path(node, safe_names),
+        Expr::BinOp(node) => {
+            matches!(&node.op, ast::Operator::Div) && expr_is_safe_temp_path(&node.left, safe_names)
+        }
+        _ => false,
+    }
+}
+
+fn call_returns_safe_temp_path(call: &ast::ExprCall, safe_names: &HashSet<String>) -> bool {
+    match &*call.func {
+        Expr::Name(name) => match name.id.as_str() {
+            "serverless_temp_root" => true,
+            "Path" | "PurePath" => call
+                .args
+                .first()
+                .is_some_and(|arg| expr_is_safe_temp_path(arg, safe_names)),
+            _ => false,
+        },
+        Expr::Attribute(attr) => {
+            let attr_name = attr.attr.as_str();
+            if let Expr::Name(base) = &*attr.value {
+                if base.id.as_str() == "tempfile"
+                    && matches!(
+                        attr_name,
+                        "gettempdir"
+                            | "NamedTemporaryFile"
+                            | "TemporaryDirectory"
+                            | "mkdtemp"
+                            | "mkstemp"
+                    )
+                {
+                    return true;
+                }
+            }
+            matches!(
+                attr_name,
+                "joinpath" | "resolve" | "absolute" | "with_name" | "with_suffix"
+            ) && expr_is_safe_temp_path(&attr.value, safe_names)
+        }
+        _ => false,
+    }
 }
 
 // ── Correctness: missing-http-timeout ───────────────────────────────────

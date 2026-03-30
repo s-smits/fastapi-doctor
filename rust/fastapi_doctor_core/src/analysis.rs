@@ -839,7 +839,6 @@ pub fn score_summary(issues: &[Issue]) -> ScoreSummary {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1026,4 +1025,3 @@ mod tests {
         ));
     }
 }
-

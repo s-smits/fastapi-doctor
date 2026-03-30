@@ -140,6 +140,15 @@ def test_json_output_clean_project(monkeypatch, capsys, tmp_path: Path) -> None:
     assert payload["doctor"]["issues"] == []
 
 
+def test_json_output_preserves_checks_not_evaluated(monkeypatch, capsys, tmp_path: Path) -> None:
+    mock_result = dict(_MOCK_RESULT_CLEAN)
+    mock_result["checks_not_evaluated"] = ["api-surface/missing-tags"]
+    _patch_cli(monkeypatch, tmp_path, mock_result, json=True)
+    cli_module.main()
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["doctor"]["checks_not_evaluated"] == ["api-surface/missing-tags"]
+
+
 # ── Score-only output ───────────────────────────────────────────────
 
 def test_score_only_output(monkeypatch, capsys, tmp_path: Path) -> None:
@@ -240,7 +249,7 @@ def test_normalize_profile_invalid() -> None:
         cli_module._normalize_profile("turbo")
 
 
-# ── Rule filtering helpers ──────────────────────────────────────────
+# ── Selector helper ─────────────────────────────────────────────────
 
 def test_matches_selector_exact() -> None:
     assert cli_module._matches_selector("security/unsafe-yaml-load", "security/unsafe-yaml-load")
@@ -250,51 +259,6 @@ def test_matches_selector_exact() -> None:
 def test_matches_selector_wildcard() -> None:
     assert cli_module._matches_selector("security/unsafe-yaml-load", "security/*")
     assert not cli_module._matches_selector("correctness/naive-datetime", "security/*")
-
-
-def test_runtime_rule_should_run_with_only_rules() -> None:
-    assert cli_module._runtime_rule_should_run(
-        "security/unsafe-yaml-load",
-        profile=None,
-        only_rules={"security/*"},
-        ignore_rules=None,
-    )
-    assert not cli_module._runtime_rule_should_run(
-        "architecture/giant-function",
-        profile=None,
-        only_rules={"security/*"},
-        ignore_rules=None,
-    )
-
-
-def test_runtime_rule_should_run_with_ignore_rules() -> None:
-    assert not cli_module._runtime_rule_should_run(
-        "architecture/giant-function",
-        profile=None,
-        only_rules=None,
-        ignore_rules={"architecture/giant-function"},
-    )
-    assert cli_module._runtime_rule_should_run(
-        "security/unsafe-yaml-load",
-        profile=None,
-        only_rules=None,
-        ignore_rules={"architecture/giant-function"},
-    )
-
-
-def test_runtime_rule_should_run_security_profile() -> None:
-    assert cli_module._runtime_rule_should_run(
-        "security/unsafe-yaml-load",
-        profile="security",
-        only_rules=None,
-        ignore_rules=None,
-    )
-    assert not cli_module._runtime_rule_should_run(
-        "architecture/giant-function",
-        profile="security",
-        only_rules=None,
-        ignore_rules=None,
-    )
 
 
 # ── Score computation ───────────────────────────────────────────────
@@ -358,6 +322,19 @@ def test_map_ruff_findings_to_doctor_f403() -> None:
     assert issues[0]["check"] == "architecture/star-import"
 
 
+def test_map_ruff_findings_normalizes_absolute_paths(tmp_path: Path) -> None:
+    absolute_file = tmp_path / "app" / "main.py"
+    ruff_output = json.dumps([{
+        "code": "T201",
+        "filename": str(absolute_file),
+        "location": {"row": 5},
+        "message": "print found",
+    }])
+    issues = cli_module._map_ruff_findings_to_doctor(ruff_output, repo_root=tmp_path)
+    assert len(issues) == 1
+    assert issues[0]["path"] == "app/main.py"
+
+
 def test_map_ruff_findings_ignores_unknown_codes() -> None:
     ruff_output = json.dumps([{
         "code": "E501",
@@ -372,6 +349,56 @@ def test_map_ruff_findings_ignores_unknown_codes() -> None:
 def test_map_ruff_findings_handles_invalid_json() -> None:
     issues = cli_module._map_ruff_findings_to_doctor("not json at all")
     assert issues == []
+
+
+def test_merge_issues_deduplicates_same_rule_path_and_line() -> None:
+    native = [{
+        "check": "architecture/print-in-production",
+        "path": "app/main.py",
+        "line": 5,
+    }]
+    extra = [
+        {
+            "check": "architecture/print-in-production",
+            "path": "app/main.py",
+            "line": 5,
+        },
+        {
+            "check": "architecture/star-import",
+            "path": "app/utils.py",
+            "line": 1,
+        },
+    ]
+    merged = cli_module._merge_issues(native, extra)
+    assert [issue["check"] for issue in merged] == [
+        "architecture/print-in-production",
+        "architecture/star-import",
+    ]
+
+
+def test_resolved_tool_target_prefers_detected_code_dir(tmp_path: Path) -> None:
+    report = {
+        "project_context": {
+            "layout": {
+                "code_dir": str(tmp_path / "src" / "pkg"),
+            }
+        }
+    }
+    target = cli_module._resolved_tool_target(
+        repo_root=tmp_path,
+        explicit_code_dir=None,
+        doctor_report=report,
+    )
+    assert target == "src/pkg"
+
+
+def test_build_tool_jobs_uses_target_path(tmp_path: Path) -> None:
+    args = _make_args(tmp_path, skip_ruff=False, skip_ty=False, with_bandit=True)
+    jobs = cli_module._build_tool_jobs(args=args, repo_root=tmp_path, target="src/pkg")
+    assert jobs["ruff"][1][:4] == ["uvx", "ruff", "check", "src/pkg"]
+    assert jobs["ty"][1][:4] == ["uvx", "ty", "check", "src/pkg"]
+    assert jobs["bandit"][1][:5] == ["uv", "run", "bandit", "-q", "-r"]
+    assert jobs["bandit"][1][5] == "src/pkg"
 
 
 # ── CSV splitting ───────────────────────────────────────────────────

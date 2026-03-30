@@ -16,33 +16,6 @@ from typing import Any
 from .native_core import NativeEngineUnavailable, analyze_selected_current_project_v2, get_rule_metadata
 
 SCHEMA_VERSION = "1.2"
-_SECURITY_SELECTORS = frozenset(
-    {
-        "security/*",
-        "pydantic/sensitive-field-type",
-        "pydantic/extra-allow-on-request",
-        "config/direct-env-access",
-    }
-)
-_MEDIUM_SELECTORS = _SECURITY_SELECTORS | frozenset(
-    {
-        "correctness/*",
-        "resilience/*",
-        "config/*",
-        "pydantic/mutable-default",
-        "pydantic/deprecated-validator",
-        "architecture/async-without-await",
-        "architecture/avoid-sys-exit",
-        "architecture/engine-pool-pre-ping",
-        "architecture/missing-startup-validation",
-        "architecture/passthrough-function",
-        "architecture/print-in-production",
-        "api-surface/missing-pagination",
-        "api-surface/missing-operation-id",
-        "api-surface/duplicate-operation-id",
-        "api-surface/missing-openapi-tags",
-    }
-)
 
 
 def get_cli_version() -> str:
@@ -78,49 +51,6 @@ def _matches_selector(rule_id: str, selector: str) -> bool:
     if selector.endswith("*"):
         selector = selector[:-1]
     return rule_id == selector or rule_id.startswith(selector)
-
-
-def _runtime_rule_should_run(
-    rule_id: str,
-    *,
-    profile: str | None,
-    only_rules: set[str] | None,
-    ignore_rules: set[str] | None,
-) -> bool:
-    if only_rules:
-        return any(_matches_selector(rule_id, selector) for selector in only_rules)
-    if profile == "security":
-        if not any(_matches_selector(rule_id, selector) for selector in _SECURITY_SELECTORS):
-            return False
-    elif profile in {"balanced", "medium"}:
-        if not any(_matches_selector(rule_id, selector) for selector in _MEDIUM_SELECTORS):
-            return False
-    if ignore_rules:
-        return not any(_matches_selector(rule_id, selector) for selector in ignore_rules)
-    return True
-
-
-def _runtime_openapi_checks_not_evaluated(
-    *,
-    profile: str | None,
-    only_rules: set[str] | None,
-    ignore_rules: set[str] | None,
-) -> list[str]:
-    openapi_rule_ids = {
-        "api-surface/missing-operation-id",
-        "api-surface/duplicate-operation-id",
-        "api-surface/missing-openapi-tags",
-    }
-    return sorted(
-        rule_id
-        for rule_id in openapi_rule_ids
-        if _runtime_rule_should_run(
-            rule_id,
-            profile=profile,
-            only_rules=only_rules,
-            ignore_rules=ignore_rules,
-        )
-    )
 
 
 def _run_command(name: str, command: list[str], cwd: Path) -> dict[str, Any]:
@@ -168,14 +98,29 @@ def _parse_ruff_json(stdout: str) -> list[dict[str, Any]]:
     return payload if isinstance(payload, list) else []
 
 
-def _map_ruff_findings_to_doctor(stdout: str) -> list[dict[str, Any]]:
+def _normalize_issue_path(path: str, repo_root: Path | None) -> str:
+    if not repo_root:
+        return path
+    try:
+        path_obj = Path(path)
+    except OSError:
+        return path
+    if not path_obj.is_absolute():
+        return path_obj.as_posix()
+    try:
+        return path_obj.relative_to(repo_root).as_posix()
+    except ValueError:
+        return path_obj.as_posix()
+
+
+def _map_ruff_findings_to_doctor(stdout: str, *, repo_root: Path | None = None) -> list[dict[str, Any]]:
     findings = _parse_ruff_json(stdout)
     issues: list[dict[str, Any]] = []
     for finding in findings:
         if not isinstance(finding, dict):
             continue
         code = finding.get("code")
-        filename = str(finding.get("filename", ""))
+        filename = _normalize_issue_path(str(finding.get("filename", "")), repo_root)
         location = finding.get("location") or {}
         row = int(location.get("row", 0) or 0)
         if code == "T201":
@@ -210,15 +155,22 @@ def _map_ruff_findings_to_doctor(stdout: str) -> list[dict[str, Any]]:
     return issues
 
 
-def _build_doctor_report(
-    native_result: dict[str, Any] | None,
-    ruff_issues: list[dict[str, Any]],
-) -> dict[str, Any] | None:
-    if native_result is None:
-        return None
-    doctor = dict(native_result)
-    doctor["issues"] = native_result["issues"] + ruff_issues
-    return doctor
+def _merge_issues(
+    native_issues: list[dict[str, Any]],
+    extra_issues: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged = [dict(issue) for issue in native_issues]
+    seen = {
+        (issue["check"], str(issue.get("path", "")), int(issue.get("line", 0) or 0))
+        for issue in merged
+    }
+    for issue in extra_issues:
+        fingerprint = (issue["check"], str(issue.get("path", "")), int(issue.get("line", 0) or 0))
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        merged.append(dict(issue))
+    return merged
 
 
 def _build_requested_payload(args: argparse.Namespace) -> dict[str, Any]:
@@ -240,6 +192,54 @@ def _build_requested_payload(args: argparse.Namespace) -> dict[str, Any]:
         "static_only": args.static_only,
         "skip_app_bootstrap": args.skip_app_bootstrap,
     }
+
+
+def _resolved_tool_target(
+    *,
+    repo_root: Path,
+    explicit_code_dir: str | None,
+    doctor_report: dict[str, Any] | None,
+) -> str:
+    candidate = explicit_code_dir
+    if candidate is None and doctor_report:
+        project_context = doctor_report.get("project_context")
+        if isinstance(project_context, dict):
+            layout = project_context.get("layout")
+            if isinstance(layout, dict):
+                value = layout.get("code_dir")
+                if isinstance(value, str) and value:
+                    candidate = value
+    if not candidate:
+        return "."
+    target = Path(candidate)
+    if not target.is_absolute():
+        target = (repo_root / target).resolve()
+    try:
+        relative = target.relative_to(repo_root)
+    except ValueError:
+        return target.as_posix()
+    return "." if str(relative) == "." else relative.as_posix()
+
+
+def _build_tool_jobs(
+    *,
+    args: argparse.Namespace,
+    repo_root: Path,
+    target: str,
+) -> dict[str, tuple[str, list[str]]]:
+    tool_jobs: dict[str, tuple[str, list[str]]] = {}
+    if not args.skip_ruff:
+        tool_jobs["ruff"] = ("ruff", ["uvx", "ruff", "check", target, "--output-format", "json"])
+    if not args.skip_ty:
+        tool_jobs["ty"] = ("ty", ["uvx", "ty", "check", target, "--output-format", "concise"])
+    if args.with_bandit:
+        bandit_cmd = ["uv", "run", "bandit", "-q", "-r", target]
+        if (repo_root / "pyproject.toml").exists():
+            bandit_cmd.extend(["-c", "pyproject.toml"])
+        tool_jobs["bandit"] = ("bandit", bandit_cmd)
+    if args.with_tests:
+        tool_jobs["pytest"] = ("pytest", ["uv", "run", "pytest", *shlex.split(args.pytest_args)])
+    return tool_jobs
 
 
 def _build_json_payload(
@@ -483,18 +483,29 @@ def main() -> int:
     only_rules = set(_split_csv(args.only_rules) or [])
     ignore_rules = set(_split_csv(args.ignore_rules) or [])
 
-    tool_jobs: dict[str, tuple[str, list[str]]] = {}
-    if not args.skip_ruff:
-        tool_jobs["ruff"] = ("ruff", ["uvx", "ruff", "check", ".", "--output-format", "json"])
-    if not args.skip_ty:
-        tool_jobs["ty"] = ("ty", ["uvx", "ty", "check", ".", "--output-format", "concise"])
-    if args.with_bandit:
-        bandit_cmd = ["uv", "run", "bandit", "-q", "-r", "."]
-        if (repo_root / "pyproject.toml").exists():
-            bandit_cmd.extend(["-c", "pyproject.toml"])
-        tool_jobs["bandit"] = ("bandit", bandit_cmd)
-    if args.with_tests:
-        tool_jobs["pytest"] = ("pytest", ["uv", "run", "pytest", *shlex.split(args.pytest_args)])
+    native_result: dict[str, Any] | None = None
+    if not (args.skip_structure and args.skip_openapi):
+        try:
+            raw_native = analyze_selected_current_project_v2(
+                profile=args.profile,
+                only_rules=sorted(only_rules) if only_rules else None,
+                ignore_rules=sorted(ignore_rules) if ignore_rules else None,
+                skip_structure=args.skip_structure,
+                skip_openapi=args.skip_openapi,
+                static_only=True,
+                include_routes=False,
+            )
+        except NativeEngineUnavailable as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        native_result = raw_native
+
+    tool_target = _resolved_tool_target(
+        repo_root=repo_root,
+        explicit_code_dir=args.code_dir,
+        doctor_report=native_result,
+    )
+    tool_jobs = _build_tool_jobs(args=args, repo_root=repo_root, target=tool_target)
 
     command_results: list[dict[str, Any]] = []
     tool_results: dict[str, dict[str, Any]] = {}
@@ -512,31 +523,9 @@ def main() -> int:
 
     ruff_issues: list[dict[str, Any]] = []
     if "ruff" in tool_results:
-        ruff_issues = _map_ruff_findings_to_doctor(tool_results["ruff"]["stdout"])
-        ignore_rules.update(issue["check"] for issue in ruff_issues)
-
-    native_result: dict[str, Any] | None = None
-    if not (args.skip_structure and args.skip_openapi):
-        try:
-            raw_native = analyze_selected_current_project_v2(
-                profile=args.profile,
-                only_rules=sorted(only_rules) if only_rules else None,
-                ignore_rules=sorted(ignore_rules) if ignore_rules else None,
-                skip_structure=args.skip_structure,
-                skip_openapi=args.skip_openapi,
-                static_only=True,
-                include_routes=False,
-            )
-        except NativeEngineUnavailable as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        native_result = raw_native
-        native_result["issues"] = native_result["issues"] + ruff_issues
-        native_result["checks_not_evaluated"] = _runtime_openapi_checks_not_evaluated(
-            profile=args.profile,
-            only_rules=only_rules or None,
-            ignore_rules=ignore_rules or None,
-        )
+        ruff_issues = _map_ruff_findings_to_doctor(tool_results["ruff"]["stdout"], repo_root=repo_root)
+    if native_result is not None:
+        native_result["issues"] = _merge_issues(native_result["issues"], ruff_issues)
 
     final_score, final_label = _compute_combined_score(
         native_result["score"] if native_result else 100,

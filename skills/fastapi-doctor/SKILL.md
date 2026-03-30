@@ -149,8 +149,6 @@ uv run fastapi-doctor --profile strict --repo-root . --code-dir apps/service_api
 | `correctness/duplicate-route` | Correctness | Same method+path registered twice |
 | `correctness/sync-io-in-async` | Correctness | `open()`, `time.sleep()`, `requests.*` inside async handlers |
 | `architecture/giant-function` | Architecture | Function body >threshold lines (configurable, default 400) |
-| `api-surface/missing-operation-id` | API Surface | OpenAPI operation has no operationId |
-| `api-surface/duplicate-operation-id` | API Surface | Two operations share an operationId |
 | `pydantic/deprecated-validator` | Pydantic | `@validator` (v1) instead of `@field_validator` (v2) |
 | `pydantic/mutable-default` | Pydantic | Bare `= []` / `= {}` default in BaseModel |
 | `security/sql-fstring-interpolation` | Security | f-string injected into `text()` |
@@ -173,8 +171,9 @@ uv run fastapi-doctor --profile strict --repo-root . --code-dir apps/service_api
 | `architecture/fat-route-handler` | Architecture | Route handler >threshold lines (configurable, default 100) |
 | `architecture/avoid-sys-exit` | Architecture | Hard exit from internal library logic via `sys.exit()` |
 | `api-surface/missing-tags` | API Surface | Route missing tags |
-| `api-surface/missing-openapi-tags` | API Surface | OpenAPI operation missing tags |
+| `api-surface/missing-pagination` | API Surface | Collection endpoint missing standard pagination parameters |
 | `api-surface/missing-docstring` | API Surface | Endpoint handler has no docstring |
+| `correctness/serverless-filesystem-write` | Correctness | Filesystem write outside `/tmp` or recognized temp helpers |
 | `pydantic/extra-allow-on-request` | Pydantic | Request model uses `extra="allow"` |
 | `pydantic/should-be-model` | Pydantic | TypedDict/NamedTuple/dataclass/dict-factory should be BaseModel |
 | `resilience/bare-except-pass` | Resilience | `except: pass` without logging or comment |

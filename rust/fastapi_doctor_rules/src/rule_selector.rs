@@ -24,14 +24,14 @@ const MEDIUM_SELECTORS: &[&str] = &[
     "architecture/passthrough-function",
     "architecture/print-in-production",
     "api-surface/missing-pagination",
-    "api-surface/missing-operation-id",
-    "api-surface/duplicate-operation-id",
-    "api-surface/missing-openapi-tags",
+    "api-surface/missing-tags",
+    "api-surface/missing-docstring",
 ];
 
 pub fn parse_static_rule(rule_id: &str) -> Option<StaticRule> {
     Some(match rule_id {
         "architecture/giant-function" => StaticRule::ArchitectureGiantFunction,
+        "architecture/large-function" => StaticRule::ArchitectureLargeFunction,
         "architecture/deep-nesting" => StaticRule::ArchitectureDeepNesting,
         "architecture/async-without-await" => StaticRule::ArchitectureAsyncWithoutAwait,
         "architecture/import-bloat" => StaticRule::ArchitectureImportBloat,
@@ -96,6 +96,33 @@ pub fn parse_static_rule(rule_id: &str) -> Option<StaticRule> {
         "resilience/broad-except-no-context" => StaticRule::ResilienceBroadExceptNoContext,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_static_rule, MEDIUM_SELECTORS, SECURITY_SELECTORS};
+
+    fn assert_exact_selectors_resolve(selectors: &[&str]) {
+        for selector in selectors {
+            if selector.ends_with('*') {
+                continue;
+            }
+            assert!(
+                parse_static_rule(selector).is_some(),
+                "selector '{selector}' must resolve to a registered static rule"
+            );
+        }
+    }
+
+    #[test]
+    fn security_profile_exact_selectors_resolve() {
+        assert_exact_selectors_resolve(SECURITY_SELECTORS);
+    }
+
+    #[test]
+    fn balanced_profile_exact_selectors_resolve() {
+        assert_exact_selectors_resolve(MEDIUM_SELECTORS);
+    }
 }
 
 pub fn select_rule_ids(

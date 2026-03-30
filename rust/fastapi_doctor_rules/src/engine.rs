@@ -36,6 +36,7 @@ fn has_startup_validation_signal(module: &ModuleIndex<'_>) -> bool {
 #[derive(Clone, Default)]
 pub struct RuleSelection {
     pub giant_function: bool,
+    pub large_function: bool,
     pub deep_nesting: bool,
     pub async_without_await: bool,
     pub import_bloat: bool,
@@ -108,6 +109,7 @@ impl RuleSelection {
     fn enable(&mut self, rule: StaticRule) {
         match rule {
             StaticRule::ArchitectureGiantFunction => self.giant_function = true,
+            StaticRule::ArchitectureLargeFunction => self.large_function = true,
             StaticRule::ArchitectureDeepNesting => self.deep_nesting = true,
             StaticRule::ArchitectureAsyncWithoutAwait => self.async_without_await = true,
             StaticRule::ArchitectureImportBloat => self.import_bloat = true,
@@ -179,6 +181,7 @@ impl RuleSelection {
 
     fn any_ast_rules(&self) -> bool {
         self.giant_function
+            || self.large_function
             || self.deep_nesting
             || self.async_without_await
             || self.print_in_production
@@ -261,7 +264,7 @@ pub fn analyze_suite(
 ) -> Vec<Issue> {
     let mut issues = Vec::new();
 
-    if rules.giant_function
+    if (rules.giant_function || rules.large_function)
         && (config.giant_function_threshold > 0 || config.large_function_threshold > 0)
     {
         issues.extend(architecture::collect_giant_function_issues(

@@ -92,6 +92,10 @@ Exempt: streaming, export, download, webhook, and OAuth endpoints.
 POST endpoints that create resources should return 201, not the default 200.
 Only flagged for endpoints with clear creation semantics.
 
+### `correctness/serverless-filesystem-write` (warning)
+Writes to local disk outside `/tmp` are risky in serverless environments because the filesystem is usually non-durable and often read-only outside temp storage.
+The rule keeps real writes as findings, but treats `/tmp`, `tempfile`, and recognized serverless temp helpers as safe.
+
 ## Architecture Rules
 
 ### `architecture/giant-function` (error)
@@ -120,22 +124,16 @@ Production code should use the structured logger, not `print()`.
 
 ## API Surface Rules
 
-### `api-surface/missing-operation-id` (error)
-Every OpenAPI operation must have a unique operationId.
-FastAPI auto-generates these from function names.
-
-### `api-surface/duplicate-operation-id` (error)
-Two operations sharing an operationId breaks client codegen.
-
 ### `api-surface/missing-tags` (warning)
 Route-level: API routes should have `tags=` for OpenAPI grouping.
-
-### `api-surface/missing-openapi-tags` (warning)
-Schema-level: OpenAPI operations without tags produce unorganized API docs.
 
 ### `api-surface/missing-docstring` (warning)
 Endpoint handler functions should have docstrings.
 FastAPI uses them as OpenAPI operation descriptions.
+
+### `api-surface/missing-pagination` (warning)
+Collection endpoints should expose standard pagination query parameters.
+This helps OpenAPI consumers discover `limit`/`offset`-style pagination contracts consistently.
 
 ## Pydantic Rules
 

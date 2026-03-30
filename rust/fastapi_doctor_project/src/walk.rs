@@ -303,12 +303,7 @@ mod tests {
 
         let names: Vec<String> = paths
             .iter()
-            .map(|p| {
-                p.strip_prefix(root)
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string()
-            })
+            .map(|p| p.strip_prefix(root).unwrap().to_string_lossy().to_string())
             .collect();
         assert!(names.iter().any(|n| n.contains("main.py")));
         assert!(names.iter().any(|n| n.contains("routes.py")));
@@ -327,11 +322,7 @@ mod tests {
         fs::write(vendor.join("external.py"), "").unwrap();
         fs::write(good.join("main.py"), "").unwrap();
 
-        let meta = make_metadata(
-            root.to_path_buf(),
-            src.clone(),
-            vec!["vendor".to_string()],
-        );
+        let meta = make_metadata(root.to_path_buf(), src.clone(), vec!["vendor".to_string()]);
         let walker = ProjectFilesWalker::new(&meta);
         let paths = walker.collect_paths();
 

@@ -1,6 +1,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StaticRule {
     ArchitectureGiantFunction,
+    ArchitectureLargeFunction,
     ArchitectureDeepNesting,
     ArchitectureAsyncWithoutAwait,
     ArchitectureImportBloat,
@@ -66,6 +67,7 @@ impl StaticRule {
         use StaticRule::*;
         &[
             ArchitectureGiantFunction,
+            ArchitectureLargeFunction,
             ArchitectureDeepNesting,
             ArchitectureAsyncWithoutAwait,
             ArchitectureImportBloat,
@@ -130,6 +132,7 @@ impl StaticRule {
     pub const fn rule_id(self) -> &'static str {
         match self {
             Self::ArchitectureGiantFunction => "architecture/giant-function",
+            Self::ArchitectureLargeFunction => "architecture/large-function",
             Self::ArchitectureDeepNesting => "architecture/deep-nesting",
             Self::ArchitectureAsyncWithoutAwait => "architecture/async-without-await",
             Self::ArchitectureImportBloat => "architecture/import-bloat",
@@ -207,6 +210,7 @@ impl StaticRule {
     pub const fn category(self) -> &'static str {
         match self {
             Self::ArchitectureGiantFunction
+            | Self::ArchitectureLargeFunction
             | Self::ArchitectureDeepNesting
             | Self::ArchitectureAsyncWithoutAwait
             | Self::ArchitectureImportBloat

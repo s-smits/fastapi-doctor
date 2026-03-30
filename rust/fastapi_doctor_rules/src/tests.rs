@@ -491,7 +491,8 @@ mod rule_tests {
         for i in 0..15 {
             source.push_str(&format!("    x{} = {}\n", i, i));
         }
-        let issues = issues_for_with_config("architecture/giant-function", "app/main.py", &source, cfg);
+        let issues =
+            issues_for_with_config("architecture/giant-function", "app/main.py", &source, cfg);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].check, "architecture/large-function");
         assert_eq!(issues[0].severity, "warning");
@@ -726,11 +727,7 @@ mod rule_tests {
 
     #[test]
     fn heavy_imports_negative_stdlib() {
-        let issues = issues_for(
-            "performance/heavy-imports",
-            "app/main.py",
-            "import json\n",
-        );
+        let issues = issues_for("performance/heavy-imports", "app/main.py", "import json\n");
         assert!(issues.is_empty());
     }
 
@@ -835,8 +832,26 @@ mod rule_tests {
     #[test]
     fn duplicate_route_positive() {
         let routes = vec![
-            route("/api/users", &["GET"], true, None, &["users"], true, &[], None),
-            route("/api/users", &["GET"], true, None, &["users"], true, &[], None),
+            route(
+                "/api/users",
+                &["GET"],
+                true,
+                None,
+                &["users"],
+                true,
+                &[],
+                None,
+            ),
+            route(
+                "/api/users",
+                &["GET"],
+                true,
+                None,
+                &["users"],
+                true,
+                &[],
+                None,
+            ),
         ];
         let issues = route_issues(&routes, &["correctness/duplicate-route"]);
         assert_eq!(issues.len(), 1);
@@ -845,8 +860,26 @@ mod rule_tests {
     #[test]
     fn duplicate_route_negative_different_methods() {
         let routes = vec![
-            route("/api/users", &["GET"], true, None, &["users"], true, &[], None),
-            route("/api/users", &["POST"], true, Some(201), &["users"], true, &[], None),
+            route(
+                "/api/users",
+                &["GET"],
+                true,
+                None,
+                &["users"],
+                true,
+                &[],
+                None,
+            ),
+            route(
+                "/api/users",
+                &["POST"],
+                true,
+                Some(201),
+                &["users"],
+                true,
+                &[],
+                None,
+            ),
         ];
         let issues = route_issues(&routes, &["correctness/duplicate-route"]);
         assert!(issues.is_empty());
@@ -885,10 +918,58 @@ mod rule_tests {
     }
 
     #[test]
+    fn serverless_filesystem_write_negative_safe_tmp_constant_and_helper() {
+        let issues = issues_for(
+            "correctness/serverless-filesystem-write",
+            "app/cache.py",
+            "from pathlib import Path\n\
+from app.fs import atomic_write_text\n\
+ROOT = Path('/tmp') / 'app'\n\
+TARGET = ROOT / 'state.json'\n\
+atomic_write_text(TARGET, '{}')\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn serverless_filesystem_write_negative_serverless_helper_root() {
+        let issues = issues_for(
+            "correctness/serverless-filesystem-write",
+            "app/cache.py",
+            "from app.fs import atomic_write_bytes, serverless_temp_root\n\
+path = serverless_temp_root('app', 'state.bin')\n\
+atomic_write_bytes(path, b'data')\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn serverless_filesystem_write_positive_non_tmp_prompt_path() {
+        let issues = issues_for(
+            "correctness/serverless-filesystem-write",
+            "app/prompts.py",
+            "from pathlib import Path\n\
+from app.fs import atomic_write_text\n\
+PROMPTS = Path(__file__).resolve().parent / 'prompts'\n\
+atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
+        );
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
     fn missing_tags_positive() {
         let mut cfg = config();
         cfg.tag_required_prefixes = vec!["/api/".to_string()];
-        let routes = vec![route("/api/users", &["GET"], true, None, &[], true, &[], None)];
+        let routes = vec![route(
+            "/api/users",
+            &["GET"],
+            true,
+            None,
+            &[],
+            true,
+            &[],
+            None,
+        )];
         let rules: Vec<String> = vec!["api-surface/missing-tags".to_string()];
         let selection = RuleSelection::from_rules(&rules);
         let issues = analyze_routes(&routes, &selection, &cfg);
@@ -899,7 +980,16 @@ mod rule_tests {
     fn missing_tags_negative_has_tags() {
         let mut cfg = config();
         cfg.tag_required_prefixes = vec!["/api/".to_string()];
-        let routes = vec![route("/api/users", &["GET"], true, None, &["users"], true, &[], None)];
+        let routes = vec![route(
+            "/api/users",
+            &["GET"],
+            true,
+            None,
+            &["users"],
+            true,
+            &[],
+            None,
+        )];
         let rules: Vec<String> = vec!["api-surface/missing-tags".to_string()];
         let selection = RuleSelection::from_rules(&rules);
         let issues = analyze_routes(&routes, &selection, &cfg);
@@ -908,7 +998,16 @@ mod rule_tests {
 
     #[test]
     fn missing_docstring_positive() {
-        let routes = vec![route("/api/users", &["GET"], true, None, &["users"], false, &[], None)];
+        let routes = vec![route(
+            "/api/users",
+            &["GET"],
+            true,
+            None,
+            &["users"],
+            false,
+            &[],
+            None,
+        )];
         let issues = route_issues(&routes, &["api-surface/missing-docstring"]);
         assert_eq!(issues.len(), 1);
     }
@@ -949,7 +1048,16 @@ mod rule_tests {
     fn post_status_code_positive() {
         let mut cfg = config();
         cfg.create_post_prefixes = vec!["/api/".to_string()];
-        let routes = vec![route("/api/users", &["POST"], true, None, &["users"], true, &[], None)];
+        let routes = vec![route(
+            "/api/users",
+            &["POST"],
+            true,
+            None,
+            &["users"],
+            true,
+            &[],
+            None,
+        )];
         let rules: Vec<String> = vec!["correctness/post-status-code".to_string()];
         let selection = RuleSelection::from_rules(&rules);
         let issues = analyze_routes(&routes, &selection, &cfg);
@@ -1004,6 +1112,7 @@ mod rule_tests {
         assert!(ids.len() >= 50);
         assert!(ids.contains(&"security/unsafe-yaml-load".to_string()));
         assert!(ids.contains(&"architecture/giant-function".to_string()));
+        assert!(ids.contains(&"architecture/large-function".to_string()));
         assert!(ids.contains(&"api-surface/missing-tags".to_string()));
     }
 
@@ -1022,6 +1131,8 @@ mod rule_tests {
         assert!(ids.contains(&"security/unsafe-yaml-load".to_string()));
         assert!(ids.contains(&"correctness/mutable-default-arg".to_string()));
         assert!(ids.contains(&"resilience/bare-except-pass".to_string()));
+        assert!(ids.contains(&"api-surface/missing-tags".to_string()));
+        assert!(ids.contains(&"api-surface/missing-docstring".to_string()));
         // Architecture rules not in balanced unless explicitly listed
         assert!(!ids.contains(&"architecture/giant-function".to_string()));
     }
@@ -1072,14 +1183,7 @@ mod rule_tests {
 
     #[test]
     fn select_rule_ids_wildcard_ignore() {
-        let ids = select_rule_ids(
-            None,
-            &[],
-            &["security/*".to_string()],
-            &[],
-            false,
-            false,
-        );
+        let ids = select_rule_ids(None, &[], &["security/*".to_string()], &[], false, false);
         assert!(!ids.iter().any(|id| id.starts_with("security/")));
     }
 
