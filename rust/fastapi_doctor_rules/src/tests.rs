@@ -944,6 +944,99 @@ atomic_write_bytes(path, b'data')\n",
     }
 
     #[test]
+    fn serverless_filesystem_write_negative_string_replace_chain() {
+        let issues = issues_for(
+            "correctness/serverless-filesystem-write",
+            "app/cache.py",
+            "def build_token(value: str) -> str:\n\
+    return value.replace('-', '').replace(':', '').replace('T', '')\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn serverless_filesystem_write_negative_ensure_directory_on_safe_tmp_path() {
+        let issues = issues_for(
+            "correctness/serverless-filesystem-write",
+            "app/cache.py",
+            "from pathlib import Path\n\
+from app.fs import ensure_directory\n\
+ROOT = Path('/tmp') / 'cache'\n\
+path = ROOT / 'entry.json'\n\
+ensure_directory(path.parent)\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn serverless_filesystem_write_positive_path_replace_outside_tmp() {
+        let issues = issues_for(
+            "correctness/serverless-filesystem-write",
+            "app/cache.py",
+            "from pathlib import Path\n\
+path = Path('cache.json')\n\
+path.replace('backup.json')\n",
+        );
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn serverless_filesystem_write_negative_safe_helper_return() {
+        let issues = issues_for(
+            "correctness/serverless-filesystem-write",
+            "app/cache.py",
+            "from pathlib import Path\n\
+def cache_path(name: str):\n\
+    return Path('/tmp') / 'cache' / name\n\
+target = cache_path('entry.json')\n\
+target.write_text('ok')\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn serverless_filesystem_write_negative_safe_str_roundtrip() {
+        let issues = issues_for(
+            "correctness/serverless-filesystem-write",
+            "app/cache.py",
+            "import tempfile\n\
+from pathlib import Path\n\
+EPOCH = str(Path(tempfile.gettempdir()) / 'cache.epoch')\n\
+Path(EPOCH).write_text('ok')\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn serverless_filesystem_write_negative_safe_tmp_guarded_ifexp() {
+        let issues = issues_for(
+            "correctness/serverless-filesystem-write",
+            "app/cache.py",
+            "from pathlib import Path\n\
+from app.fs import atomic_write_text, ensure_directory, serverless_temp_root\n\
+requested = Path(output_path)\n\
+path = requested if str(requested).startswith('/tmp/') else serverless_temp_root('app', requested.name)\n\
+ensure_directory(path.parent)\n\
+atomic_write_text(path, 'ok')\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn serverless_filesystem_write_negative_wrapper_param_write() {
+        let issues = issues_for(
+            "correctness/serverless-filesystem-write",
+            "app/fs.py",
+            "import os\n\
+from pathlib import Path\n\
+def ensure_directory(path: Path) -> Path:\n\
+    os.makedirs(path, exist_ok=True)\n\
+    return path\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
     fn serverless_filesystem_write_positive_non_tmp_prompt_path() {
         let issues = issues_for(
             "correctness/serverless-filesystem-write",

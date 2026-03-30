@@ -616,7 +616,18 @@ pub(crate) fn collect_serverless_filesystem_write_issues(
     ]
     .into_iter()
     .collect();
-    let safe_temp_names = collect_safe_temp_path_names(suite);
+    let base_safe_temp_names = collect_safe_temp_path_names(suite, &HashSet::new());
+    let safe_temp_helper_names = collect_safe_temp_helper_names(suite, &base_safe_temp_names);
+    let safe_temp_names = collect_safe_temp_path_names(suite, &safe_temp_helper_names);
+    let base_path_like_names = collect_path_like_names(suite, &safe_temp_names, &HashSet::new());
+    let path_like_helper_names = collect_path_like_helper_names(
+        suite,
+        &safe_temp_names,
+        &base_path_like_names,
+        &safe_temp_helper_names,
+    );
+    let path_like_names = collect_path_like_names(suite, &safe_temp_names, &path_like_helper_names);
+    let function_param_scopes = collect_function_param_scopes(suite);
     let mut issues = Vec::new();
     walk_suite_exprs(suite, &mut |expr| {
         let Expr::Call(call) = expr else { return };
@@ -650,21 +661,53 @@ pub(crate) fn collect_serverless_filesystem_write_issues(
                 }
             }
             Expr::Name(n)
-                if matches!(n.id.as_str(), "atomic_write_text" | "atomic_write_bytes") =>
+                if matches!(
+                    n.id.as_str(),
+                    "atomic_write_text"
+                        | "atomic_write_bytes"
+                        | "ensure_directory"
+                        | "ensure_parent_directory"
+                ) =>
             {
                 is_write = true;
                 if let Some(first_arg) = call.args.first() {
                     write_target = Some(first_arg);
                 }
             }
-            Expr::Attribute(a) if write_methods.contains(a.attr.as_str()) => {
+            Expr::Attribute(a) if matches!((&*a.value, a.attr.as_str()), (Expr::Name(base), "makedirs") if base.id.as_str() == "os") =>
+            {
+                is_write = true;
+                if let Some(first_arg) = call.args.first() {
+                    write_target = Some(first_arg);
+                }
+            }
+            Expr::Attribute(a)
+                if write_methods.contains(a.attr.as_str())
+                    && expr_is_path_like(
+                        &a.value,
+                        &safe_temp_names,
+                        &path_like_names,
+                        &path_like_helper_names,
+                    ) =>
+            {
                 is_write = true;
                 write_target = Some(&a.value);
             }
             _ => {}
         }
         if is_write {
-            if write_target.is_some_and(|target| expr_is_safe_temp_path(target, &safe_temp_names)) {
+            if write_target.is_some_and(|target| {
+                expr_is_safe_temp_path(target, &safe_temp_names, &safe_temp_helper_names)
+            }) {
+                return;
+            }
+            if write_target.is_some_and(|target| {
+                target_depends_on_function_param(
+                    target,
+                    call.range.start().to_usize(),
+                    &function_param_scopes,
+                )
+            }) {
                 return;
             }
             let line = module.line_for_offset(call.range.start().to_usize());
@@ -682,7 +725,78 @@ pub(crate) fn collect_serverless_filesystem_write_issues(
     issues
 }
 
-fn collect_safe_temp_path_names(suite: &ast::Suite) -> HashSet<String> {
+fn collect_safe_temp_helper_names(
+    suite: &ast::Suite,
+    safe_temp_names: &HashSet<String>,
+) -> HashSet<String> {
+    let mut helper_names = HashSet::new();
+    loop {
+        let mut changed = false;
+        walk_suite_stmts(suite, &mut |stmt| match stmt {
+            Stmt::FunctionDef(node) => {
+                if function_returns_safe_temp_path(&node.body, safe_temp_names, &helper_names) {
+                    changed |= helper_names.insert(node.name.to_string());
+                }
+            }
+            Stmt::AsyncFunctionDef(node) => {
+                if function_returns_safe_temp_path(&node.body, safe_temp_names, &helper_names) {
+                    changed |= helper_names.insert(node.name.to_string());
+                }
+            }
+            _ => {}
+        });
+        if !changed {
+            break;
+        }
+    }
+    helper_names
+}
+
+fn collect_path_like_helper_names(
+    suite: &ast::Suite,
+    safe_temp_names: &HashSet<String>,
+    path_like_names: &HashSet<String>,
+    safe_temp_helper_names: &HashSet<String>,
+) -> HashSet<String> {
+    let mut helper_names = safe_temp_helper_names.clone();
+    loop {
+        let mut changed = false;
+        walk_suite_stmts(suite, &mut |stmt| match stmt {
+            Stmt::FunctionDef(node) => {
+                if function_returns_path_like(
+                    &node.body,
+                    safe_temp_names,
+                    path_like_names,
+                    safe_temp_helper_names,
+                    &helper_names,
+                ) {
+                    changed |= helper_names.insert(node.name.to_string());
+                }
+            }
+            Stmt::AsyncFunctionDef(node) => {
+                if function_returns_path_like(
+                    &node.body,
+                    safe_temp_names,
+                    path_like_names,
+                    safe_temp_helper_names,
+                    &helper_names,
+                ) {
+                    changed |= helper_names.insert(node.name.to_string());
+                }
+            }
+            _ => {}
+        });
+        if !changed {
+            break;
+        }
+    }
+    helper_names
+}
+
+fn collect_safe_temp_path_names(
+    suite: &ast::Suite,
+    safe_temp_helper_names: &HashSet<String>,
+) -> HashSet<String> {
     let mut safe_names = HashSet::new();
 
     loop {
@@ -702,7 +816,7 @@ fn collect_safe_temp_path_names(suite: &ast::Suite) -> HashSet<String> {
             let Some(value) = value else {
                 return;
             };
-            if !expr_is_safe_temp_path(value, &safe_names) {
+            if !expr_is_safe_temp_path(value, &safe_names, safe_temp_helper_names) {
                 return;
             }
             for target in targets {
@@ -719,32 +833,175 @@ fn collect_safe_temp_path_names(suite: &ast::Suite) -> HashSet<String> {
     safe_names
 }
 
-fn expr_is_safe_temp_path(expr: &Expr, safe_names: &HashSet<String>) -> bool {
+fn collect_path_like_names(
+    suite: &ast::Suite,
+    safe_temp_names: &HashSet<String>,
+    path_like_helper_names: &HashSet<String>,
+) -> HashSet<String> {
+    let mut path_like_names = safe_temp_names.clone();
+
+    loop {
+        let mut changed = false;
+        walk_suite_stmts(suite, &mut |stmt| {
+            let (targets, value) = match stmt {
+                Stmt::Assign(node) => (node.targets.as_slice(), Some(&*node.value)),
+                Stmt::AnnAssign(node) => {
+                    if let Some(value) = node.value.as_deref() {
+                        (std::slice::from_ref(&*node.target), Some(value))
+                    } else {
+                        (&[][..], None)
+                    }
+                }
+                _ => (&[][..], None),
+            };
+            let Some(value) = value else {
+                return;
+            };
+            if !expr_is_path_like(
+                value,
+                safe_temp_names,
+                &path_like_names,
+                path_like_helper_names,
+            ) {
+                return;
+            }
+            for target in targets {
+                if let Expr::Name(name) = target {
+                    changed |= path_like_names.insert(name.id.to_string());
+                }
+            }
+        });
+        if !changed {
+            break;
+        }
+    }
+
+    path_like_names
+}
+
+fn function_returns_safe_temp_path(
+    body: &[Stmt],
+    safe_temp_names: &HashSet<String>,
+    helper_names: &HashSet<String>,
+) -> bool {
+    body.iter().any(|stmt| {
+        if let Stmt::Return(ret) = stmt {
+            if let Some(value) = &ret.value {
+                return expr_is_safe_temp_path(value, safe_temp_names, helper_names);
+            }
+        }
+        false
+    })
+}
+
+fn function_returns_path_like(
+    body: &[Stmt],
+    safe_temp_names: &HashSet<String>,
+    path_like_names: &HashSet<String>,
+    safe_temp_helper_names: &HashSet<String>,
+    path_like_helper_names: &HashSet<String>,
+) -> bool {
+    body.iter().any(|stmt| {
+        if let Stmt::Return(ret) = stmt {
+            if let Some(value) = &ret.value {
+                return expr_is_path_like(
+                    value,
+                    safe_temp_names,
+                    path_like_names,
+                    path_like_helper_names,
+                ) || expr_is_safe_temp_path(value, safe_temp_names, safe_temp_helper_names);
+            }
+        }
+        false
+    })
+}
+
+fn expr_is_safe_temp_path(
+    expr: &Expr,
+    safe_names: &HashSet<String>,
+    safe_temp_helper_names: &HashSet<String>,
+) -> bool {
     match expr {
         Expr::Name(node) => safe_names.contains(node.id.as_str()),
         Expr::Constant(node) => matches!(
             &node.value,
             ast::Constant::Str(value) if value == "/tmp" || value.starts_with("/tmp/")
         ),
-        Expr::Attribute(node) => expr_is_safe_temp_path(&node.value, safe_names),
-        Expr::Call(node) => call_returns_safe_temp_path(node, safe_names),
+        Expr::Attribute(node) => {
+            expr_is_safe_temp_path(&node.value, safe_names, safe_temp_helper_names)
+        }
+        Expr::Call(node) => call_returns_safe_temp_path(node, safe_names, safe_temp_helper_names),
         Expr::BinOp(node) => {
-            matches!(&node.op, ast::Operator::Div) && expr_is_safe_temp_path(&node.left, safe_names)
+            matches!(&node.op, ast::Operator::Div)
+                && expr_is_safe_temp_path(&node.left, safe_names, safe_temp_helper_names)
+        }
+        Expr::IfExp(node) => {
+            (expr_is_safe_temp_path(&node.orelse, safe_names, safe_temp_helper_names)
+                && guard_implies_safe_temp(&node.test, &node.body))
+                || (expr_is_safe_temp_path(&node.body, safe_names, safe_temp_helper_names)
+                    && guard_implies_safe_temp(&node.test, &node.orelse))
         }
         _ => false,
     }
 }
 
-fn call_returns_safe_temp_path(call: &ast::ExprCall, safe_names: &HashSet<String>) -> bool {
+fn expr_is_path_like(
+    expr: &Expr,
+    safe_temp_names: &HashSet<String>,
+    path_like_names: &HashSet<String>,
+    path_like_helper_names: &HashSet<String>,
+) -> bool {
+    match expr {
+        Expr::Name(node) => {
+            safe_temp_names.contains(node.id.as_str()) || path_like_names.contains(node.id.as_str())
+        }
+        Expr::Attribute(node) => {
+            matches!(node.attr.as_str(), "parent")
+                && expr_is_path_like(
+                    &node.value,
+                    safe_temp_names,
+                    path_like_names,
+                    path_like_helper_names,
+                )
+        }
+        Expr::Call(node) => call_returns_path_like(
+            node,
+            safe_temp_names,
+            path_like_names,
+            path_like_helper_names,
+        ),
+        Expr::BinOp(node) => {
+            matches!(&node.op, ast::Operator::Div)
+                && expr_is_path_like(
+                    &node.left,
+                    safe_temp_names,
+                    path_like_names,
+                    path_like_helper_names,
+                )
+        }
+        _ => false,
+    }
+}
+
+fn call_returns_safe_temp_path(
+    call: &ast::ExprCall,
+    safe_names: &HashSet<String>,
+    safe_temp_helper_names: &HashSet<String>,
+) -> bool {
     match &*call.func {
-        Expr::Name(name) => match name.id.as_str() {
-            "serverless_temp_root" => true,
-            "Path" | "PurePath" => call
-                .args
-                .first()
-                .is_some_and(|arg| expr_is_safe_temp_path(arg, safe_names)),
-            _ => false,
-        },
+        Expr::Name(name) => {
+            match name.id.as_str() {
+                "serverless_temp_root" => true,
+                "str" => call.args.first().is_some_and(|arg| {
+                    expr_is_safe_temp_path(arg, safe_names, safe_temp_helper_names)
+                }),
+                helper if safe_temp_helper_names.contains(helper) => true,
+                "Path" | "PurePath" => call.args.first().is_some_and(|arg| {
+                    expr_is_safe_temp_path(arg, safe_names, safe_temp_helper_names)
+                }),
+                _ => false,
+            }
+        }
         Expr::Attribute(attr) => {
             let attr_name = attr.attr.as_str();
             if let Expr::Name(base) = &*attr.value {
@@ -764,7 +1021,154 @@ fn call_returns_safe_temp_path(call: &ast::ExprCall, safe_names: &HashSet<String
             matches!(
                 attr_name,
                 "joinpath" | "resolve" | "absolute" | "with_name" | "with_suffix"
-            ) && expr_is_safe_temp_path(&attr.value, safe_names)
+            ) && expr_is_safe_temp_path(&attr.value, safe_names, safe_temp_helper_names)
+        }
+        _ => false,
+    }
+}
+
+fn call_returns_path_like(
+    call: &ast::ExprCall,
+    safe_temp_names: &HashSet<String>,
+    path_like_names: &HashSet<String>,
+    path_like_helper_names: &HashSet<String>,
+) -> bool {
+    if call_returns_safe_temp_path(call, safe_temp_names, path_like_helper_names) {
+        return true;
+    }
+    match &*call.func {
+        Expr::Name(name) => {
+            matches!(
+                name.id.as_str(),
+                "Path" | "PurePath" | "ensure_directory" | "ensure_parent_directory"
+            ) || path_like_helper_names.contains(name.id.as_str())
+        }
+        Expr::Attribute(attr) => {
+            if let Expr::Name(base) = &*attr.value {
+                if base.id.as_str() == "pathlib"
+                    && matches!(attr.attr.as_str(), "Path" | "PurePath")
+                {
+                    return true;
+                }
+            }
+            matches!(
+                attr.attr.as_str(),
+                "joinpath" | "resolve" | "absolute" | "with_name" | "with_suffix"
+            ) && expr_is_path_like(
+                &attr.value,
+                safe_temp_names,
+                path_like_names,
+                path_like_helper_names,
+            )
+        }
+        _ => false,
+    }
+}
+
+fn guard_implies_safe_temp(test: &Expr, branch_expr: &Expr) -> bool {
+    match (test, branch_expr) {
+        (Expr::Call(call), Expr::Name(branch_name)) => {
+            let Expr::Attribute(attr) = &*call.func else {
+                return false;
+            };
+            if attr.attr.as_str() != "startswith" {
+                return false;
+            }
+            let Some(Expr::Constant(prefix)) = call.args.first() else {
+                return false;
+            };
+            let ast::Constant::Str(prefix) = &prefix.value else {
+                return false;
+            };
+            if prefix != "/tmp" && prefix != "/tmp/" {
+                return false;
+            }
+            match &*attr.value {
+                Expr::Call(inner_call) => {
+                    let Expr::Name(inner_name) = &*inner_call.func else {
+                        return false;
+                    };
+                    inner_name.id.as_str() == "str"
+                        && inner_call.args.first().is_some_and(|arg| {
+                            matches!(arg, Expr::Name(name) if name.id.as_str() == branch_name.id.as_str())
+                        })
+                }
+                Expr::Name(name) => name.id.as_str() == branch_name.id.as_str(),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+fn collect_function_param_scopes(suite: &ast::Suite) -> Vec<(usize, usize, HashSet<String>)> {
+    let mut scopes = Vec::new();
+    walk_suite_stmts(suite, &mut |stmt| match stmt {
+        Stmt::FunctionDef(node) => {
+            scopes.push((
+                node.range.start().to_usize(),
+                node.range.end().to_usize(),
+                function_param_names(&node.args),
+            ));
+        }
+        Stmt::AsyncFunctionDef(node) => {
+            scopes.push((
+                node.range.start().to_usize(),
+                node.range.end().to_usize(),
+                function_param_names(&node.args),
+            ));
+        }
+        _ => {}
+    });
+    scopes
+}
+
+fn function_param_names(args: &ast::Arguments) -> HashSet<String> {
+    args.posonlyargs
+        .iter()
+        .chain(args.args.iter())
+        .map(|arg| arg.def.arg.to_string())
+        .chain(args.kwonlyargs.iter().map(|arg| arg.def.arg.to_string()))
+        .filter(|arg| arg != "self")
+        .collect()
+}
+
+fn target_depends_on_function_param(
+    expr: &Expr,
+    offset: usize,
+    scopes: &[(usize, usize, HashSet<String>)],
+) -> bool {
+    let Some(param_names) = scopes
+        .iter()
+        .filter(|(start, end, _)| *start <= offset && offset <= *end)
+        .min_by_key(|(start, end, _)| end - start)
+        .map(|(_, _, names)| names)
+    else {
+        return false;
+    };
+    expr_depends_on_names(expr, param_names)
+}
+
+fn expr_depends_on_names(expr: &Expr, names: &HashSet<String>) -> bool {
+    match expr {
+        Expr::Name(node) => names.contains(node.id.as_str()),
+        Expr::Attribute(node) => expr_depends_on_names(&node.value, names),
+        Expr::Call(node) => {
+            expr_depends_on_names(&node.func, names)
+                || node
+                    .args
+                    .iter()
+                    .any(|arg| expr_depends_on_names(arg, names))
+                || node
+                    .keywords
+                    .iter()
+                    .any(|kw| expr_depends_on_names(&kw.value, names))
+        }
+        Expr::BinOp(node) => {
+            expr_depends_on_names(&node.left, names) || expr_depends_on_names(&node.right, names)
+        }
+        Expr::IfExp(node) => {
+            expr_depends_on_names(&node.body, names) || expr_depends_on_names(&node.orelse, names)
         }
         _ => false,
     }
