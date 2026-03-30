@@ -12,9 +12,11 @@ const MEDIUM_SELECTORS: &[&str] = &[
     "pydantic/sensitive-field-type",
     "pydantic/extra-allow-on-request",
     "config/direct-env-access",
+    "config/alembic-target-metadata",
+    "config/alembic-empty-autogen-revision",
+    "config/sqlalchemy-naming-convention",
     "correctness/*",
     "resilience/*",
-    "config/*",
     "pydantic/mutable-default",
     "pydantic/deprecated-validator",
     "architecture/async-without-await",
@@ -45,14 +47,17 @@ pub fn parse_static_rule(rule_id: &str) -> Option<StaticRule> {
             StaticRule::ArchitectureMissingStartupValidation
         }
         "architecture/fat-route-handler" => StaticRule::ArchitectureFatRouteHandler,
+        "security/missing-auth-dep" => StaticRule::SecurityMissingAuthDep,
         "security/forbidden-write-param" => StaticRule::SecurityForbiddenWriteParam,
         "correctness/duplicate-route" => StaticRule::CorrectnessDuplicateRoute,
         "correctness/missing-response-model" => StaticRule::CorrectnessMissingResponseModel,
+        "correctness/weak-response-model" => StaticRule::CorrectnessWeakResponseModel,
         "correctness/post-status-code" => StaticRule::CorrectnessPostStatusCode,
         "api-surface/missing-tags" => StaticRule::ApiSurfaceMissingTags,
         "api-surface/missing-docstring" => StaticRule::ApiSurfaceMissingDocstring,
         "api-surface/missing-pagination" => StaticRule::ApiSurfaceMissingPagination,
         "config/direct-env-access" => StaticRule::ConfigDirectEnvAccess,
+        "config/env-mutation" => StaticRule::ConfigEnvMutation,
         "config/alembic-target-metadata" => StaticRule::ConfigAlembicTargetMetadata,
         "config/alembic-empty-autogen-revision" => StaticRule::ConfigAlembicEmptyAutogenRevision,
         "config/sqlalchemy-naming-convention" => StaticRule::ConfigSqlalchemyNamingConvention,
@@ -94,6 +99,9 @@ pub fn parse_static_rule(rule_id: &str) -> Option<StaticRule> {
         "resilience/reraise-without-context" => StaticRule::ResilienceReraiseWithoutContext,
         "resilience/exception-swallowed" => StaticRule::ResilienceExceptionSwallowed,
         "resilience/broad-except-no-context" => StaticRule::ResilienceBroadExceptNoContext,
+        "resilience/exception-log-without-traceback" => {
+            StaticRule::ResilienceExceptionLogWithoutTraceback
+        }
         _ => return None,
     })
 }

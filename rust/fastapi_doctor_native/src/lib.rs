@@ -8,7 +8,7 @@ use fastapi_doctor_project::{
 };
 use fastapi_doctor_rules::{
     analyze_module, analyze_module_with_suite, analyze_project_modules, analyze_routes,
-    select_rule_ids, RuleSelection,
+    route_checks_not_evaluated, select_rule_ids, RuleSelection,
 };
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
@@ -26,6 +26,9 @@ use std::collections::HashMap;
     fat_route_handler_threshold,
     should_be_model_mode,
     forbidden_write_params,
+    auth_required_prefixes,
+    auth_dependency_names,
+    auth_exempt_prefixes,
     create_post_prefixes,
     tag_required_prefixes,
     active_rules,
@@ -41,6 +44,9 @@ fn analyze_modules(
     fat_route_handler_threshold: usize,
     should_be_model_mode: String,
     forbidden_write_params: Vec<String>,
+    auth_required_prefixes: Vec<String>,
+    auth_dependency_names: Vec<String>,
+    auth_exempt_prefixes: Vec<String>,
     create_post_prefixes: Vec<String>,
     tag_required_prefixes: Vec<String>,
     active_rules: Vec<String>,
@@ -55,6 +61,9 @@ fn analyze_modules(
         fat_route_handler_threshold,
         should_be_model_mode,
         forbidden_write_params,
+        auth_required_prefixes,
+        auth_dependency_names,
+        auth_exempt_prefixes,
         create_post_prefixes,
         tag_required_prefixes,
     };
@@ -91,6 +100,9 @@ fn analyze_modules(
     fat_route_handler_threshold,
     should_be_model_mode,
     forbidden_write_params,
+    auth_required_prefixes,
+    auth_dependency_names,
+    auth_exempt_prefixes,
     create_post_prefixes,
     tag_required_prefixes,
     active_rules,
@@ -108,6 +120,9 @@ fn analyze_project(
     fat_route_handler_threshold: usize,
     should_be_model_mode: String,
     forbidden_write_params: Vec<String>,
+    auth_required_prefixes: Vec<String>,
+    auth_dependency_names: Vec<String>,
+    auth_exempt_prefixes: Vec<String>,
     create_post_prefixes: Vec<String>,
     tag_required_prefixes: Vec<String>,
     active_rules: Vec<String>,
@@ -125,6 +140,9 @@ fn analyze_project(
         fat_route_handler_threshold,
         should_be_model_mode,
         forbidden_write_params,
+        auth_required_prefixes,
+        auth_dependency_names,
+        auth_exempt_prefixes,
         create_post_prefixes,
         tag_required_prefixes,
         active_rules,
@@ -146,6 +164,9 @@ fn analyze_project(
     fat_route_handler_threshold,
     should_be_model_mode,
     forbidden_write_params,
+    auth_required_prefixes,
+    auth_dependency_names,
+    auth_exempt_prefixes,
     create_post_prefixes,
     tag_required_prefixes,
     active_rules,
@@ -164,6 +185,9 @@ fn analyze_project_v2(
     fat_route_handler_threshold: usize,
     should_be_model_mode: String,
     forbidden_write_params: Vec<String>,
+    auth_required_prefixes: Vec<String>,
+    auth_dependency_names: Vec<String>,
+    auth_exempt_prefixes: Vec<String>,
     create_post_prefixes: Vec<String>,
     tag_required_prefixes: Vec<String>,
     active_rules: Vec<String>,
@@ -182,6 +206,9 @@ fn analyze_project_v2(
         fat_route_handler_threshold,
         should_be_model_mode,
         forbidden_write_params,
+        auth_required_prefixes,
+        auth_dependency_names,
+        auth_exempt_prefixes,
         create_post_prefixes,
         tag_required_prefixes,
         active_rules,
@@ -283,6 +310,7 @@ struct ProjectAnalysisResult {
     raw_issues: Vec<Issue>,
     finalized_routes: Vec<RouteRecord>,
     suppressions: Vec<SuppressionTuple>,
+    checks_not_evaluated: Vec<String>,
     engine_reason: String,
 }
 
@@ -304,7 +332,7 @@ impl ProjectAnalysisResult {
             issues,
             routes,
             suppressions: self.suppressions,
-            checks_not_evaluated: Vec::new(),
+            checks_not_evaluated: self.checks_not_evaluated,
             engine_reason: self.engine_reason,
         }
     }
@@ -353,6 +381,9 @@ fn analyze_project_bundle(
     fat_route_handler_threshold: usize,
     should_be_model_mode: String,
     forbidden_write_params: Vec<String>,
+    auth_required_prefixes: Vec<String>,
+    auth_dependency_names: Vec<String>,
+    auth_exempt_prefixes: Vec<String>,
     create_post_prefixes: Vec<String>,
     tag_required_prefixes: Vec<String>,
     active_rules: Vec<String>,
@@ -368,6 +399,9 @@ fn analyze_project_bundle(
         fat_route_handler_threshold,
         should_be_model_mode,
         forbidden_write_params,
+        auth_required_prefixes,
+        auth_dependency_names,
+        auth_exempt_prefixes,
         create_post_prefixes,
         tag_required_prefixes,
     };
@@ -439,15 +473,20 @@ fn analyze_loaded_project_bundle_core(
     let scans = scans.map_err(PyRuntimeError::new_err)?;
     let project_issues = analyze_project_modules(&project.modules, &rule_selection);
 
-    let mut include_prefix_map: HashMap<String, (String, Vec<String>)> = HashMap::new();
+    let mut include_prefix_map: HashMap<String, (String, Vec<String>, Vec<String>)> =
+        HashMap::new();
     for (_, _, _, includes) in &scans {
-        for (router_name, include_prefix, include_tags) in includes {
+        for (router_name, include_prefix, include_tags, include_dependencies) in includes {
             match include_prefix_map.get(router_name) {
-                Some((existing_prefix, _)) if existing_prefix.len() >= include_prefix.len() => {}
+                Some((existing_prefix, _, _)) if existing_prefix.len() >= include_prefix.len() => {}
                 _ => {
                     include_prefix_map.insert(
                         router_name.clone(),
-                        (include_prefix.clone(), include_tags.clone()),
+                        (
+                            include_prefix.clone(),
+                            include_tags.clone(),
+                            include_dependencies.clone(),
+                        ),
                     );
                 }
             }
@@ -476,11 +515,13 @@ fn analyze_loaded_project_bundle_core(
     if needs_routes {
         raw_issues.extend(analyze_routes(&finalized_routes, &rule_selection, &config));
     }
+    let checks_not_evaluated = route_checks_not_evaluated(&rule_selection, &config);
 
     Ok(ProjectAnalysisResult {
         raw_issues,
         finalized_routes,
         suppressions,
+        checks_not_evaluated,
         engine_reason: engine_reason.to_string(),
     })
 }
@@ -682,6 +723,30 @@ fn project_context_payload(
             .effective_config
             .security
             .forbidden_write_params
+            .clone(),
+    )?;
+    security.set_item(
+        "auth_required_prefixes",
+        context
+            .effective_config
+            .security
+            .auth_required_prefixes
+            .clone(),
+    )?;
+    security.set_item(
+        "auth_dependency_names",
+        context
+            .effective_config
+            .security
+            .auth_dependency_names
+            .clone(),
+    )?;
+    security.set_item(
+        "auth_exempt_prefixes",
+        context
+            .effective_config
+            .security
+            .auth_exempt_prefixes
             .clone(),
     )?;
     effective_config.set_item("security", security)?;

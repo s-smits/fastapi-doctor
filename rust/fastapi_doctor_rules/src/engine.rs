@@ -85,9 +85,11 @@ pub struct RuleSelection {
     pub engine_pool_pre_ping: bool,
     pub missing_startup_validation: bool,
     pub fat_route_handler: bool,
+    pub missing_auth_dep: bool,
     pub forbidden_write_param: bool,
     pub duplicate_route: bool,
     pub missing_response_model: bool,
+    pub weak_response_model: bool,
     pub post_status_code: bool,
     pub missing_tags: bool,
     pub missing_docstring: bool,
@@ -95,6 +97,8 @@ pub struct RuleSelection {
     pub config_alembic_target_metadata: bool,
     pub config_alembic_empty_autogen_revision: bool,
     pub config_sqlalchemy_naming_convention: bool,
+    pub env_mutation: bool,
+    pub exception_log_without_traceback: bool,
 }
 
 impl RuleSelection {
@@ -123,14 +127,17 @@ impl RuleSelection {
                 self.missing_startup_validation = true
             }
             StaticRule::ArchitectureFatRouteHandler => self.fat_route_handler = true,
+            StaticRule::SecurityMissingAuthDep => self.missing_auth_dep = true,
             StaticRule::SecurityForbiddenWriteParam => self.forbidden_write_param = true,
             StaticRule::CorrectnessDuplicateRoute => self.duplicate_route = true,
             StaticRule::CorrectnessMissingResponseModel => self.missing_response_model = true,
+            StaticRule::CorrectnessWeakResponseModel => self.weak_response_model = true,
             StaticRule::CorrectnessPostStatusCode => self.post_status_code = true,
             StaticRule::ApiSurfaceMissingTags => self.missing_tags = true,
             StaticRule::ApiSurfaceMissingDocstring => self.missing_docstring = true,
             StaticRule::ApiSurfaceMissingPagination => self.missing_pagination = true,
             StaticRule::ConfigDirectEnvAccess => self.direct_env_access = true,
+            StaticRule::ConfigEnvMutation => self.env_mutation = true,
             StaticRule::ConfigAlembicTargetMetadata => self.config_alembic_target_metadata = true,
             StaticRule::ConfigAlembicEmptyAutogenRevision => {
                 self.config_alembic_empty_autogen_revision = true
@@ -176,6 +183,9 @@ impl RuleSelection {
             StaticRule::ResilienceReraiseWithoutContext => self.reraise_without_context = true,
             StaticRule::ResilienceExceptionSwallowed => self.exception_swallowed = true,
             StaticRule::ResilienceBroadExceptNoContext => self.broad_except_no_context = true,
+            StaticRule::ResilienceExceptionLogWithoutTraceback => {
+                self.exception_log_without_traceback = true
+            }
         }
     }
 
@@ -196,6 +206,7 @@ impl RuleSelection {
             || self.reraise_without_context
             || self.exception_swallowed
             || self.broad_except_no_context
+            || self.exception_log_without_traceback
             || self.sql_fstring_interpolation
             || self.hardcoded_secret
             || self.pydantic_secretstr
@@ -218,6 +229,7 @@ impl RuleSelection {
     fn any_line_rules(&self) -> bool {
         self.star_import
             || self.direct_env_access
+            || self.env_mutation
             || self.avoid_os_path
             || self.deprecated_typing_imports
             || self.naive_datetime
@@ -234,9 +246,11 @@ impl RuleSelection {
     }
 
     pub fn any_route_rules(&self) -> bool {
-        self.forbidden_write_param
+        self.missing_auth_dep
+            || self.forbidden_write_param
             || self.duplicate_route
             || self.missing_response_model
+            || self.weak_response_model
             || self.post_status_code
             || self.missing_tags
             || self.missing_docstring
@@ -254,6 +268,10 @@ pub fn analyze_routes(
     config: &Config,
 ) -> Vec<Issue> {
     routes::analyze_routes(routes, rules, config)
+}
+
+pub fn route_checks_not_evaluated(rules: &RuleSelection, config: &Config) -> Vec<String> {
+    routes::route_checks_not_evaluated(rules, config)
 }
 
 pub fn analyze_suite(
@@ -306,6 +324,7 @@ pub fn analyze_suite(
         || rules.reraise_without_context
         || rules.exception_swallowed
         || rules.broad_except_no_context
+        || rules.exception_log_without_traceback
     {
         issues.extend(resilience::collect_resilience_issues(module, suite, rules));
     }
@@ -488,6 +507,11 @@ pub fn analyze_module_with_suite(
     let allow_star_import = rules.star_import && module.file_name.as_deref() != Some("__init__.py");
     let allow_direct_env =
         rules.direct_env_access && module.has_path_part(&["routers", "services", "interfaces"]);
+    let allow_env_mutation = rules.env_mutation
+        && module.file_name.as_deref() != Some("main.py")
+        && module.file_name.as_deref() != Some("__main__.py")
+        && module.file_name.as_deref() != Some("cli.py")
+        && !module.rel_path.contains("scripts/");
     let allow_assert = rules.assert_in_production && !should_skip_assert(module.rel_path);
     let deprecated_typing = [
         "List",
@@ -740,6 +764,27 @@ pub fn analyze_module_with_suite(
                     ));
                 }
             }
+        }
+
+        if allow_env_mutation
+            && !line.trimmed.contains("# noqa: env-mutation")
+            && (line.trimmed.contains("os.environ.setdefault(")
+                || line.trimmed.contains("os.putenv(")
+                || line.trimmed.contains("os.environ["))
+            && (line.trimmed.contains("os.environ.setdefault(")
+                || line.trimmed.contains("os.putenv(")
+                || line.trimmed.contains("] =")
+                || line.trimmed.contains("]="))
+        {
+            issues.push(issue(
+                "config/env-mutation",
+                "warning",
+                "Config",
+                line.number,
+                module.rel_path,
+                "Process environment mutated outside bootstrap code — move env setup to startup/config entrypoints",
+                "Only mutate os.environ in main.py, __main__.py, cli.py, or scripts. Pass values through typed settings elsewhere.",
+            ));
         }
 
         if rules.weak_hash_without_flag {

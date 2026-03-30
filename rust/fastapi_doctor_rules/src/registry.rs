@@ -13,14 +13,17 @@ pub enum StaticRule {
     ArchitectureEnginePoolPrePing,
     ArchitectureMissingStartupValidation,
     ArchitectureFatRouteHandler,
+    SecurityMissingAuthDep,
     SecurityForbiddenWriteParam,
     CorrectnessDuplicateRoute,
     CorrectnessMissingResponseModel,
+    CorrectnessWeakResponseModel,
     CorrectnessPostStatusCode,
     ApiSurfaceMissingTags,
     ApiSurfaceMissingDocstring,
     ApiSurfaceMissingPagination,
     ConfigDirectEnvAccess,
+    ConfigEnvMutation,
     ConfigAlembicTargetMetadata,
     ConfigAlembicEmptyAutogenRevision,
     ConfigSqlalchemyNamingConvention,
@@ -60,6 +63,7 @@ pub enum StaticRule {
     ResilienceReraiseWithoutContext,
     ResilienceExceptionSwallowed,
     ResilienceBroadExceptNoContext,
+    ResilienceExceptionLogWithoutTraceback,
 }
 
 impl StaticRule {
@@ -79,14 +83,17 @@ impl StaticRule {
             ArchitectureEnginePoolPrePing,
             ArchitectureMissingStartupValidation,
             ArchitectureFatRouteHandler,
+            SecurityMissingAuthDep,
             SecurityForbiddenWriteParam,
             CorrectnessDuplicateRoute,
             CorrectnessMissingResponseModel,
+            CorrectnessWeakResponseModel,
             CorrectnessPostStatusCode,
             ApiSurfaceMissingTags,
             ApiSurfaceMissingDocstring,
             ApiSurfaceMissingPagination,
             ConfigDirectEnvAccess,
+            ConfigEnvMutation,
             ConfigAlembicTargetMetadata,
             ConfigAlembicEmptyAutogenRevision,
             ConfigSqlalchemyNamingConvention,
@@ -126,6 +133,7 @@ impl StaticRule {
             ResilienceReraiseWithoutContext,
             ResilienceExceptionSwallowed,
             ResilienceBroadExceptNoContext,
+            ResilienceExceptionLogWithoutTraceback,
         ]
     }
 
@@ -144,14 +152,17 @@ impl StaticRule {
             Self::ArchitectureEnginePoolPrePing => "architecture/engine-pool-pre-ping",
             Self::ArchitectureMissingStartupValidation => "architecture/missing-startup-validation",
             Self::ArchitectureFatRouteHandler => "architecture/fat-route-handler",
+            Self::SecurityMissingAuthDep => "security/missing-auth-dep",
             Self::SecurityForbiddenWriteParam => "security/forbidden-write-param",
             Self::CorrectnessDuplicateRoute => "correctness/duplicate-route",
             Self::CorrectnessMissingResponseModel => "correctness/missing-response-model",
+            Self::CorrectnessWeakResponseModel => "correctness/weak-response-model",
             Self::CorrectnessPostStatusCode => "correctness/post-status-code",
             Self::ApiSurfaceMissingTags => "api-surface/missing-tags",
             Self::ApiSurfaceMissingDocstring => "api-surface/missing-docstring",
             Self::ApiSurfaceMissingPagination => "api-surface/missing-pagination",
             Self::ConfigDirectEnvAccess => "config/direct-env-access",
+            Self::ConfigEnvMutation => "config/env-mutation",
             Self::ConfigAlembicTargetMetadata => "config/alembic-target-metadata",
             Self::ConfigAlembicEmptyAutogenRevision => "config/alembic-empty-autogen-revision",
             Self::ConfigSqlalchemyNamingConvention => "config/sqlalchemy-naming-convention",
@@ -191,12 +202,16 @@ impl StaticRule {
             Self::ResilienceReraiseWithoutContext => "resilience/reraise-without-context",
             Self::ResilienceExceptionSwallowed => "resilience/exception-swallowed",
             Self::ResilienceBroadExceptNoContext => "resilience/broad-except-no-context",
+            Self::ResilienceExceptionLogWithoutTraceback => {
+                "resilience/exception-log-without-traceback"
+            }
         }
     }
 
     pub const fn severity(self) -> &'static str {
         match self {
-            Self::SecurityForbiddenWriteParam
+            Self::SecurityMissingAuthDep
+            | Self::SecurityForbiddenWriteParam
             | Self::SecurityAssertInProduction
             | Self::SecuritySubprocessShellTrue
             | Self::SecurityUnsafeYamlLoad
@@ -223,7 +238,8 @@ impl StaticRule {
             | Self::ArchitectureMissingStartupValidation
             | Self::ArchitectureFatRouteHandler => "Architecture",
 
-            Self::SecurityForbiddenWriteParam
+            Self::SecurityMissingAuthDep
+            | Self::SecurityForbiddenWriteParam
             | Self::SecurityAssertInProduction
             | Self::SecurityCorsWildcard
             | Self::SecurityExceptionDetailLeak
@@ -236,6 +252,7 @@ impl StaticRule {
 
             Self::CorrectnessDuplicateRoute
             | Self::CorrectnessMissingResponseModel
+            | Self::CorrectnessWeakResponseModel
             | Self::CorrectnessPostStatusCode
             | Self::CorrectnessAsyncioRunInAsync
             | Self::CorrectnessSyncIoInAsync
@@ -256,6 +273,7 @@ impl StaticRule {
             | Self::ApiSurfaceMissingPagination => "API Surface",
 
             Self::ConfigDirectEnvAccess
+            | Self::ConfigEnvMutation
             | Self::ConfigAlembicTargetMetadata
             | Self::ConfigAlembicEmptyAutogenRevision
             | Self::ConfigSqlalchemyNamingConvention => "Configuration",
@@ -275,7 +293,8 @@ impl StaticRule {
             | Self::ResilienceBareExceptPass
             | Self::ResilienceReraiseWithoutContext
             | Self::ResilienceExceptionSwallowed
-            | Self::ResilienceBroadExceptNoContext => "Resilience",
+            | Self::ResilienceBroadExceptNoContext
+            | Self::ResilienceExceptionLogWithoutTraceback => "Resilience",
         }
     }
 }

@@ -422,6 +422,27 @@ fn blocking_call_details(call: &CallSite) -> Option<(&'static str, &'static str)
             "Sync I/O call 'open()'",
             "Use aiofiles.open() or run the file operation in a thread with asyncio.to_thread().",
         )),
+        Callee::Attribute {
+            base: Some(base),
+            attr,
+        } if base == "os" && matches!(attr.as_str(), "open" | "scandir" | "listdir") => Some((
+            Box::leak(format!("Sync filesystem call 'os.{attr}()'").into_boxed_str()),
+            "Use asyncio.to_thread() or an async-friendly filesystem abstraction for blocking os.* calls.",
+        )),
+        Callee::Attribute {
+            base: Some(base),
+            attr,
+        } if base == "fcntl" && attr == "flock" => Some((
+            "Blocking file-lock call 'fcntl.flock()'",
+            "Run file locking in asyncio.to_thread() so the event loop stays responsive.",
+        )),
+        Callee::Attribute {
+            base: Some(base),
+            attr,
+        } if base == "tempfile" && attr == "NamedTemporaryFile" => Some((
+            "Sync tempfile call 'tempfile.NamedTemporaryFile()'",
+            "Create temp files in a thread or use a non-blocking async workflow around tempfile usage.",
+        )),
         Callee::Name(name) if name == "sleep" => Some((
             "Sync I/O call 'sleep()'",
             "Use asyncio.sleep() instead of time.sleep() or a sync sleep wrapper.",
@@ -439,6 +460,17 @@ fn blocking_call_details(call: &CallSite) -> Option<(&'static str, &'static str)
             Box::leak(format!("Sync HTTP call 'requests.{attr}()'").into_boxed_str()),
             "Use httpx.AsyncClient or aiohttp instead of the requests library.",
         )),
+        Callee::Attribute { attr, .. }
+            if matches!(
+                attr.as_str(),
+                "open" | "read_text" | "read_bytes" | "write_text" | "write_bytes"
+            ) =>
+        {
+            Some((
+                Box::leak(format!("Blocking filesystem method '{}()'", attr).into_boxed_str()),
+                "Path/file methods are synchronous. Use aiofiles or asyncio.to_thread() in async code.",
+            ))
+        }
         _ => None,
     }
 }

@@ -11,6 +11,9 @@ pub(crate) fn analyze_routes(
 ) -> Vec<Issue> {
     let mut issues = Vec::new();
 
+    if rules.missing_auth_dep && auth_rule_configured(config) {
+        issues.extend(collect_missing_auth_dep_issues(routes, config));
+    }
     if rules.forbidden_write_param && !config.forbidden_write_params.is_empty() {
         issues.extend(collect_forbidden_write_param_issues(routes, config));
     }
@@ -19,6 +22,9 @@ pub(crate) fn analyze_routes(
     }
     if rules.missing_response_model {
         issues.extend(collect_missing_response_model_issues(routes));
+    }
+    if rules.weak_response_model {
+        issues.extend(collect_weak_response_model_issues(routes));
     }
     if rules.post_status_code && !config.create_post_prefixes.is_empty() {
         issues.extend(collect_post_status_code_issues(routes, config));
@@ -31,6 +37,77 @@ pub(crate) fn analyze_routes(
     }
     if rules.missing_pagination {
         issues.extend(collect_missing_pagination_issues(routes));
+    }
+
+    issues
+}
+
+pub(crate) fn route_checks_not_evaluated(rules: &RuleSelection, config: &Config) -> Vec<String> {
+    let mut checks = Vec::new();
+    if rules.missing_auth_dep && !auth_rule_configured(config) {
+        checks.push("security/missing-auth-dep".to_string());
+    }
+    checks
+}
+
+fn auth_rule_configured(config: &Config) -> bool {
+    !config.auth_required_prefixes.is_empty() && !config.auth_dependency_names.is_empty()
+}
+
+fn is_response_model_exempt_path(path: &str) -> bool {
+    [
+        "/stream",
+        "/export",
+        "-export",
+        "/download",
+        "/webhook",
+        "/oauth",
+        "/callback",
+        "/{",
+    ]
+    .iter()
+    .any(|pattern| path.contains(pattern))
+}
+
+fn collect_missing_auth_dep_issues(routes: &[RouteRecord], config: &Config) -> Vec<Issue> {
+    let required_dependencies: HashSet<&str> = config
+        .auth_dependency_names
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let mut issues = Vec::new();
+
+    for route in routes {
+        if config
+            .auth_exempt_prefixes
+            .iter()
+            .any(|prefix| route.path.starts_with(prefix))
+        {
+            continue;
+        }
+        if !config
+            .auth_required_prefixes
+            .iter()
+            .any(|prefix| route.path.starts_with(prefix))
+        {
+            continue;
+        }
+        if route
+            .dependency_names
+            .iter()
+            .any(|name| required_dependencies.contains(name.as_str()))
+        {
+            continue;
+        }
+        issues.push(Issue {
+            check: "security/missing-auth-dep",
+            severity: "error",
+            category: "Security",
+            line: 0,
+            path: route.path.clone(),
+            message: "Protected route is missing required auth Depends()",
+            help: "Add a configured auth dependency at the router or handler level so identity comes from request context.",
+        });
     }
 
     issues
@@ -154,26 +231,13 @@ fn collect_post_status_code_issues(routes: &[RouteRecord], config: &Config) -> V
 }
 
 fn collect_missing_response_model_issues(routes: &[RouteRecord]) -> Vec<Issue> {
-    let exempt_patterns = [
-        "/stream",
-        "/export",
-        "-export",
-        "/download",
-        "/webhook",
-        "/oauth",
-        "/callback",
-        "/{",
-    ];
     let mut issues = Vec::new();
 
     for route in routes {
         if !route.path.starts_with("/api/") || !route.include_in_schema {
             continue;
         }
-        if exempt_patterns
-            .iter()
-            .any(|pattern| route.path.contains(pattern))
-        {
+        if is_response_model_exempt_path(&route.path) {
             continue;
         }
         if !route.has_response_model {
@@ -188,6 +252,49 @@ fn collect_missing_response_model_issues(routes: &[RouteRecord]) -> Vec<Issue> {
                 help: "Add response_model=YourPydanticModel to the route decorator.",
             });
         }
+    }
+
+    issues
+}
+
+fn collect_weak_response_model_issues(routes: &[RouteRecord]) -> Vec<Issue> {
+    let mut issues = Vec::new();
+
+    for route in routes {
+        if !route.path.starts_with("/api/") || !route.include_in_schema {
+            continue;
+        }
+        if is_response_model_exempt_path(&route.path) {
+            continue;
+        }
+        let Some(response_model) = route.response_model_str.as_deref() else {
+            continue;
+        };
+        let normalized = response_model.replace(' ', "");
+        let is_weak = normalized == "dict"
+            || normalized == "any"
+            || normalized.starts_with("dict[")
+            || normalized.starts_with("mapping[")
+            || normalized.starts_with("list[dict")
+            || normalized.starts_with("list[any]");
+        if !is_weak {
+            continue;
+        }
+        issues.push(Issue {
+            check: "correctness/weak-response-model",
+            severity: "warning",
+            category: "Correctness",
+            line: 0,
+            path: route.path.clone(),
+            message: Box::leak(
+                format!(
+                    "API endpoint uses weak response_model={} — prefer a Pydantic model",
+                    response_model
+                )
+                .into_boxed_str(),
+            ),
+            help: "Use a concrete BaseModel or typed collection of BaseModels so your API contract stays explicit.",
+        });
     }
 
     issues

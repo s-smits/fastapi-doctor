@@ -107,11 +107,17 @@ pub(crate) fn collect_resilience_issues(
                 .type_
                 .as_ref()
                 .is_some_and(|t| matches!(&**t, Expr::Name(n) if n.id.as_str() == "Exception"));
-            if !is_except_exception {
+            if !is_except_exception
+                && module
+                    .is_rule_suppressed(handler_line, "resilience/exception-log-without-traceback")
+            {
                 continue;
             }
-            if module.is_rule_suppressed(handler_line, "resilience/exception-swallowed")
+            if is_except_exception
+                && module.is_rule_suppressed(handler_line, "resilience/exception-swallowed")
                 && module.is_rule_suppressed(handler_line, "resilience/broad-except-no-context")
+                && module
+                    .is_rule_suppressed(handler_line, "resilience/exception-log-without-traceback")
             {
                 continue;
             }
@@ -120,8 +126,10 @@ pub(crate) fn collect_resilience_issues(
             let exc_name = handler.name.as_deref();
             let mut has_logging = false;
             let mut has_raise = false;
+            let mut has_identity_raise = false;
             let mut refs_exc = false;
             let mut log_call_without_context: Option<(usize, &str)> = None;
+            let mut exception_log_without_traceback: Option<(usize, &str)> = None;
 
             walk_suite_exprs(body, &mut |expr| {
                 if let Expr::Call(call) = expr {
@@ -130,41 +138,64 @@ pub(crate) fn collect_resilience_issues(
                             let is_log = matches!(obj.id.as_str(), "logger" | "logging" | "log");
                             if is_log {
                                 has_logging = true;
+                                let is_logger_exception = func.attr.as_str() == "exception";
                                 let has_exc_info = call.keywords.iter().any(|kw| {
                                     kw.arg.as_deref() == Some("exc_info")
-                                        && matches!(&kw.value, Expr::Constant(c) if matches!(c.value, ast::Constant::Bool(true)))
+                                        && (matches!(&kw.value, Expr::Constant(c) if matches!(c.value, ast::Constant::Bool(true)))
+                                            || exc_name.is_some_and(|name| {
+                                                matches!(&kw.value, Expr::Name(n) if n.id.as_str() == name)
+                                            }))
                                 });
+                                let mut call_refs_exc = false;
+                                if let Some(exc_n) = exc_name {
+                                    for arg in &call.args {
+                                        if matches!(arg, Expr::Name(n) if n.id.as_str() == exc_n) {
+                                            call_refs_exc = true;
+                                        }
+                                        if let Expr::JoinedStr(fstr) = arg {
+                                            for val in &fstr.values {
+                                                if let Expr::FormattedValue(fv) = val {
+                                                    if matches!(&*fv.value, Expr::Name(n) if n.id.as_str() == exc_n)
+                                                    {
+                                                        call_refs_exc = true;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 if !has_exc_info
+                                    && !is_logger_exception
                                     && matches!(
                                         func.attr.as_str(),
                                         "warning" | "warn" | "info" | "debug"
                                     )
                                     && log_call_without_context.is_none()
                                 {
-                                    let mut call_refs_exc = false;
-                                    if let Some(exc_n) = exc_name {
-                                        for arg in &call.args {
-                                            if matches!(arg, Expr::Name(n) if n.id.as_str() == exc_n)
-                                            {
-                                                call_refs_exc = true;
-                                            }
-                                            if let Expr::JoinedStr(fstr) = arg {
-                                                for val in &fstr.values {
-                                                    if let Expr::FormattedValue(fv) = val {
-                                                        if matches!(&*fv.value, Expr::Name(n) if n.id.as_str() == exc_n)
-                                                        {
-                                                            call_refs_exc = true;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
                                     if !call_refs_exc {
                                         let line =
                                             module.line_for_offset(call.range.start().to_usize());
                                         log_call_without_context = Some((line, func.attr.as_str()));
                                     }
+                                }
+                                if !has_exc_info
+                                    && !is_logger_exception
+                                    && call_refs_exc
+                                    && matches!(
+                                        func.attr.as_str(),
+                                        "debug"
+                                            | "info"
+                                            | "warning"
+                                            | "warn"
+                                            | "error"
+                                            | "critical"
+                                    )
+                                    && exception_log_without_traceback.is_none()
+                                {
+                                    let line =
+                                        module.line_for_offset(call.range.start().to_usize());
+                                    exception_log_without_traceback =
+                                        Some((line, func.attr.as_str()));
                                 }
                             }
                         }
@@ -172,8 +203,16 @@ pub(crate) fn collect_resilience_issues(
                 }
             });
             walk_suite_stmts(body, &mut |s| {
-                if matches!(s, Stmt::Raise(_)) {
+                if let Stmt::Raise(raise) = s {
                     has_raise = true;
+                    let is_identity = raise.exc.as_ref().is_none_or(|exc| {
+                        exc_name.is_some_and(
+                            |name| matches!(&**exc, Expr::Name(node) if node.id.as_str() == name),
+                        )
+                    });
+                    if is_identity {
+                        has_identity_raise = true;
+                    }
                 }
             });
             if let Some(exc_n) = exc_name {
@@ -185,7 +224,8 @@ pub(crate) fn collect_resilience_issues(
             }
 
             // exception-swallowed: no logging, no raise, and exc unused or just pass/return
-            if rules.exception_swallowed
+            if is_except_exception
+                && rules.exception_swallowed
                 && !has_logging
                 && !has_raise
                 && !module.is_rule_suppressed(handler_line, "resilience/exception-swallowed")
@@ -207,7 +247,8 @@ pub(crate) fn collect_resilience_issues(
             }
 
             // broad-except-no-context: logging without exc_info
-            if rules.broad_except_no_context
+            if is_except_exception
+                && rules.broad_except_no_context
                 && !has_raise
                 && !module.is_rule_suppressed(handler_line, "resilience/broad-except-no-context")
             {
@@ -226,6 +267,30 @@ pub(crate) fn collect_resilience_issues(
                             .into_boxed_str(),
                         ),
                         help: "Add exc_info=True to the logging call or include the exception variable in the message.",
+                    });
+                }
+            }
+
+            if rules.exception_log_without_traceback
+                && !has_identity_raise
+                && !module
+                    .is_rule_suppressed(handler_line, "resilience/exception-log-without-traceback")
+            {
+                if let Some((log_line, log_attr)) = exception_log_without_traceback {
+                    issues.push(Issue {
+                        check: "resilience/exception-log-without-traceback",
+                        severity: "warning",
+                        category: "Resilience",
+                        line: log_line,
+                        path: module.rel_path.to_string(),
+                        message: Box::leak(
+                            format!(
+                                "except handler logs exception via logger.{}() but omits traceback",
+                                log_attr
+                            )
+                            .into_boxed_str(),
+                        ),
+                        help: "Use logger.exception(...) or pass exc_info=True so the traceback is preserved.",
                     });
                 }
             }

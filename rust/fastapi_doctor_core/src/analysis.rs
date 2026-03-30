@@ -21,6 +21,9 @@ pub struct Config {
     pub fat_route_handler_threshold: usize,
     pub should_be_model_mode: String,
     pub forbidden_write_params: Vec<String>,
+    pub auth_required_prefixes: Vec<String>,
+    pub auth_dependency_names: Vec<String>,
+    pub auth_exempt_prefixes: Vec<String>,
     pub create_post_prefixes: Vec<String>,
     pub tag_required_prefixes: Vec<String>,
 }
@@ -40,6 +43,7 @@ pub struct Issue {
 struct RouterMeta {
     prefix: String,
     tags: Vec<String>,
+    dependency_names: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -60,6 +64,7 @@ pub struct RouteDraft {
     pub line: usize,
     pub local_prefix: String,
     pub local_tags: Vec<String>,
+    pub local_dependency_names: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -114,7 +119,7 @@ pub struct ScoreSummary {
 #[derive(Clone, Default)]
 pub struct RouteScan {
     pub drafts: Vec<RouteDraft>,
-    pub includes: Vec<(String, String, Vec<String>)>,
+    pub includes: Vec<(String, String, Vec<String>, Vec<String>)>,
 }
 
 pub struct LineRecord<'a> {
@@ -379,7 +384,7 @@ fn collect_route_scan_stmt(
     module: &ModuleIndex<'_>,
     stmt: &Stmt,
     routers: &mut HashMap<String, RouterMeta>,
-    includes: &mut Vec<(String, String, Vec<String>)>,
+    includes: &mut Vec<(String, String, Vec<String>, Vec<String>)>,
     drafts: &mut Vec<RouteDraft>,
 ) {
     match stmt {
@@ -400,6 +405,7 @@ fn collect_route_scan_stmt(
                                     RouterMeta {
                                         prefix: prefix.clone(),
                                         tags: tags.clone(),
+                                        dependency_names: decorator_dependency_names(call),
                                     },
                                 );
                             }
@@ -420,7 +426,8 @@ fn collect_route_scan_stmt(
                             let tags = keyword_value(&call.keywords, "tags")
                                 .map(parse_string_list)
                                 .unwrap_or_default();
-                            includes.push((name, prefix, tags));
+                            let dependency_names = decorator_dependency_names(call);
+                            includes.push((name, prefix, tags, dependency_names));
                         }
                     }
                 }
@@ -589,6 +596,7 @@ fn collect_route_draft(
             line: module.line_for_offset(range.start().to_usize()),
             local_prefix: local_router,
             local_tags: Vec::new(),
+            local_dependency_names: Vec::new(),
         });
         return;
     }
@@ -606,24 +614,41 @@ pub fn extract_route_scan(module: &ModuleIndex<'_>, suite: &ast::Suite) -> Route
             if let Some(router) = routers.get(router_name) {
                 draft.local_prefix = router.prefix.clone();
                 draft.local_tags = router.tags.clone();
+                draft.local_dependency_names = router.dependency_names.clone();
             } else {
                 draft.local_prefix.clear();
                 draft.local_tags.clear();
+                draft.local_dependency_names.clear();
             }
         } else {
             draft.local_prefix.clear();
             draft.local_tags.clear();
+            draft.local_dependency_names.clear();
         }
     }
     RouteScan { drafts, includes }
 }
 
+fn merged_dependency_names(parts: &[&[String]]) -> Vec<String> {
+    let mut merged = Vec::new();
+    for names in parts {
+        for name in *names {
+            if !merged.contains(name) {
+                merged.push(name.clone());
+            }
+        }
+    }
+    merged
+}
+
 pub fn finalize_route(
     draft: RouteDraft,
-    include_prefix_map: &HashMap<String, (String, Vec<String>)>,
+    include_prefix_map: &HashMap<String, (String, Vec<String>, Vec<String>)>,
 ) -> RouteRecord {
     if let Some(router_name) = &draft.router_name {
-        if let Some((include_prefix, include_tags)) = include_prefix_map.get(router_name) {
+        if let Some((include_prefix, include_tags, include_dependencies)) =
+            include_prefix_map.get(router_name)
+        {
             let full_path = format!("{include_prefix}{}{}", draft.local_prefix, draft.path);
             let tags = if draft.decorator_tags.is_empty() {
                 include_tags
@@ -637,7 +662,11 @@ pub fn finalize_route(
             return RouteRecord {
                 path: full_path,
                 methods: draft.methods,
-                dependency_names: draft.dependency_names,
+                dependency_names: merged_dependency_names(&[
+                    include_dependencies,
+                    &draft.local_dependency_names,
+                    &draft.dependency_names,
+                ]),
                 param_names: draft.param_names,
                 include_in_schema: draft.include_in_schema,
                 has_response_model: draft.has_response_model,
@@ -659,7 +688,10 @@ pub fn finalize_route(
     RouteRecord {
         path: format!("{}{}", draft.local_prefix, draft.path),
         methods: draft.methods,
-        dependency_names: draft.dependency_names,
+        dependency_names: merged_dependency_names(&[
+            &draft.local_dependency_names,
+            &draft.dependency_names,
+        ]),
         param_names: draft.param_names,
         include_in_schema: draft.include_in_schema,
         has_response_model: draft.has_response_model,
@@ -1023,5 +1055,30 @@ mod tests {
             "architecture/giant-function",
             "security/*"
         ));
+    }
+
+    #[test]
+    fn route_scan_merges_router_and_include_dependencies() {
+        let module = ModuleRecord {
+            rel_path: "app/routes.py".to_string(),
+            source: "from fastapi import APIRouter, Depends\n\nrouter = APIRouter(prefix='/api', dependencies=[Depends(require_user_auth)])\n\n@router.get('/users')\ndef list_users(current=Depends(require_admin)):\n    return []\n\napp.include_router(router, prefix='/v1', dependencies=[Depends(require_security_key)])\n".to_string(),
+        };
+        let index = ModuleIndex::new(&module);
+        let suite = parse_suite(&module).unwrap();
+        let scan = extract_route_scan(&index, &suite);
+        let mut include_prefix_map = HashMap::new();
+        for (router_name, prefix, tags, deps) in scan.includes {
+            include_prefix_map.insert(router_name, (prefix, tags, deps));
+        }
+        let route = finalize_route(scan.drafts.into_iter().next().unwrap(), &include_prefix_map);
+        assert_eq!(route.path, "/v1/api/users");
+        assert_eq!(
+            route.dependency_names,
+            vec![
+                "require_security_key".to_string(),
+                "require_user_auth".to_string(),
+                "require_admin".to_string(),
+            ]
+        );
     }
 }

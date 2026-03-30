@@ -73,6 +73,27 @@ mod rule_tests {
         }
     }
 
+    fn route_with_deps(
+        path: &str,
+        methods: &[&str],
+        dependency_names: &[&str],
+        has_response_model: bool,
+        response_model_str: Option<&str>,
+    ) -> RouteRecord {
+        let mut route = route(
+            path,
+            methods,
+            has_response_model,
+            None,
+            &["users"],
+            true,
+            &[],
+            response_model_str,
+        );
+        route.dependency_names = dependency_names.iter().map(|d| d.to_string()).collect();
+        route
+    }
+
     fn route_issues(routes: &[RouteRecord], rule_ids: &[&str]) -> Vec<Issue> {
         let rules: Vec<String> = rule_ids.iter().map(|s| s.to_string()).collect();
         let selection = RuleSelection::from_rules(&rules);
@@ -604,6 +625,26 @@ mod rule_tests {
     }
 
     #[test]
+    fn async_without_await_negative_protocol_stub() {
+        let issues = issues_for(
+            "architecture/async-without-await",
+            "app/contracts.py",
+            "from typing import Protocol\n\nclass Loader(Protocol):\n    async def fetch(self) -> str: ...\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn async_without_await_negative_abstractmethod() {
+        let issues = issues_for(
+            "architecture/async-without-await",
+            "app/contracts.py",
+            "from abc import ABC, abstractmethod\n\nclass Loader(ABC):\n    @abstractmethod\n    async def fetch(self) -> str:\n        pass\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
     fn avoid_sys_exit_positive() {
         let issues = issues_for(
             "architecture/avoid-sys-exit",
@@ -805,6 +846,50 @@ mod rule_tests {
         assert_eq!(issues.len(), 1);
     }
 
+    #[test]
+    fn exception_log_without_traceback_positive() {
+        let issues = issues_for(
+            "resilience/exception-log-without-traceback",
+            "app/main.py",
+            "try:\n    do_work()\nexcept ValueError as exc:\n    logger.warning(f'failed: {exc}')\n    return None\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(
+            issues[0].check,
+            "resilience/exception-log-without-traceback"
+        );
+    }
+
+    #[test]
+    fn exception_log_without_traceback_negative_logger_exception() {
+        let issues = issues_for(
+            "resilience/exception-log-without-traceback",
+            "app/main.py",
+            "try:\n    do_work()\nexcept ValueError:\n    logger.exception('failed')\n    return None\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn exception_log_without_traceback_negative_exc_info() {
+        let issues = issues_for(
+            "resilience/exception-log-without-traceback",
+            "app/main.py",
+            "try:\n    do_work()\nexcept ValueError as exc:\n    logger.error(f'failed: {exc}', exc_info=True)\n    return None\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn exception_log_without_traceback_negative_plain_reraise() {
+        let issues = issues_for(
+            "resilience/exception-log-without-traceback",
+            "app/main.py",
+            "try:\n    do_work()\nexcept ValueError as exc:\n    logger.warning(f'failed: {exc}')\n    raise\n",
+        );
+        assert!(issues.is_empty());
+    }
+
     // ── Config Rules ────────────────────────────────────────────────────
 
     #[test]
@@ -823,6 +908,26 @@ mod rule_tests {
             "config/direct-env-access",
             "app/config.py",
             "import os\nvalue = os.environ['TOKEN']\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn env_mutation_positive_in_service() {
+        let issues = issues_for(
+            "config/env-mutation",
+            "app/services/auth.py",
+            "import os\nos.environ.setdefault('TOKEN', 'x')\n",
+        );
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn env_mutation_negative_in_main() {
+        let issues = issues_for(
+            "config/env-mutation",
+            "app/main.py",
+            "import os\nos.environ['TOKEN'] = 'x'\n",
         );
         assert!(issues.is_empty());
     }
@@ -918,6 +1023,81 @@ mod rule_tests {
     }
 
     #[test]
+    fn weak_response_model_positive_dict() {
+        let routes = vec![route(
+            "/api/users",
+            &["GET"],
+            true,
+            None,
+            &["users"],
+            true,
+            &[],
+            Some("dict"),
+        )];
+        let issues = route_issues(&routes, &["correctness/weak-response-model"]);
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn weak_response_model_negative_pydantic_model() {
+        let routes = vec![route(
+            "/api/users",
+            &["GET"],
+            true,
+            None,
+            &["users"],
+            true,
+            &[],
+            Some("userresponse"),
+        )];
+        let issues = route_issues(&routes, &["correctness/weak-response-model"]);
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn missing_auth_dep_positive_when_configured() {
+        let mut cfg = config();
+        cfg.auth_required_prefixes = vec!["/api/private/".to_string()];
+        cfg.auth_dependency_names = vec!["require_user_auth".to_string()];
+        let routes = vec![route_with_deps(
+            "/api/private/users",
+            &["GET"],
+            &[],
+            true,
+            Some("userresponse"),
+        )];
+        let selection = RuleSelection::from_rules(&["security/missing-auth-dep".to_string()]);
+        let issues = analyze_routes(&routes, &selection, &cfg);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].check, "security/missing-auth-dep");
+    }
+
+    #[test]
+    fn missing_auth_dep_negative_with_matching_dependency() {
+        let mut cfg = config();
+        cfg.auth_required_prefixes = vec!["/api/private/".to_string()];
+        cfg.auth_dependency_names = vec!["require_user_auth".to_string()];
+        let routes = vec![route_with_deps(
+            "/api/private/users",
+            &["GET"],
+            &["require_user_auth"],
+            true,
+            Some("userresponse"),
+        )];
+        let selection = RuleSelection::from_rules(&["security/missing-auth-dep".to_string()]);
+        let issues = analyze_routes(&routes, &selection, &cfg);
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn missing_auth_dep_not_evaluated_without_config() {
+        let cfg = config();
+        let selection = RuleSelection::from_rules(&["security/missing-auth-dep".to_string()]);
+        let checks = crate::engine::route_checks_not_evaluated(&selection, &cfg);
+        assert_eq!(checks, vec!["security/missing-auth-dep"]);
+    }
+
+    #[test]
     fn serverless_filesystem_write_negative_safe_tmp_constant_and_helper() {
         let issues = issues_for(
             "correctness/serverless-filesystem-write",
@@ -976,6 +1156,26 @@ ensure_directory(path.parent)\n",
             "from pathlib import Path\n\
 path = Path('cache.json')\n\
 path.replace('backup.json')\n",
+        );
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn sync_io_in_async_positive_os_open_and_flock() {
+        let issues = issues_for(
+            "correctness/sync-io-in-async",
+            "app/main.py",
+            "import fcntl\nimport os\n\nasync def write_lock():\n    fd = os.open('/tmp/x', os.O_CREAT)\n    fcntl.flock(fd, fcntl.LOCK_EX)\n",
+        );
+        assert_eq!(issues.len(), 2);
+    }
+
+    #[test]
+    fn sync_io_in_async_positive_path_write_text() {
+        let issues = issues_for(
+            "correctness/sync-io-in-async",
+            "app/main.py",
+            "from pathlib import Path\n\nasync def write_file(path: Path):\n    path.write_text('hello')\n",
         );
         assert_eq!(issues.len(), 1);
     }
@@ -1226,6 +1426,7 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
         assert!(ids.contains(&"resilience/bare-except-pass".to_string()));
         assert!(ids.contains(&"api-surface/missing-tags".to_string()));
         assert!(ids.contains(&"api-surface/missing-docstring".to_string()));
+        assert!(!ids.contains(&"config/env-mutation".to_string()));
         // Architecture rules not in balanced unless explicitly listed
         assert!(!ids.contains(&"architecture/giant-function".to_string()));
     }

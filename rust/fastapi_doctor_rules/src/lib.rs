@@ -16,7 +16,7 @@ mod tests;
 
 pub use engine::{
     analyze_module, analyze_module_with_suite, analyze_project_modules, analyze_routes,
-    RuleSelection,
+    route_checks_not_evaluated, RuleSelection,
 };
 pub use registry::StaticRule;
 pub use rule_selector::select_rule_ids;

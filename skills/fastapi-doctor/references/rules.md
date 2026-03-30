@@ -1,6 +1,6 @@
 # FastAPI Doctor — Rule Definitions
 
-24+ opinionated rules across 8 categories, tuned for Python/FastAPI backends.
+30+ opinionated rules across 8 categories, tuned for Python/FastAPI backends.
 Unique rule violations are counted (not instances), then penalized.
 
 ## Scoring
@@ -80,13 +80,19 @@ This prevents accidental leakage in logs, `repr()`, and error messages.
 Same HTTP method + path registered twice causes silent route shadowing.
 
 ### `correctness/sync-io-in-async` (error)
-Synchronous I/O calls (`open()`, `time.sleep()`, `requests.*`) inside async handlers block
-the entire event loop, stalling all concurrent requests. Use `aiofiles`, `asyncio.sleep()`,
-or `httpx.AsyncClient` instead. Scans router files only.
+Synchronous I/O calls (`open()`, `os.open()`, `fcntl.flock()`, `Path.write_text()`,
+`time.sleep()`, `requests.*`, and similar blocking helpers) inside async code block
+the entire event loop, stalling all concurrent requests. Use `aiofiles`,
+`asyncio.sleep()`, `asyncio.to_thread()`, or `httpx.AsyncClient` instead.
 
 ### `correctness/missing-response-model` (warning)
 API endpoints in `/api/` should declare `response_model=` for type safety and auto-generated OpenAPI docs.
 Exempt: streaming, export, download, webhook, and OAuth endpoints.
+
+### `correctness/weak-response-model` (warning)
+API endpoints with `response_model=dict`, `dict[...]`, `Any`, `list[dict...]`, or `Mapping[...]`
+still have a weak contract even though a response model is technically present.
+Prefer concrete Pydantic models so OpenAPI stays explicit and typed.
 
 ### `correctness/post-status-code` (warning)
 POST endpoints that create resources should return 201, not the default 200.
@@ -182,11 +188,21 @@ At minimum, add a `# reason` comment or `logger.debug()` call.
 SQLAlchemy engine without `pool_pre_ping=True` can't automatically recover from dropped
 database connections, leading to `OperationalError` on subsequent requests.
 
+### `resilience/exception-log-without-traceback` (warning)
+Inside `except ... as exc` blocks, logging `exc` via `logger.warning/error/...`
+without `logger.exception(...)` or `exc_info=True` loses the traceback. This rule
+fires when the handler swallows or converts control flow instead of plainly re-raising.
+
 ## Config Rules
 
 ### `config/direct-env-access` (warning)
 Router and service code should use a typed settings/config layer, not raw
 `os.environ` access. Direct env access bypasses validation, typing, and defaults.
+
+### `config/env-mutation` (warning)
+Mutating `os.environ` or calling `os.putenv()` outside bootstrap entrypoints
+(`main.py`, `__main__.py`, `cli.py`, `scripts/`) creates hidden global side effects.
+Perform env setup once at startup, then pass values through typed settings.
 
 ### `config/alembic-target-metadata` (warning)
 Alembic `env.py` should be wired to your SQLAlchemy/SQLModel metadata object

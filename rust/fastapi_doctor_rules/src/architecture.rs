@@ -11,7 +11,12 @@ pub(crate) fn collect_async_without_await_issues(
     let mut unnecessary_async = HashSet::new();
 
     for function in &function_index.functions {
-        if function.is_async && !function.has_async_constructs {
+        if function.is_async
+            && !function.has_async_constructs
+            && !function.is_stub_body
+            && !function.is_abstractmethod
+            && !function.owner_is_protocol
+        {
             unnecessary_async.insert(function.qualname.clone());
         }
     }

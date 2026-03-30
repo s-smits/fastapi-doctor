@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rustpython_parser::ast::{self, Expr, Ranged, Stmt};
+use rustpython_parser::ast::{self, Constant, Expr, Ranged, Stmt};
 
 use crate::ModuleIndex;
 
@@ -51,6 +51,9 @@ pub struct FunctionContext {
     pub async_for_calls: Vec<CallSite>,
     pub async_with_calls: Vec<CallSite>,
     pub has_async_for_or_with: bool,
+    pub is_stub_body: bool,
+    pub is_abstractmethod: bool,
+    pub owner_is_protocol: bool,
 }
 
 pub struct FunctionIndex {
@@ -65,13 +68,14 @@ impl FunctionIndex {
         for stmt in suite {
             match stmt {
                 Stmt::FunctionDef(node) => {
-                    functions.push(build_function_context(module, node, None))
+                    functions.push(build_function_context(module, node, None, false))
                 }
                 Stmt::AsyncFunctionDef(node) => {
-                    functions.push(build_async_function_context(module, node, None))
+                    functions.push(build_async_function_context(module, node, None, false))
                 }
                 Stmt::ClassDef(node) => {
                     let owner = node.name.to_string();
+                    let owner_is_protocol = class_extends_protocol(node);
                     for class_stmt in &node.body {
                         match class_stmt {
                             Stmt::FunctionDef(method) => {
@@ -79,6 +83,7 @@ impl FunctionIndex {
                                     module,
                                     method,
                                     Some(owner.clone()),
+                                    owner_is_protocol,
                                 ));
                             }
                             Stmt::AsyncFunctionDef(method) => {
@@ -86,6 +91,7 @@ impl FunctionIndex {
                                     module,
                                     method,
                                     Some(owner.clone()),
+                                    owner_is_protocol,
                                 ));
                             }
                             _ => {}
@@ -144,6 +150,7 @@ pub fn build_function_context(
     module: &ModuleIndex,
     node: &ast::StmtFunctionDef,
     owner_class: Option<String>,
+    owner_is_protocol: bool,
 ) -> FunctionContext {
     build_context_common(
         module,
@@ -153,6 +160,7 @@ pub fn build_function_context(
         &node.decorator_list,
         owner_class,
         false,
+        owner_is_protocol,
     )
 }
 
@@ -160,6 +168,7 @@ pub fn build_async_function_context(
     module: &ModuleIndex,
     node: &ast::StmtAsyncFunctionDef,
     owner_class: Option<String>,
+    owner_is_protocol: bool,
 ) -> FunctionContext {
     build_context_common(
         module,
@@ -169,6 +178,7 @@ pub fn build_async_function_context(
         &node.decorator_list,
         owner_class,
         true,
+        owner_is_protocol,
     )
 }
 
@@ -180,6 +190,7 @@ pub fn build_context_common(
     decorators: &[Expr],
     owner_class: Option<String>,
     is_async: bool,
+    owner_is_protocol: bool,
 ) -> FunctionContext {
     let mut collector = FunctionBodyCollector::default();
     for stmt in body {
@@ -209,6 +220,48 @@ pub fn build_context_common(
         async_for_calls: collector.async_for_calls,
         async_with_calls: collector.async_with_calls,
         has_async_for_or_with: collector.has_async_for_or_with,
+        is_stub_body: is_stub_body(body),
+        is_abstractmethod: decorators
+            .iter()
+            .any(|decorator| decorator_name(decorator).as_deref() == Some("abstractmethod")),
+        owner_is_protocol,
+    }
+}
+
+fn class_extends_protocol(node: &ast::StmtClassDef) -> bool {
+    node.bases.iter().any(expr_mentions_protocol)
+}
+
+fn expr_mentions_protocol(expr: &Expr) -> bool {
+    match expr {
+        Expr::Name(name) => name.id.as_str() == "Protocol",
+        Expr::Attribute(attr) => attr.attr.as_str() == "Protocol",
+        Expr::Subscript(subscript) => expr_mentions_protocol(&subscript.value),
+        _ => false,
+    }
+}
+
+fn is_stub_body(body: &[Stmt]) -> bool {
+    let body = strip_docstring_stmt(body);
+    matches!(body, [] | [Stmt::Pass(_)])
+        || matches!(
+            body,
+            [Stmt::Expr(expr)]
+                if matches!(&*expr.value, Expr::Constant(node) if matches!(node.value, Constant::Ellipsis))
+        )
+}
+
+fn strip_docstring_stmt(body: &[Stmt]) -> &[Stmt] {
+    if body.first().is_some_and(|stmt| {
+        matches!(
+            stmt,
+            Stmt::Expr(expr)
+                if matches!(&*expr.value, Expr::Constant(node) if matches!(node.value, Constant::Str(_)))
+        )
+    }) {
+        &body[1..]
+    } else {
+        body
     }
 }
 

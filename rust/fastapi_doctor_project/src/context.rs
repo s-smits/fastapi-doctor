@@ -83,9 +83,33 @@ impl Default for ApiSettings {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SecuritySettings {
     pub forbidden_write_params: Vec<String>,
+    pub auth_required_prefixes: Vec<String>,
+    pub auth_dependency_names: Vec<String>,
+    pub auth_exempt_prefixes: Vec<String>,
+}
+
+impl Default for SecuritySettings {
+    fn default() -> Self {
+        Self {
+            forbidden_write_params: Vec::new(),
+            auth_required_prefixes: Vec::new(),
+            auth_dependency_names: Vec::new(),
+            auth_exempt_prefixes: vec![
+                "/api/auth".to_string(),
+                "/health".to_string(),
+                "/ready".to_string(),
+                "/live".to_string(),
+                "/docs".to_string(),
+                "/redoc".to_string(),
+                "/openapi.json".to_string(),
+                "/webhook".to_string(),
+                "/oauth".to_string(),
+            ],
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +154,9 @@ impl EffectiveProjectConfig {
             fat_route_handler_threshold: self.architecture.fat_route_handler,
             should_be_model_mode: self.pydantic.should_be_model.clone(),
             forbidden_write_params: self.security.forbidden_write_params.clone(),
+            auth_required_prefixes: self.security.auth_required_prefixes.clone(),
+            auth_dependency_names: self.security.auth_dependency_names.clone(),
+            auth_exempt_prefixes: self.security.auth_exempt_prefixes.clone(),
             create_post_prefixes: self.api.create_post_prefixes.clone(),
             tag_required_prefixes: self.api.tag_required_prefixes.clone(),
         }
@@ -182,6 +209,9 @@ struct ApiConfigFile {
 #[serde(default)]
 struct SecurityConfigFile {
     forbidden_write_params: Option<Vec<String>>,
+    auth_required_prefixes: Option<Vec<String>>,
+    auth_dependency_names: Option<Vec<String>>,
+    auth_exempt_prefixes: Option<Vec<String>>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -377,6 +407,18 @@ fn load_effective_project_config(repo_root: &Path) -> EffectiveProjectConfig {
 
     if let Some(values) = parsed.security.forbidden_write_params {
         config.security.forbidden_write_params = sanitize_string_list(values);
+    }
+    if let Some(values) = parsed.security.auth_required_prefixes {
+        config.security.auth_required_prefixes = sanitize_string_list(values);
+    }
+    if let Some(values) = parsed.security.auth_dependency_names {
+        config.security.auth_dependency_names = sanitize_string_list(values);
+    }
+    if let Some(values) = parsed.security.auth_exempt_prefixes {
+        let values = sanitize_string_list(values);
+        if !values.is_empty() {
+            config.security.auth_exempt_prefixes = values;
+        }
     }
 
     if let Some(values) = parsed.scan.exclude_dirs {
@@ -783,6 +825,22 @@ mod tests {
 
         // Security defaults
         assert!(config.security.forbidden_write_params.is_empty());
+        assert!(config.security.auth_required_prefixes.is_empty());
+        assert!(config.security.auth_dependency_names.is_empty());
+        assert_eq!(
+            config.security.auth_exempt_prefixes,
+            vec![
+                "/api/auth",
+                "/health",
+                "/ready",
+                "/live",
+                "/docs",
+                "/redoc",
+                "/openapi.json",
+                "/webhook",
+                "/oauth",
+            ]
+        );
 
         // Scan defaults
         assert_eq!(
@@ -815,6 +873,13 @@ security:
   forbidden_write_params:
     - password
     - secret
+  auth_required_prefixes:
+    - /api/private/
+  auth_dependency_names:
+    - require_user_auth
+    - require_admin
+  auth_exempt_prefixes:
+    - /api/private/health
 scan:
   exclude_dirs:
     - generated
@@ -845,6 +910,18 @@ scan:
         assert_eq!(
             config.security.forbidden_write_params,
             vec!["password", "secret"]
+        );
+        assert_eq!(
+            config.security.auth_required_prefixes,
+            vec!["/api/private/"]
+        );
+        assert_eq!(
+            config.security.auth_dependency_names,
+            vec!["require_user_auth", "require_admin"]
+        );
+        assert_eq!(
+            config.security.auth_exempt_prefixes,
+            vec!["/api/private/health"]
         );
 
         assert_eq!(config.scan.exclude_dirs, vec!["generated", "proto"]);
@@ -1007,6 +1084,10 @@ pydantic:
 security:
   forbidden_write_params:
     - secret
+  auth_required_prefixes:
+    - /api/private/
+  auth_dependency_names:
+    - require_user_auth
 api:
   create_post_prefixes:
     - /v1/
@@ -1025,6 +1106,22 @@ api:
         assert_eq!(core.fat_route_handler_threshold, 120);
         assert_eq!(core.should_be_model_mode, "strict");
         assert_eq!(core.forbidden_write_params, vec!["secret"]);
+        assert_eq!(core.auth_required_prefixes, vec!["/api/private/"]);
+        assert_eq!(core.auth_dependency_names, vec!["require_user_auth"]);
+        assert_eq!(
+            core.auth_exempt_prefixes,
+            vec![
+                "/api/auth",
+                "/health",
+                "/ready",
+                "/live",
+                "/docs",
+                "/redoc",
+                "/openapi.json",
+                "/webhook",
+                "/oauth",
+            ]
+        );
         assert_eq!(core.create_post_prefixes, vec!["/v1/"]);
         assert_eq!(core.tag_required_prefixes, vec!["/public/"]);
     }

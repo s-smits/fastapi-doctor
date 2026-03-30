@@ -68,13 +68,14 @@ When `--code-dir` is set, or when discovery resolves a project code root, Ruff, 
 
 ## What It Checks
 
-- **Security** — unsafe yaml/pickle loads, SQL injection patterns, hardcoded secrets, CORS misconfiguration
-- **Correctness** — naive datetimes, mutable defaults, unvalidated path params
+- **Security** — missing auth dependencies on protected routes, unsafe yaml/pickle loads, SQL injection patterns, hardcoded secrets, CORS misconfiguration
+- **Correctness** — weak or missing response models, naive datetimes, mutable defaults, unvalidated path params
 - **Serverless correctness** — local writes outside `/tmp`, with `/tmp` and temp-helper flows treated as safe
 - **Architecture** — giant functions, god modules, deep nesting, sync-in-async, print in production
 - **API surface** — missing pagination, missing route tags, missing endpoint docstrings
 - **Pydantic** — deprecated validators, sensitive field types, extra-allow on request models
-- **Resilience** — missing timeouts, bare exception handlers
+- **Resilience** — missing timeouts, bare exception handlers, exception logs without traceback
+- **Config** — direct env reads in service/router code, process env mutation outside bootstrap
 
 ## Suppressing Findings
 
@@ -155,6 +156,10 @@ architecture:
 
 security:
   forbidden_write_params: []
+  auth_required_prefixes: []
+  auth_dependency_names: []
+  auth_exempt_prefixes:
+    - /api/auth
 
 scan:
   exclude_dirs:

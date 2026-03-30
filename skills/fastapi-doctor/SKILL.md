@@ -147,7 +147,7 @@ uv run fastapi-doctor --profile strict --repo-root . --code-dir apps/service_api
 | `security/weak-hash-without-flag` | Security | SHA1/MD5 without `usedforsecurity=False` |
 | `security/unsafe-yaml-load` | Security | `yaml.load()` without SafeLoader/BaseLoader |
 | `correctness/duplicate-route` | Correctness | Same method+path registered twice |
-| `correctness/sync-io-in-async` | Correctness | `open()`, `time.sleep()`, `requests.*` inside async handlers |
+| `correctness/sync-io-in-async` | Correctness | Blocking file, lock, sleep, or HTTP calls inside async code |
 | `architecture/giant-function` | Architecture | Function body >threshold lines (configurable, default 400) |
 | `pydantic/deprecated-validator` | Pydantic | `@validator` (v1) instead of `@field_validator` (v2) |
 | `pydantic/mutable-default` | Pydantic | Bare `= []` / `= {}` default in BaseModel |
@@ -160,6 +160,7 @@ uv run fastapi-doctor --profile strict --repo-root . --code-dir apps/service_api
 | Rule | Category | What it catches |
 |------|----------|----------------|
 | `correctness/missing-response-model` | Correctness | API route has no `response_model` |
+| `correctness/weak-response-model` | Correctness | API route uses `dict`/`Any`-style `response_model` |
 | `correctness/post-status-code` | Correctness | Resource-creation POST defaults to 200 |
 | `architecture/large-function` | Architecture | Function body >threshold lines (configurable, default 200) |
 | `architecture/god-module` | Architecture | File >threshold lines (configurable, default 1500) |
@@ -179,6 +180,8 @@ uv run fastapi-doctor --profile strict --repo-root . --code-dir apps/service_api
 | `resilience/bare-except-pass` | Resilience | `except: pass` without logging or comment |
 | `resilience/reraise-without-context` | Resilience | Re-raise without adding any context |
 | `config/direct-env-access` | Config | Service/router reads `os.environ` instead of settings |
+| `config/env-mutation` | Config | Service/router mutates process env outside bootstrap entrypoints |
+| `resilience/exception-log-without-traceback` | Resilience | Exception is logged without traceback context |
 | `security/exception-detail-leak` | Security | Exposing unhandled internal `Exception` messages to users |
 | `correctness/naive-datetime` | Correctness | Usage of `datetime.utcnow()` or `now()` without timezones |
 | `correctness/avoid-os-path` | Correctness | Usage of `os.path` APIs instead of `pathlib.Path` |

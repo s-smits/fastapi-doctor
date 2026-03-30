@@ -445,6 +445,18 @@ api:
 
 security:
   forbidden_write_params: []
+  auth_required_prefixes: []
+  auth_dependency_names: []
+  auth_exempt_prefixes:
+    - /api/auth
+    - /health
+    - /ready
+    - /live
+    - /docs
+    - /redoc
+    - /openapi.json
+    - /webhook
+    - /oauth
 
 scan:
   exclude_dirs:
