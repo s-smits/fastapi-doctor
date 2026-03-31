@@ -76,6 +76,7 @@ pub struct RuleSelection {
     pub extra_allow_on_request: bool,
     pub should_be_model: bool,
     pub sensitive_field_type: bool,
+    pub normalized_name_collision: bool,
     pub get_with_side_effect: bool,
     pub serverless_filesystem_write: bool,
     pub missing_http_timeout: bool,
@@ -169,6 +170,7 @@ impl RuleSelection {
             StaticRule::PydanticExtraAllowOnRequest => self.extra_allow_on_request = true,
             StaticRule::PydanticShouldBeModel => self.should_be_model = true,
             StaticRule::PydanticSensitiveFieldType => self.sensitive_field_type = true,
+            StaticRule::PydanticNormalizedNameCollision => self.normalized_name_collision = true,
             StaticRule::SecurityAssertInProduction => self.assert_in_production = true,
             StaticRule::SecurityCorsWildcard => self.cors_wildcard = true,
             StaticRule::SecurityExceptionDetailLeak => self.exception_detail_leak = true,
@@ -217,6 +219,7 @@ impl RuleSelection {
             || self.mutable_model_default
             || self.should_be_model
             || self.sensitive_field_type
+            || self.normalized_name_collision
             || self.get_with_side_effect
             || self.serverless_filesystem_write
             || self.missing_http_timeout
@@ -338,6 +341,7 @@ pub fn analyze_suite(
         || rules.sensitive_field_type
         || rules.mutable_model_default
         || rules.should_be_model
+        || rules.normalized_name_collision
     {
         issues.extend(pydantic::collect_pydantic_issues(
             module, suite, rules, config,

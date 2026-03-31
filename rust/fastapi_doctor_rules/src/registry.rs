@@ -49,6 +49,7 @@ pub enum StaticRule {
     PydanticExtraAllowOnRequest,
     PydanticShouldBeModel,
     PydanticSensitiveFieldType,
+    PydanticNormalizedNameCollision,
     SecurityAssertInProduction,
     SecurityCorsWildcard,
     SecurityExceptionDetailLeak,
@@ -119,6 +120,7 @@ impl StaticRule {
             PydanticExtraAllowOnRequest,
             PydanticShouldBeModel,
             PydanticSensitiveFieldType,
+            PydanticNormalizedNameCollision,
             SecurityAssertInProduction,
             SecurityCorsWildcard,
             SecurityExceptionDetailLeak,
@@ -188,6 +190,7 @@ impl StaticRule {
             Self::PydanticExtraAllowOnRequest => "pydantic/extra-allow-on-request",
             Self::PydanticShouldBeModel => "pydantic/should-be-model",
             Self::PydanticSensitiveFieldType => "pydantic/sensitive-field-type",
+            Self::PydanticNormalizedNameCollision => "pydantic/normalized-name-collision",
             Self::SecurityAssertInProduction => "security/assert-in-production",
             Self::SecurityCorsWildcard => "security/cors-wildcard",
             Self::SecurityExceptionDetailLeak => "security/exception-detail-leak",
@@ -287,7 +290,8 @@ impl StaticRule {
             | Self::PydanticMutableDefault
             | Self::PydanticExtraAllowOnRequest
             | Self::PydanticShouldBeModel
-            | Self::PydanticSensitiveFieldType => "Pydantic",
+            | Self::PydanticSensitiveFieldType
+            | Self::PydanticNormalizedNameCollision => "Pydantic",
 
             Self::ResilienceSqlalchemyPoolPrePing
             | Self::ResilienceBareExceptPass

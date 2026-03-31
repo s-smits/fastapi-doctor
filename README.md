@@ -73,7 +73,7 @@ When `--code-dir` is set, or when discovery resolves a project code root, Ruff, 
 - **Serverless correctness** — local writes outside `/tmp`, with `/tmp` and temp-helper flows treated as safe
 - **Architecture** — giant functions, god modules, deep nesting, sync-in-async, print in production
 - **API surface** — missing pagination, missing route tags, missing endpoint docstrings
-- **Pydantic** — deprecated validators, sensitive field types, extra-allow on request models
+- **Pydantic** — deprecated validators, sensitive field types, extra-allow on request models, and snake_case/camelCase alias collisions
 - **Resilience** — missing timeouts, bare exception handlers, exception logs without traceback
 - **Config** — direct env reads in service/router code, process env mutation outside bootstrap
 

@@ -57,13 +57,13 @@ Counts **unique rule types** violated, not instances. 60 dataclass violations co
 
 | Category | Rules | What it checks | Configurable |
 |----------|-------|---------------|--------------|
-| **Security** | 10 | Auth deps, IDOR, secrets, SQL injection, error leaks, CORS | No |
-| **Correctness** | 12 | Duplicate routes, response models, sync-in-async, naive datetime | No |
-| **Architecture** | 8 | Giant functions, god modules, deep nesting, import bloat, passthrough, async misuse | Yes — disable all or per-rule via `.fastapi-doctor.yml` |
-| **API Surface** | 5 | OpenAPI operation IDs, tags, endpoint docstrings | No |
-| **Pydantic** | 4 | Deprecated validators, mutable defaults, extra="allow", should-be-model | Yes — `boundary` or `everywhere` mode |
-| **Resilience** | 4 | Bare except:pass, re-raise without context, swallowed exceptions | No |
-| **Config** | 1 | Direct os.environ in services/routers | No |
+| **Security** | 11 | Auth deps, IDOR, secrets, SQL injection, error leaks, CORS | No |
+| **Correctness** | 17 | Duplicate routes, response models, sync-in-async, serverless writes, naive datetime | No |
+| **Architecture** | 13 | Giant functions, god modules, deep nesting, import bloat, passthrough, async misuse | Yes — disable all or per-rule via `.fastapi-doctor.yml` |
+| **API Surface** | 3 | Route tags, endpoint docstrings, pagination contracts | No |
+| **Pydantic** | 5 | Deprecated validators, mutable defaults, extra="allow", alias/name collisions, should-be-model | Yes — `boundary` or `everywhere` mode |
+| **Resilience** | 6 | Bare except:pass, traceback-less exception logs, swallowed exceptions | No |
+| **Config** | 5 | Direct env access, env mutation, Alembic wiring, naming conventions | No |
 
 ## Sophisticated Checks
 
@@ -176,6 +176,7 @@ uv run fastapi-doctor --profile strict --repo-root . --code-dir apps/service_api
 | `api-surface/missing-docstring` | API Surface | Endpoint handler has no docstring |
 | `correctness/serverless-filesystem-write` | Correctness | Filesystem write outside `/tmp` or recognized temp helpers |
 | `pydantic/extra-allow-on-request` | Pydantic | Request model uses `extra="allow"` |
+| `pydantic/normalized-name-collision` | Pydantic | Same conceptual field spelled twice across snake/camel/kebab variants |
 | `pydantic/should-be-model` | Pydantic | TypedDict/NamedTuple/dataclass/dict-factory should be BaseModel |
 | `resilience/bare-except-pass` | Resilience | `except: pass` without logging or comment |
 | `resilience/reraise-without-context` | Resilience | Re-raise without adding any context |

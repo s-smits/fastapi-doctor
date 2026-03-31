@@ -158,6 +158,12 @@ Request models (in routers/interfaces) with `extra="allow"` accept arbitrary use
 Unknown fields can leak into DB operations, logs, or downstream services.
 Use `extra="ignore"` (silently drop) or `extra="forbid"` (reject with 422).
 
+### `pydantic/normalized-name-collision` (warning)
+Pydantic models should not define the same conceptual field twice with spelling-only variations
+such as `message_id`, `messageId`, or `message-id`. The rule also catches constructor calls that
+pass multiple keyword variants for the same normalized name. Keep one canonical field name and
+use a single alias on that field for wire-format compatibility.
+
 ### `pydantic/should-be-model` (warning)
 TypedDict, NamedTuple, @dataclass, or dict-factory patterns that should be Pydantic BaseModels.
 Uses **trust-boundary analysis** — only flags patterns at API boundaries (routers/, interfaces/,

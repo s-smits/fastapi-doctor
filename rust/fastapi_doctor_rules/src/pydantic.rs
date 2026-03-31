@@ -1,5 +1,5 @@
 use rustpython_parser::ast::{self, Expr, Stmt};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::engine::RuleSelection;
 use fastapi_doctor_core::ast_helpers::*;
@@ -51,6 +51,90 @@ fn annotation_contains_secret_str(ann: &Expr) -> bool {
     }
 }
 
+fn normalized_name(value: &str) -> String {
+    value
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric())
+        .map(|ch| ch.to_ascii_lowercase())
+        .collect()
+}
+
+fn field_alias_strings(value: &Expr) -> Vec<String> {
+    let Expr::Call(call) = value else {
+        return Vec::new();
+    };
+    let is_field = matches!(&*call.func, Expr::Name(name) if name.id.as_str() == "Field")
+        || matches!(&*call.func, Expr::Attribute(attr) if attr.attr.as_str() == "Field");
+    if !is_field {
+        return Vec::new();
+    }
+
+    let mut labels = Vec::new();
+    for keyword in &call.keywords {
+        match keyword.arg.as_deref() {
+            Some("alias") | Some("serialization_alias") => {
+                if let Expr::Constant(constant) = &keyword.value {
+                    if let ast::Constant::Str(label) = &constant.value {
+                        labels.push(label.to_string());
+                    }
+                }
+            }
+            Some("validation_alias") => match &keyword.value {
+                Expr::Constant(constant) => {
+                    if let ast::Constant::Str(label) = &constant.value {
+                        labels.push(label.to_string());
+                    }
+                }
+                Expr::Call(alias_call) => {
+                    let is_alias_choices = matches!(
+                        &*alias_call.func,
+                        Expr::Name(name) if name.id.as_str() == "AliasChoices"
+                    ) || matches!(
+                        &*alias_call.func,
+                        Expr::Attribute(attr) if attr.attr.as_str() == "AliasChoices"
+                    );
+                    if is_alias_choices {
+                        for arg in &alias_call.args {
+                            if let Expr::Constant(constant) = arg {
+                                if let ast::Constant::Str(label) = &constant.value {
+                                    labels.push(label.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    labels
+}
+
+fn looks_like_constructor_name(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Name(name)
+            if name
+                .id
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_uppercase()) =>
+        {
+            Some(name.id.to_string())
+        }
+        Expr::Attribute(attr)
+            if attr
+                .attr
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_ascii_uppercase()) =>
+        {
+            Some(attr.attr.to_string())
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn collect_pydantic_issues(
     module: &ModuleIndex,
     suite: &ast::Suite,
@@ -58,6 +142,13 @@ pub(crate) fn collect_pydantic_issues(
     config: &Config,
 ) -> Vec<Issue> {
     let mut issues = Vec::new();
+    let base_model_names: HashSet<String> = suite
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::ClassDef(node) if is_base_model_class(node) => Some(node.name.to_string()),
+            _ => None,
+        })
+        .collect();
 
     // Collect TYPE_CHECKING class names
     let mut type_checking_names: HashSet<String> = HashSet::new();
@@ -216,6 +307,79 @@ pub(crate) fn collect_pydantic_issues(
             }
         }
 
+        if is_model && rules.normalized_name_collision {
+            let class_line = module.line_for_offset(node.range.start().to_usize());
+            let mut seen: HashMap<String, Vec<(String, String, usize)>> = HashMap::new();
+
+            for body_stmt in &node.body {
+                let Stmt::AnnAssign(ann) = body_stmt else {
+                    continue;
+                };
+                let Expr::Name(target) = &*ann.target else {
+                    continue;
+                };
+
+                let field_name = target.id.to_string();
+                let mut labels = vec![field_name.clone()];
+                if let Some(value) = ann.value.as_ref() {
+                    labels.extend(field_alias_strings(value));
+                }
+
+                for label in labels {
+                    let normalized = normalized_name(&label);
+                    if normalized.is_empty() {
+                        continue;
+                    }
+                    seen.entry(normalized).or_default().push((
+                        field_name.clone(),
+                        label,
+                        module.line_for_offset(ann.range.start().to_usize()),
+                    ));
+                }
+            }
+
+            for entries in seen.values() {
+                let distinct_fields: HashSet<&str> =
+                    entries.iter().map(|(field, _, _)| field.as_str()).collect();
+                if distinct_fields.len() < 2 {
+                    continue;
+                }
+
+                let mut rendered = Vec::new();
+                for (field, label, _) in entries {
+                    if field == label {
+                        rendered.push(field.clone());
+                    } else {
+                        rendered.push(format!("{field} (alias {label})"));
+                    }
+                }
+                rendered.sort();
+                rendered.dedup();
+
+                let line = entries
+                    .iter()
+                    .map(|(_, _, line)| *line)
+                    .min()
+                    .unwrap_or(class_line);
+                issues.push(Issue {
+                    check: "pydantic/normalized-name-collision",
+                    severity: "warning",
+                    category: "Pydantic",
+                    line,
+                    path: module.rel_path.to_string(),
+                    message: Box::leak(
+                        format!(
+                            "Model '{}' defines near-duplicate normalized names: {}",
+                            class_name,
+                            rendered.join(", ")
+                        )
+                        .into_boxed_str(),
+                    ),
+                    help: "Keep one canonical field name and express external spelling differences through a single alias on that field.",
+                });
+            }
+        }
+
         // pydantic/should-be-model
         if rules.should_be_model && !is_model {
             let class_line = module.line_for_offset(node.range.start().to_usize());
@@ -343,6 +507,64 @@ pub(crate) fn collect_pydantic_issues(
             }
         }
     });
+
+    if rules.normalized_name_collision {
+        walk_suite_exprs(suite, &mut |expr| {
+            let Expr::Call(call) = expr else { return };
+            let Some(callee_name) = looks_like_constructor_name(&call.func) else {
+                return;
+            };
+            if !base_model_names.contains(&callee_name)
+                && !call
+                    .keywords
+                    .iter()
+                    .any(|keyword| keyword.arg.as_deref().is_some_and(|arg| arg.contains('_')))
+            {
+                return;
+            }
+
+            let mut seen: HashMap<String, Vec<String>> = HashMap::new();
+            for keyword in &call.keywords {
+                let Some(arg) = keyword.arg.as_deref() else {
+                    continue;
+                };
+                let normalized = normalized_name(arg);
+                if normalized.is_empty() {
+                    continue;
+                }
+                seen.entry(normalized).or_default().push(arg.to_string());
+            }
+
+            for entries in seen.values() {
+                let distinct: HashSet<&str> = entries.iter().map(String::as_str).collect();
+                if distinct.len() < 2 {
+                    continue;
+                }
+
+                let mut rendered = entries.clone();
+                rendered.sort();
+                rendered.dedup();
+                let line = module.line_for_offset(call.range.start().to_usize());
+                issues.push(Issue {
+                    check: "pydantic/normalized-name-collision",
+                    severity: "warning",
+                    category: "Pydantic",
+                    line,
+                    path: module.rel_path.to_string(),
+                    message: Box::leak(
+                        format!(
+                            "Constructor call '{}(...)' passes near-duplicate keyword names: {}",
+                            callee_name,
+                            rendered.join(", ")
+                        )
+                        .into_boxed_str(),
+                    ),
+                    help: "Normalize on one keyword spelling such as snake_case and map external variants through aliases before object construction.",
+                });
+            }
+        });
+    }
+
     issues
 }
 

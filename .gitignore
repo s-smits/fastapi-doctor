@@ -11,6 +11,7 @@ dist/
 *.pyc
 *.pyo
 *.so
+*.dSYM/
 .DS_Store
 rust/target/
 

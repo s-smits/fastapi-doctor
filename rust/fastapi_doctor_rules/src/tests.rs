@@ -814,6 +814,47 @@ mod rule_tests {
         assert!(issues.is_empty());
     }
 
+    #[test]
+    fn normalized_name_collision_positive_model_fields() {
+        let issues = issues_for(
+            "pydantic/normalized-name-collision",
+            "app/schemas.py",
+            "from pydantic import BaseModel, Field\n\nclass Event(BaseModel):\n    message_id: str = Field(alias='messageId')\n    messageId: str\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].check, "pydantic/normalized-name-collision");
+    }
+
+    #[test]
+    fn normalized_name_collision_positive_constructor_kwargs() {
+        let issues = issues_for(
+            "pydantic/normalized-name-collision",
+            "app/schemas.py",
+            "from pydantic import BaseModel\n\nclass Event(BaseModel):\n    message_id: str\n\npayload = Event(message_id='a', messageId='b')\n",
+        );
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn normalized_name_collision_positive_kebab_alias() {
+        let issues = issues_for(
+            "pydantic/normalized-name-collision",
+            "app/schemas.py",
+            "from pydantic import BaseModel, Field\n\nclass Event(BaseModel):\n    message_id: str\n    event_name: str = Field(alias='message-id')\n",
+        );
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn normalized_name_collision_negative_single_field_alias() {
+        let issues = issues_for(
+            "pydantic/normalized-name-collision",
+            "app/schemas.py",
+            "from pydantic import BaseModel, Field\n\nclass Event(BaseModel):\n    message_id: str = Field(alias='messageId')\n",
+        );
+        assert!(issues.is_empty());
+    }
+
     // ── Resilience Rules ────────────────────────────────────────────────
 
     #[test]
@@ -1424,6 +1465,7 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
         assert!(ids.contains(&"security/unsafe-yaml-load".to_string()));
         assert!(ids.contains(&"correctness/mutable-default-arg".to_string()));
         assert!(ids.contains(&"resilience/bare-except-pass".to_string()));
+        assert!(ids.contains(&"pydantic/normalized-name-collision".to_string()));
         assert!(ids.contains(&"api-surface/missing-tags".to_string()));
         assert!(ids.contains(&"api-surface/missing-docstring".to_string()));
         assert!(!ids.contains(&"config/env-mutation".to_string()));
