@@ -19,6 +19,42 @@ def _load_native_module():
     return _fastapi_doctor_native
 
 
+class CurrentProjectScanSession:
+    """Reusable wrapper around a native current-project scan session."""
+
+    def __init__(self, native_session: Any):
+        self._native_session = native_session
+
+    def get_scan_plan(
+        self,
+        *,
+        profile: str | None = None,
+        only_rules: list[str] | None = None,
+        ignore_rules: list[str] | None = None,
+        skip_structure: bool = False,
+        skip_openapi: bool = False,
+    ) -> dict[str, Any]:
+        raw = self._native_session.get_scan_plan(
+            profile, only_rules, ignore_rules, skip_structure, skip_openapi
+        )
+        return dict(raw)
+
+    def analyze_selected_v2(
+        self,
+        *,
+        profile: str | None = None,
+        only_rules: list[str] | None = None,
+        ignore_rules: list[str] | None = None,
+        skip_structure: bool = False,
+        skip_openapi: bool = False,
+        include_routes: bool = False,
+    ) -> dict[str, Any]:
+        raw = self._native_session.analyze_selected_v2(
+            profile, only_rules, ignore_rules, skip_structure, skip_openapi, include_routes
+        )
+        return _coerce_native_result(raw)
+
+
 def get_native_rule_ids() -> frozenset[str]:
     """Return the set of rule IDs implemented by the Rust engine."""
     native_module = _load_native_module()
@@ -168,6 +204,12 @@ def get_project_context(*, static_only: bool = False) -> dict[str, Any]:
     return dict(raw)
 
 
+def create_scan_session(*, static_only: bool = True) -> CurrentProjectScanSession:
+    """Create a reusable Rust-backed scan session for the current project."""
+    native_module = _load_native_module()
+    return CurrentProjectScanSession(native_module.create_scan_session(static_only))
+
+
 def get_scan_plan(
     *,
     profile: str | None = None,
@@ -201,8 +243,10 @@ def get_profile_rule_ids(
 
 
 __all__ = [
+    "CurrentProjectScanSession",
     "NativeEngineUnavailable",
     "analyze_selected_current_project_v2",
+    "create_scan_session",
     "get_native_rule_ids",
     "get_project_context",
     "get_scan_plan",

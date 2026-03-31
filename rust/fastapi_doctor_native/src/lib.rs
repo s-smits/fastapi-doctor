@@ -249,8 +249,8 @@ fn analyze_current_project_v2(
     let config = bundle.context.effective_config.to_core_config();
     let result = analyze_loaded_project_bundle(
         py,
-        bundle.project,
-        config,
+        &bundle.project,
+        &config,
         active_rules,
         include_routes,
         "using Rust-native auto project module v2",
@@ -338,6 +338,13 @@ impl ProjectAnalysisResult {
     }
 }
 
+#[pyclass]
+struct ScanSession {
+    context: fastapi_doctor_project::ProjectContext,
+    project: LoadedProject,
+    config: Config,
+}
+
 fn empty_project_bundle_result(engine_reason: &str) -> ProjectBundleResult {
     ProjectBundleResult {
         issues: Vec::new(),
@@ -408,8 +415,8 @@ fn analyze_project_bundle(
     let project = load_project_modules(metadata).map_err(PyRuntimeError::new_err)?;
     analyze_loaded_project_bundle(
         py,
-        project,
-        config,
+        &project,
+        &config,
         active_rules,
         include_routes,
         "using Rust-native project module v2",
@@ -418,8 +425,8 @@ fn analyze_project_bundle(
 
 fn analyze_loaded_project_bundle(
     py: Python<'_>,
-    project: LoadedProject,
-    config: Config,
+    project: &LoadedProject,
+    config: &Config,
     active_rules: Vec<String>,
     include_routes: bool,
     engine_reason: &str,
@@ -431,8 +438,8 @@ fn analyze_loaded_project_bundle(
 
 fn analyze_loaded_project_bundle_core(
     py: Python<'_>,
-    project: LoadedProject,
-    config: Config,
+    project: &LoadedProject,
+    config: &Config,
     active_rules: Vec<String>,
     engine_reason: &str,
 ) -> PyResult<ProjectAnalysisResult> {
@@ -450,7 +457,7 @@ fn analyze_loaded_project_bundle_core(
                     &index,
                     parsed_suite.as_ref(),
                     &rule_selection,
-                    &config,
+                    config,
                 );
                 let route_scan = if needs_routes && source_may_define_routes(&module.source) {
                     parsed_suite
@@ -513,9 +520,9 @@ fn analyze_loaded_project_bundle_core(
     raw_issues.extend(project_issues);
 
     if needs_routes {
-        raw_issues.extend(analyze_routes(&finalized_routes, &rule_selection, &config));
+        raw_issues.extend(analyze_routes(&finalized_routes, &rule_selection, config));
     }
-    let checks_not_evaluated = route_checks_not_evaluated(&rule_selection, &config);
+    let checks_not_evaluated = route_checks_not_evaluated(&rule_selection, config);
 
     Ok(ProjectAnalysisResult {
         raw_issues,
@@ -555,12 +562,112 @@ fn analyze_selected_current_project_impl(
     let config = bundle.context.effective_config.to_core_config();
     let analysis = analyze_loaded_project_bundle_core(
         py,
-        bundle.project,
-        config,
+        &bundle.project,
+        &config,
         active_rules,
         "using Rust-native auto project module v2",
     )?;
     Ok((analysis.into_bundle(include_routes), bundle.context))
+}
+
+impl ScanSession {
+    fn selected_rules(
+        &self,
+        profile: Option<String>,
+        only_rules: Option<Vec<String>>,
+        ignore_rules: Option<Vec<String>>,
+        skip_structure: bool,
+        skip_openapi: bool,
+    ) -> Vec<String> {
+        select_rule_ids(
+            profile.as_deref(),
+            only_rules.as_deref().unwrap_or(&[]),
+            ignore_rules.as_deref().unwrap_or(&[]),
+            &self.context.effective_config.scan.exclude_rules,
+            skip_structure,
+            skip_openapi,
+        )
+    }
+}
+
+#[pymethods]
+impl ScanSession {
+    #[pyo3(signature = (
+        profile=None,
+        only_rules=None,
+        ignore_rules=None,
+        skip_structure=false,
+        skip_openapi=false,
+    ))]
+    fn get_scan_plan(
+        &self,
+        py: Python<'_>,
+        profile: Option<String>,
+        only_rules: Option<Vec<String>>,
+        ignore_rules: Option<Vec<String>>,
+        skip_structure: bool,
+        skip_openapi: bool,
+    ) -> PyResult<Py<PyDict>> {
+        let active_rules = self.selected_rules(
+            profile,
+            only_rules,
+            ignore_rules,
+            skip_structure,
+            skip_openapi,
+        );
+
+        let payload = PyDict::new(py);
+        payload.set_item("tool_target", project_tool_target(&self.context))?;
+        payload.set_item("active_rules", active_rules.clone())?;
+        payload.set_item("native_requested", !active_rules.is_empty())?;
+        payload.set_item("project_context", project_context_payload(py, &self.context)?)?;
+        Ok(payload.unbind())
+    }
+
+    #[pyo3(signature = (
+        profile=None,
+        only_rules=None,
+        ignore_rules=None,
+        skip_structure=false,
+        skip_openapi=false,
+        include_routes=true,
+    ))]
+    fn analyze_selected_v2(
+        &self,
+        py: Python<'_>,
+        profile: Option<String>,
+        only_rules: Option<Vec<String>>,
+        ignore_rules: Option<Vec<String>>,
+        skip_structure: bool,
+        skip_openapi: bool,
+        include_routes: bool,
+    ) -> PyResult<Py<PyDict>> {
+        let active_rules = self.selected_rules(
+            profile,
+            only_rules,
+            ignore_rules,
+            skip_structure,
+            skip_openapi,
+        );
+        let result = if active_rules.is_empty() {
+            empty_project_bundle_result("no rules selected")
+        } else {
+            analyze_loaded_project_bundle(
+                py,
+                &self.project,
+                &self.config,
+                active_rules,
+                include_routes,
+                "using Rust-native scan session v1",
+            )?
+        };
+        let payload = project_bundle_payload(py, result)?;
+        let project_context = project_context_payload(py, &self.context)?;
+        payload
+            .bind(py)
+            .set_item("project_context", project_context)?;
+        Ok(payload)
+    }
 }
 
 #[pyfunction]
@@ -872,8 +979,21 @@ fn get_project_context(py: Python<'_>, static_only: bool) -> PyResult<Py<PyDict>
     project_context_payload(py, &context)
 }
 
+#[pyfunction]
+#[pyo3(signature = (static_only=true))]
+fn create_scan_session(static_only: bool) -> PyResult<ScanSession> {
+    let bundle = load_current_project_bundle(static_only).map_err(PyRuntimeError::new_err)?;
+    let config = bundle.context.effective_config.to_core_config();
+    Ok(ScanSession {
+        context: bundle.context,
+        project: bundle.project,
+        config,
+    })
+}
+
 #[pymodule]
 fn _fastapi_doctor_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<ScanSession>()?;
     m.add_function(wrap_pyfunction!(analyze_modules, m)?)?;
     m.add_function(wrap_pyfunction!(analyze_project, m)?)?;
     m.add_function(wrap_pyfunction!(analyze_project_v2, m)?)?;
@@ -885,5 +1005,6 @@ fn _fastapi_doctor_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_profile_rule_ids, m)?)?;
     m.add_function(wrap_pyfunction!(get_scan_plan, m)?)?;
     m.add_function(wrap_pyfunction!(get_project_context, m)?)?;
+    m.add_function(wrap_pyfunction!(create_scan_session, m)?)?;
     Ok(())
 }

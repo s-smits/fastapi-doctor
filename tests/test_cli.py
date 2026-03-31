@@ -120,23 +120,21 @@ _MOCK_RESULT_CLEAN = {
 
 
 def _patch_cli(monkeypatch, tmp_path, mock_result, **args_overrides):
+    class MockScanSession:
+        def get_scan_plan(self, **_: object) -> dict[str, object]:
+            return {
+                "tool_target": "pkg",
+                "active_rules": ["security/unsafe-yaml-load"],
+                "native_requested": True,
+                "project_context": dict(mock_result["project_context"]),
+            }
+
+        def analyze_selected_v2(self, **_: object) -> dict[str, object]:
+            return dict(mock_result)
+
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli_module, "parse_args", lambda: _make_args(tmp_path, **args_overrides))
-    monkeypatch.setattr(
-        cli_module,
-        "analyze_selected_current_project_v2",
-        lambda **_: dict(mock_result),
-    )
-    monkeypatch.setattr(
-        cli_module,
-        "get_scan_plan",
-        lambda **_: {
-            "tool_target": "pkg",
-            "active_rules": ["security/unsafe-yaml-load"],
-            "native_requested": True,
-            "project_context": dict(mock_result["project_context"]),
-        },
-    )
+    monkeypatch.setattr(cli_module, "create_scan_session", lambda **_: MockScanSession())
 
 
 # ── JSON output ─────────────────────────────────────────────────────
@@ -228,32 +226,31 @@ def test_main_starts_tool_jobs_before_native_analysis_finishes(
     monkeypatch, tmp_path: Path
 ) -> None:
     _patch_cli(monkeypatch, tmp_path, _MOCK_RESULT_CLEAN, skip_ruff=False, skip_ty=True)
-    monkeypatch.setattr(
-        cli_module,
-        "get_scan_plan",
-        lambda **_: {
-            "tool_target": "pkg",
-            "active_rules": ["security/unsafe-yaml-load"],
-            "native_requested": True,
-            "project_context": {
-                "layout": {
-                    "repo_root": str(tmp_path),
-                    "import_root": str(tmp_path),
-                    "code_dir": str(tmp_path / "pkg"),
-                    "app_module": None,
-                    "discovery_source": "test",
-                }
-            },
-        },
-    )
 
     timing: dict[str, float] = {}
 
-    def fake_analyze(**_: object) -> dict[str, object]:
-        timing["analyze_started"] = time.perf_counter()
-        time.sleep(0.05)
-        timing["analyze_finished"] = time.perf_counter()
-        return dict(_MOCK_RESULT_CLEAN)
+    class MockScanSession:
+        def get_scan_plan(self, **_: object) -> dict[str, object]:
+            return {
+                "tool_target": "pkg",
+                "active_rules": ["security/unsafe-yaml-load"],
+                "native_requested": True,
+                "project_context": {
+                    "layout": {
+                        "repo_root": str(tmp_path),
+                        "import_root": str(tmp_path),
+                        "code_dir": str(tmp_path / "pkg"),
+                        "app_module": None,
+                        "discovery_source": "test",
+                    }
+                },
+            }
+
+        def analyze_selected_v2(self, **_: object) -> dict[str, object]:
+            timing["analyze_started"] = time.perf_counter()
+            time.sleep(0.05)
+            timing["analyze_finished"] = time.perf_counter()
+            return dict(_MOCK_RESULT_CLEAN)
 
     def fake_run_command(name: str, command: list[str], cwd: Path) -> dict[str, object]:
         timing["tool_started"] = time.perf_counter()
@@ -269,11 +266,63 @@ def test_main_starts_tool_jobs_before_native_analysis_finishes(
             "stderr": "",
         }
 
-    monkeypatch.setattr(cli_module, "analyze_selected_current_project_v2", fake_analyze)
+    monkeypatch.setattr(cli_module, "create_scan_session", lambda **_: MockScanSession())
     monkeypatch.setattr(cli_module, "_run_command", fake_run_command)
 
     assert cli_module.main() == 0
     assert timing["tool_started"] < timing["analyze_finished"]
+
+
+def test_main_uses_single_scan_session_for_plan_and_analysis(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[str] = []
+
+    class MockScanSession:
+        def get_scan_plan(self, **_: object) -> dict[str, object]:
+            calls.append("plan")
+            return {
+                "tool_target": "pkg",
+                "active_rules": ["security/unsafe-yaml-load"],
+                "native_requested": True,
+                "project_context": dict(_MOCK_RESULT_CLEAN["project_context"]),
+            }
+
+        def analyze_selected_v2(self, **_: object) -> dict[str, object]:
+            calls.append("analyze")
+            return dict(_MOCK_RESULT_CLEAN)
+
+    _patch_cli(monkeypatch, tmp_path, _MOCK_RESULT_CLEAN)
+    monkeypatch.setattr(cli_module, "create_scan_session", lambda **_: MockScanSession())
+
+    assert cli_module.main() == 0
+    assert calls == ["plan", "analyze"]
+
+
+def test_main_avoids_analysis_when_scan_plan_has_no_active_rules(
+    monkeypatch, tmp_path: Path
+) -> None:
+    analyzed = False
+
+    class MockScanSession:
+        def get_scan_plan(self, **_: object) -> dict[str, object]:
+            return {
+                "tool_target": "pkg",
+                "active_rules": [],
+                "native_requested": False,
+                "project_context": dict(_MOCK_RESULT_CLEAN["project_context"]),
+            }
+
+        def analyze_selected_v2(self, **_: object) -> dict[str, object]:
+            nonlocal analyzed
+            analyzed = True
+            return dict(_MOCK_RESULT_CLEAN)
+
+    _patch_cli(monkeypatch, tmp_path, _MOCK_RESULT_CLEAN, skip_ruff=True, skip_ty=True)
+    monkeypatch.setattr(cli_module, "create_scan_session", lambda **_: MockScanSession())
+
+    assert cli_module.main() == 0
+    assert analyzed is False
 
 
 def test_build_tool_jobs_prefers_repo_local_executable(tmp_path: Path) -> None:

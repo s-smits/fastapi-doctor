@@ -16,8 +16,7 @@ from typing import Any
 
 from .native_core import (
     NativeEngineUnavailable,
-    analyze_selected_current_project_v2,
-    get_scan_plan,
+    create_scan_session,
     get_rule_metadata,
 )
 
@@ -548,13 +547,13 @@ def main() -> int:
     ignore_rules = set(_split_csv(args.ignore_rules) or [])
 
     try:
-        scan_plan = get_scan_plan(
+        scan_session = create_scan_session(static_only=True)
+        scan_plan = scan_session.get_scan_plan(
             profile=args.profile,
             only_rules=sorted(only_rules) if only_rules else None,
             ignore_rules=sorted(ignore_rules) if ignore_rules else None,
             skip_structure=args.skip_structure,
             skip_openapi=args.skip_openapi,
-            static_only=True,
         )
     except NativeEngineUnavailable as exc:
         print(str(exc), file=sys.stderr)
@@ -575,13 +574,12 @@ def main() -> int:
             }
             if native_requested:
                 try:
-                    native_result = analyze_selected_current_project_v2(
+                    native_result = scan_session.analyze_selected_v2(
                         profile=args.profile,
                         only_rules=sorted(only_rules) if only_rules else None,
                         ignore_rules=sorted(ignore_rules) if ignore_rules else None,
                         skip_structure=args.skip_structure,
                         skip_openapi=args.skip_openapi,
-                        static_only=True,
                         include_routes=False,
                     )
                 except NativeEngineUnavailable as exc:
@@ -596,13 +594,12 @@ def main() -> int:
                 command_results.append(tool_results[key])
     elif native_requested:
         try:
-            native_result = analyze_selected_current_project_v2(
+            native_result = scan_session.analyze_selected_v2(
                 profile=args.profile,
                 only_rules=sorted(only_rules) if only_rules else None,
                 ignore_rules=sorted(ignore_rules) if ignore_rules else None,
                 skip_structure=args.skip_structure,
                 skip_openapi=args.skip_openapi,
-                static_only=True,
                 include_routes=False,
             )
         except NativeEngineUnavailable as exc:

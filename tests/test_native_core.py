@@ -49,6 +49,21 @@ def test_get_scan_plan_returns_tool_target(monkeypatch: pytest.MonkeyPatch, tmp_
     assert "project_context" in plan
 
 
+def test_create_scan_session_returns_reusable_plan(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "pkg"
+    _write(package_dir / "__init__.py", "")
+    _write(package_dir / "main.py", "from fastapi import FastAPI\napp = FastAPI()\n")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DOCTOR_REPO_ROOT", str(tmp_path))
+
+    session = native_core.create_scan_session(static_only=True)
+    plan = session.get_scan_plan()
+
+    assert plan["tool_target"] == "pkg"
+    assert isinstance(plan["active_rules"], list)
+
+
 def test_native_project_scan_returns_doctor_issues(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     package_dir = tmp_path / "pkg"
     _write(package_dir / "__init__.py", "")
@@ -72,3 +87,29 @@ def test_native_project_scan_returns_doctor_issues(monkeypatch: pytest.MonkeyPat
     checks = {issue["check"] for issue in result["issues"]}
     assert "security/unsafe-yaml-load" in checks
     assert result["score"] <= 100
+
+
+def test_scan_session_analysis_returns_doctor_issues(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    package_dir = tmp_path / "pkg"
+    _write(package_dir / "__init__.py", "")
+    _write(package_dir / "bad.py", "import yaml\nyaml.load('x')\n")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DOCTOR_REPO_ROOT", str(tmp_path))
+    monkeypatch.setenv("DOCTOR_CODE_DIR", "pkg")
+    monkeypatch.setenv("DOCTOR_IMPORT_ROOT", str(tmp_path))
+
+    session = native_core.create_scan_session(static_only=True)
+    result = session.analyze_selected_v2(
+        profile="security",
+        only_rules=["security/unsafe-yaml-load"],
+        ignore_rules=None,
+        skip_structure=False,
+        skip_openapi=False,
+        include_routes=False,
+    )
+
+    checks = {issue["check"] for issue in result["issues"]}
+    assert "security/unsafe-yaml-load" in checks

@@ -114,7 +114,7 @@ dependencies = [
 
 [[package]]
 name = "fastapi-doctor-native"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "fastapi_doctor_core",
  "fastapi_doctor_project",
@@ -125,14 +125,14 @@ dependencies = [
 
 [[package]]
 name = "fastapi_doctor_core"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "rustpython-parser",
 ]
 
 [[package]]
 name = "fastapi_doctor_project"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "fastapi_doctor_core",
  "rayon",
@@ -143,7 +143,7 @@ dependencies = [
 
 [[package]]
 name = "fastapi_doctor_rules"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "fastapi_doctor_core",
  "rustpython-parser",
