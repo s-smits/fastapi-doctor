@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -13,7 +14,12 @@ from importlib.metadata import PackageNotFoundError, version as metadata_version
 from pathlib import Path
 from typing import Any
 
-from .native_core import NativeEngineUnavailable, analyze_selected_current_project_v2, get_rule_metadata
+from .native_core import (
+    NativeEngineUnavailable,
+    analyze_selected_current_project_v2,
+    get_scan_plan,
+    get_rule_metadata,
+)
 
 SCHEMA_VERSION = "1.2"
 
@@ -221,6 +227,34 @@ def _resolved_tool_target(
     return "." if str(relative) == "." else relative.as_posix()
 
 
+def _empty_doctor_report_from_scan_plan(scan_plan: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "issues": [],
+        "routes": [],
+        "suppressions": [],
+        "route_count": 0,
+        "openapi_path_count": None,
+        "categories": {},
+        "score": 100,
+        "label": "A",
+        "checks_not_evaluated": [],
+        "engine_reason": "no rules selected",
+        "project_context": scan_plan.get("project_context"),
+    }
+
+
+def _resolve_tool_executable(name: str, repo_root: Path) -> str | None:
+    local_candidates = [
+        repo_root / ".venv" / "bin" / name,
+        repo_root / ".venv" / "Scripts" / name,
+        repo_root / ".venv" / "Scripts" / f"{name}.exe",
+    ]
+    for candidate in local_candidates:
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return candidate.as_posix()
+    return shutil.which(name)
+
+
 def _build_tool_jobs(
     *,
     args: argparse.Namespace,
@@ -229,9 +263,27 @@ def _build_tool_jobs(
 ) -> dict[str, tuple[str, list[str]]]:
     tool_jobs: dict[str, tuple[str, list[str]]] = {}
     if not args.skip_ruff:
-        tool_jobs["ruff"] = ("ruff", ["uvx", "ruff", "check", target, "--output-format", "json"])
+        ruff_bin = _resolve_tool_executable("ruff", repo_root)
+        ruff_cmd = [ruff_bin, "check", target, "--output-format", "json"] if ruff_bin else [
+            "uvx",
+            "ruff",
+            "check",
+            target,
+            "--output-format",
+            "json",
+        ]
+        tool_jobs["ruff"] = ("ruff", ruff_cmd)
     if not args.skip_ty:
-        tool_jobs["ty"] = ("ty", ["uvx", "ty", "check", target, "--output-format", "concise"])
+        ty_bin = _resolve_tool_executable("ty", repo_root)
+        ty_cmd = [ty_bin, "check", target, "--output-format", "concise"] if ty_bin else [
+            "uvx",
+            "ty",
+            "check",
+            target,
+            "--output-format",
+            "concise",
+        ]
+        tool_jobs["ty"] = ("ty", ty_cmd)
     if args.with_bandit:
         bandit_cmd = ["uv", "run", "bandit", "-q", "-r", target]
         if (repo_root / "pyproject.toml").exists():
@@ -495,10 +547,56 @@ def main() -> int:
     only_rules = set(_split_csv(args.only_rules) or [])
     ignore_rules = set(_split_csv(args.ignore_rules) or [])
 
+    try:
+        scan_plan = get_scan_plan(
+            profile=args.profile,
+            only_rules=sorted(only_rules) if only_rules else None,
+            ignore_rules=sorted(ignore_rules) if ignore_rules else None,
+            skip_structure=args.skip_structure,
+            skip_openapi=args.skip_openapi,
+            static_only=True,
+        )
+    except NativeEngineUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
     native_result: dict[str, Any] | None = None
-    if not (args.skip_structure and args.skip_openapi):
+    tool_target = str(scan_plan.get("tool_target", "."))
+    tool_jobs = _build_tool_jobs(args=args, repo_root=repo_root, target=tool_target)
+
+    command_results: list[dict[str, Any]] = []
+    tool_results: dict[str, dict[str, Any]] = {}
+    native_requested = bool(scan_plan.get("native_requested", not (args.skip_structure and args.skip_openapi)))
+    if tool_jobs:
+        with ThreadPoolExecutor(max_workers=len(tool_jobs)) as pool:
+            futures = {
+                key: pool.submit(_run_command, name, command, repo_root)
+                for key, (name, command) in tool_jobs.items()
+            }
+            if native_requested:
+                try:
+                    native_result = analyze_selected_current_project_v2(
+                        profile=args.profile,
+                        only_rules=sorted(only_rules) if only_rules else None,
+                        ignore_rules=sorted(ignore_rules) if ignore_rules else None,
+                        skip_structure=args.skip_structure,
+                        skip_openapi=args.skip_openapi,
+                        static_only=True,
+                        include_routes=False,
+                    )
+                except NativeEngineUnavailable as exc:
+                    print(str(exc), file=sys.stderr)
+                    return 1
+            elif not (args.skip_structure and args.skip_openapi):
+                native_result = _empty_doctor_report_from_scan_plan(scan_plan)
+            for key, future in futures.items():
+                tool_results[key] = future.result()
+        for key in ("ruff", "ty", "bandit", "pytest"):
+            if key in tool_results:
+                command_results.append(tool_results[key])
+    elif native_requested:
         try:
-            raw_native = analyze_selected_current_project_v2(
+            native_result = analyze_selected_current_project_v2(
                 profile=args.profile,
                 only_rules=sorted(only_rules) if only_rules else None,
                 ignore_rules=sorted(ignore_rules) if ignore_rules else None,
@@ -510,28 +608,8 @@ def main() -> int:
         except NativeEngineUnavailable as exc:
             print(str(exc), file=sys.stderr)
             return 1
-        native_result = raw_native
-
-    tool_target = _resolved_tool_target(
-        repo_root=repo_root,
-        explicit_code_dir=args.code_dir,
-        doctor_report=native_result,
-    )
-    tool_jobs = _build_tool_jobs(args=args, repo_root=repo_root, target=tool_target)
-
-    command_results: list[dict[str, Any]] = []
-    tool_results: dict[str, dict[str, Any]] = {}
-    if tool_jobs:
-        with ThreadPoolExecutor(max_workers=len(tool_jobs)) as pool:
-            futures = {
-                key: pool.submit(_run_command, name, command, repo_root)
-                for key, (name, command) in tool_jobs.items()
-            }
-            for key, future in futures.items():
-                tool_results[key] = future.result()
-        for key in ("ruff", "ty", "bandit", "pytest"):
-            if key in tool_results:
-                command_results.append(tool_results[key])
+    elif not (args.skip_structure and args.skip_openapi):
+        native_result = _empty_doctor_report_from_scan_plan(scan_plan)
 
     ruff_issues: list[dict[str, Any]] = []
     if "ruff" in tool_results:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -126,6 +127,16 @@ def _patch_cli(monkeypatch, tmp_path, mock_result, **args_overrides):
         "analyze_selected_current_project_v2",
         lambda **_: dict(mock_result),
     )
+    monkeypatch.setattr(
+        cli_module,
+        "get_scan_plan",
+        lambda **_: {
+            "tool_target": "pkg",
+            "active_rules": ["security/unsafe-yaml-load"],
+            "native_requested": True,
+            "project_context": dict(mock_result["project_context"]),
+        },
+    )
 
 
 # ── JSON output ─────────────────────────────────────────────────────
@@ -211,6 +222,71 @@ def test_human_output_verbose_shows_help(monkeypatch, capsys, tmp_path: Path) ->
     cli_module.main()
     out = capsys.readouterr().out
     assert "yaml.safe_load()" in out
+
+
+def test_main_starts_tool_jobs_before_native_analysis_finishes(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _patch_cli(monkeypatch, tmp_path, _MOCK_RESULT_CLEAN, skip_ruff=False, skip_ty=True)
+    monkeypatch.setattr(
+        cli_module,
+        "get_scan_plan",
+        lambda **_: {
+            "tool_target": "pkg",
+            "active_rules": ["security/unsafe-yaml-load"],
+            "native_requested": True,
+            "project_context": {
+                "layout": {
+                    "repo_root": str(tmp_path),
+                    "import_root": str(tmp_path),
+                    "code_dir": str(tmp_path / "pkg"),
+                    "app_module": None,
+                    "discovery_source": "test",
+                }
+            },
+        },
+    )
+
+    timing: dict[str, float] = {}
+
+    def fake_analyze(**_: object) -> dict[str, object]:
+        timing["analyze_started"] = time.perf_counter()
+        time.sleep(0.05)
+        timing["analyze_finished"] = time.perf_counter()
+        return dict(_MOCK_RESULT_CLEAN)
+
+    def fake_run_command(name: str, command: list[str], cwd: Path) -> dict[str, object]:
+        timing["tool_started"] = time.perf_counter()
+        time.sleep(0.01)
+        return {
+            "name": name,
+            "command": command,
+            "returncode": 0,
+            "passed": True,
+            "status": "passed",
+            "failure_reason": None,
+            "stdout": "[]",
+            "stderr": "",
+        }
+
+    monkeypatch.setattr(cli_module, "analyze_selected_current_project_v2", fake_analyze)
+    monkeypatch.setattr(cli_module, "_run_command", fake_run_command)
+
+    assert cli_module.main() == 0
+    assert timing["tool_started"] < timing["analyze_finished"]
+
+
+def test_build_tool_jobs_prefers_repo_local_executable(tmp_path: Path) -> None:
+    bin_dir = tmp_path / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    ruff_path = bin_dir / "ruff"
+    ruff_path.write_text("#!/bin/sh\nexit 0\n")
+    ruff_path.chmod(0o755)
+
+    args = _make_args(tmp_path, skip_ruff=False, skip_ty=True)
+    jobs = cli_module._build_tool_jobs(args=args, repo_root=tmp_path, target="pkg")
+
+    assert jobs["ruff"][1][0] == str(ruff_path)
 
 
 # ── --fail-on flag ──────────────────────────────────────────────────

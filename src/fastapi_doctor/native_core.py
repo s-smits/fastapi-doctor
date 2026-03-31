@@ -161,6 +161,30 @@ def get_rule_metadata() -> list[tuple[str, str, str]]:
     return native_module.get_all_rule_metadata()
 
 
+def get_project_context(*, static_only: bool = False) -> dict[str, Any]:
+    """Return discovered project context from the Rust engine."""
+    native_module = _load_native_module()
+    raw = native_module.get_project_context(static_only)
+    return dict(raw)
+
+
+def get_scan_plan(
+    *,
+    profile: str | None = None,
+    only_rules: list[str] | None = None,
+    ignore_rules: list[str] | None = None,
+    skip_structure: bool = False,
+    skip_openapi: bool = False,
+    static_only: bool = True,
+) -> dict[str, Any]:
+    """Return Rust-resolved scan planning data for the current project."""
+    native_module = _load_native_module()
+    raw = native_module.get_scan_plan(
+        profile, only_rules, ignore_rules, skip_structure, skip_openapi, static_only
+    )
+    return dict(raw)
+
+
 def get_profile_rule_ids(
     *,
     profile: str | None = None,
@@ -180,6 +204,8 @@ __all__ = [
     "NativeEngineUnavailable",
     "analyze_selected_current_project_v2",
     "get_native_rule_ids",
+    "get_project_context",
+    "get_scan_plan",
     "get_profile_rule_ids",
     "get_rule_metadata",
     "score_current_project_v2",

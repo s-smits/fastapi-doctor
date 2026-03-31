@@ -20,6 +20,35 @@ def test_native_rule_ids_expose_the_rust_registry() -> None:
     assert "architecture/giant-function" in rule_ids
 
 
+def test_get_project_context_returns_layout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "pkg"
+    _write(package_dir / "__init__.py", "")
+    _write(package_dir / "main.py", "from fastapi import FastAPI\napp = FastAPI()\n")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DOCTOR_REPO_ROOT", str(tmp_path))
+
+    context = native_core.get_project_context(static_only=True)
+
+    assert context["layout"]["repo_root"] == str(tmp_path)
+    assert context["layout"]["code_dir"] == str(package_dir)
+
+
+def test_get_scan_plan_returns_tool_target(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    package_dir = tmp_path / "pkg"
+    _write(package_dir / "__init__.py", "")
+    _write(package_dir / "main.py", "from fastapi import FastAPI\napp = FastAPI()\n")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("DOCTOR_REPO_ROOT", str(tmp_path))
+
+    plan = native_core.get_scan_plan(static_only=True)
+
+    assert plan["tool_target"] == "pkg"
+    assert isinstance(plan["active_rules"], list)
+    assert "project_context" in plan
+
+
 def test_native_project_scan_returns_doctor_issues(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     package_dir = tmp_path / "pkg"
     _write(package_dir / "__init__.py", "")

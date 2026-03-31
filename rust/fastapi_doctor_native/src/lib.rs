@@ -766,6 +766,16 @@ fn project_context_payload(
     Ok(payload.unbind())
 }
 
+fn project_tool_target(context: &fastapi_doctor_project::ProjectContext) -> String {
+    let repo_root = &context.layout.repo_root;
+    let code_dir = &context.layout.code_dir;
+    match code_dir.strip_prefix(repo_root) {
+        Ok(relative) if relative.as_os_str().is_empty() => ".".to_string(),
+        Ok(relative) => relative.to_string_lossy().to_string().replace('\\', "/"),
+        Err(_) => code_dir.to_string_lossy().to_string(),
+    }
+}
+
 fn issue_tuple(issue: &Issue) -> IssueTuple {
     (
         issue.check.to_string(),
@@ -820,6 +830,42 @@ fn get_profile_rule_ids(
 }
 
 #[pyfunction]
+#[pyo3(signature = (
+    profile=None,
+    only_rules=None,
+    ignore_rules=None,
+    skip_structure=false,
+    skip_openapi=false,
+    static_only=true,
+))]
+fn get_scan_plan(
+    py: Python<'_>,
+    profile: Option<String>,
+    only_rules: Option<Vec<String>>,
+    ignore_rules: Option<Vec<String>>,
+    skip_structure: bool,
+    skip_openapi: bool,
+    static_only: bool,
+) -> PyResult<Py<PyDict>> {
+    let context = resolve_project_context(static_only);
+    let active_rules = select_rule_ids(
+        profile.as_deref(),
+        only_rules.as_deref().unwrap_or(&[]),
+        ignore_rules.as_deref().unwrap_or(&[]),
+        &context.effective_config.scan.exclude_rules,
+        skip_structure,
+        skip_openapi,
+    );
+
+    let payload = PyDict::new(py);
+    payload.set_item("tool_target", project_tool_target(&context))?;
+    payload.set_item("active_rules", active_rules.clone())?;
+    payload.set_item("native_requested", !active_rules.is_empty())?;
+    payload.set_item("project_context", project_context_payload(py, &context)?)?;
+    Ok(payload.unbind())
+}
+
+#[pyfunction]
 #[pyo3(signature = (static_only=false))]
 fn get_project_context(py: Python<'_>, static_only: bool) -> PyResult<Py<PyDict>> {
     let context = resolve_project_context(static_only);
@@ -837,6 +883,7 @@ fn _fastapi_doctor_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(get_all_rule_ids, m)?)?;
     m.add_function(wrap_pyfunction!(get_all_rule_metadata, m)?)?;
     m.add_function(wrap_pyfunction!(get_profile_rule_ids, m)?)?;
+    m.add_function(wrap_pyfunction!(get_scan_plan, m)?)?;
     m.add_function(wrap_pyfunction!(get_project_context, m)?)?;
     Ok(())
 }
