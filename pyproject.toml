@@ -31,6 +31,7 @@ Releases = "https://github.com/s-smits/fastapi-doctor/releases"
 dev = [
     "fastapi>=0.116.0",
     "pytest>=9.0.0",
+    "maturin>=1.5,<2.0",
 ]
 
 [project.scripts]
@@ -49,4 +50,5 @@ strip = false
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "maturin>=1.5,<2.0",
 ]
