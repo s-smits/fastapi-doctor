@@ -1,0 +1,26 @@
+architecture:
+  enabled: true
+  giant_function: 400
+  large_function: 200
+  god_module: 1500
+  deep_nesting: 5
+  import_bloat: 30
+  fat_route_handler: 100
+
+pydantic:
+  should_be_model: boundary
+
+api:
+  create_post_prefixes: []
+  tag_required_prefixes:
+    - /api/
+
+security:
+  forbidden_write_params: []
+
+scan:
+  exclude_dirs:
+    - vendor
+    - third_party
+    - generated
+  exclude_rules: []
