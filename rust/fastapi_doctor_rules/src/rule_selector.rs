@@ -34,6 +34,7 @@ const MEDIUM_SELECTORS: &[&str] = &[
 pub fn parse_static_rule(rule_id: &str) -> Option<StaticRule> {
     Some(match rule_id {
         "architecture/giant-function" => StaticRule::ArchitectureGiantFunction,
+        "architecture/giant-route-handler" => StaticRule::ArchitectureGiantRouteHandler,
         "architecture/large-function" => StaticRule::ArchitectureLargeFunction,
         "architecture/deep-nesting" => StaticRule::ArchitectureDeepNesting,
         "architecture/async-without-await" => StaticRule::ArchitectureAsyncWithoutAwait,

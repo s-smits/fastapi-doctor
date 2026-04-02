@@ -2,10 +2,10 @@
 name: fastapi-doctor
 description: |
   Opinionated FastAPI/Python health checker. Audits backend quality, security gates,
-  and architectural health (Ruff/Pyright/Bandit/AST). Use for backend verification,
+  and architectural health (Ruff/ty/Bandit/AST). Use for backend verification,
   route/auth audits, and identifying performance-blocking sync calls in async handlers.
-  Keywords: FastAPI, Ruff, Pyright, backend health, OpenAPI, route auth, Pydantic v2
-last_verified: 2026-03-27
+  Keywords: FastAPI, Ruff, ty, backend health, OpenAPI, route auth, Pydantic v2
+last_verified: 2026-04-02
 ---
 
 # FastAPI Doctor
@@ -38,6 +38,12 @@ api:
 
 security:
   forbidden_write_params: []   # optional param names to ban on write routes
+
+scan:
+  include_tests: false
+  tool_include_dirs: []
+  tool_exclude_dirs:
+    - tests
 ```
 
 ## Scoring Formula
@@ -94,7 +100,7 @@ Run from the target project's working directory, or pass `--repo-root` when
 scanning another checkout.
 
 ```bash
-# Quick scan (doctor checks + ruff + pyright)
+# Quick scan (doctor checks + ruff + ty)
 uv run fastapi-doctor
 
 # Full scan (add bandit + targeted tests)
@@ -148,7 +154,7 @@ uv run fastapi-doctor --profile strict --repo-root . --code-dir apps/service_api
 | `security/unsafe-yaml-load` | Security | `yaml.load()` without SafeLoader/BaseLoader |
 | `correctness/duplicate-route` | Correctness | Same method+path registered twice |
 | `correctness/sync-io-in-async` | Correctness | Blocking file, lock, sleep, or HTTP calls inside async code |
-| `architecture/giant-function` | Architecture | Function body >threshold lines (configurable, default 400) |
+| `architecture/giant-route-handler` | Architecture | Oversized API route/request handler in strict mode |
 | `pydantic/deprecated-validator` | Pydantic | `@validator` (v1) instead of `@field_validator` (v2) |
 | `pydantic/mutable-default` | Pydantic | Bare `= []` / `= {}` default in BaseModel |
 | `security/sql-fstring-interpolation` | Security | f-string injected into `text()` |
@@ -162,6 +168,7 @@ uv run fastapi-doctor --profile strict --repo-root . --code-dir apps/service_api
 | `correctness/missing-response-model` | Correctness | API route has no `response_model` |
 | `correctness/weak-response-model` | Correctness | API route uses `dict`/`Any`-style `response_model` |
 | `correctness/post-status-code` | Correctness | Resource-creation POST defaults to 200 |
+| `architecture/giant-function` | Architecture | Large non-route function; advisory architecture pressure in strict mode |
 | `architecture/large-function` | Architecture | Function body >threshold lines (configurable, default 200) |
 | `architecture/god-module` | Architecture | File >threshold lines (configurable, default 1500) |
 | `architecture/deep-nesting` | Architecture | Function with >threshold nesting (configurable, default 5) |

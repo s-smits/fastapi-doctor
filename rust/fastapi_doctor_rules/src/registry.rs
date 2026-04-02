@@ -1,6 +1,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StaticRule {
     ArchitectureGiantFunction,
+    ArchitectureGiantRouteHandler,
     ArchitectureLargeFunction,
     ArchitectureDeepNesting,
     ArchitectureAsyncWithoutAwait,
@@ -72,6 +73,7 @@ impl StaticRule {
         use StaticRule::*;
         &[
             ArchitectureGiantFunction,
+            ArchitectureGiantRouteHandler,
             ArchitectureLargeFunction,
             ArchitectureDeepNesting,
             ArchitectureAsyncWithoutAwait,
@@ -142,6 +144,7 @@ impl StaticRule {
     pub const fn rule_id(self) -> &'static str {
         match self {
             Self::ArchitectureGiantFunction => "architecture/giant-function",
+            Self::ArchitectureGiantRouteHandler => "architecture/giant-route-handler",
             Self::ArchitectureLargeFunction => "architecture/large-function",
             Self::ArchitectureDeepNesting => "architecture/deep-nesting",
             Self::ArchitectureAsyncWithoutAwait => "architecture/async-without-await",
@@ -214,6 +217,7 @@ impl StaticRule {
     pub const fn severity(self) -> &'static str {
         match self {
             Self::SecurityMissingAuthDep
+            | Self::ArchitectureGiantRouteHandler
             | Self::SecurityForbiddenWriteParam
             | Self::SecurityAssertInProduction
             | Self::SecuritySubprocessShellTrue
@@ -228,6 +232,7 @@ impl StaticRule {
     pub const fn category(self) -> &'static str {
         match self {
             Self::ArchitectureGiantFunction
+            | Self::ArchitectureGiantRouteHandler
             | Self::ArchitectureLargeFunction
             | Self::ArchitectureDeepNesting
             | Self::ArchitectureAsyncWithoutAwait

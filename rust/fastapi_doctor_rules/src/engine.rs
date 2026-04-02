@@ -36,6 +36,7 @@ fn has_startup_validation_signal(module: &ModuleIndex<'_>) -> bool {
 #[derive(Clone, Default)]
 pub struct RuleSelection {
     pub giant_function: bool,
+    pub giant_route_handler: bool,
     pub large_function: bool,
     pub deep_nesting: bool,
     pub async_without_await: bool,
@@ -114,6 +115,7 @@ impl RuleSelection {
     fn enable(&mut self, rule: StaticRule) {
         match rule {
             StaticRule::ArchitectureGiantFunction => self.giant_function = true,
+            StaticRule::ArchitectureGiantRouteHandler => self.giant_route_handler = true,
             StaticRule::ArchitectureLargeFunction => self.large_function = true,
             StaticRule::ArchitectureDeepNesting => self.deep_nesting = true,
             StaticRule::ArchitectureAsyncWithoutAwait => self.async_without_await = true,
@@ -193,6 +195,7 @@ impl RuleSelection {
 
     fn any_ast_rules(&self) -> bool {
         self.giant_function
+            || self.giant_route_handler
             || self.large_function
             || self.deep_nesting
             || self.async_without_await
@@ -285,11 +288,16 @@ pub fn analyze_suite(
 ) -> Vec<Issue> {
     let mut issues = Vec::new();
 
-    if (rules.giant_function || rules.large_function)
+    if (rules.giant_function || rules.giant_route_handler || rules.large_function)
         && (config.giant_function_threshold > 0 || config.large_function_threshold > 0)
     {
+        let function_index = FunctionIndex::from_suite(module, suite);
         issues.extend(architecture::collect_giant_function_issues(
-            module, suite, config,
+            module,
+            suite,
+            &function_index,
+            rules,
+            config,
         ));
     }
 

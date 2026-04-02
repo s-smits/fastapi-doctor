@@ -115,18 +115,19 @@ impl Default for SecuritySettings {
 #[derive(Debug, Clone)]
 pub struct ScanSettings {
     pub exclude_dirs: Vec<String>,
+    pub include_tests: bool,
+    pub tool_include_dirs: Vec<String>,
+    pub tool_exclude_dirs: Vec<String>,
     pub exclude_rules: Vec<String>,
 }
 
 impl Default for ScanSettings {
     fn default() -> Self {
         Self {
-            exclude_dirs: vec![
-                "lib".to_string(),
-                "vendor".to_string(),
-                "vendored".to_string(),
-                "third_party".to_string(),
-            ],
+            exclude_dirs: default_scan_exclude_dirs(),
+            include_tests: false,
+            tool_include_dirs: Vec::new(),
+            tool_exclude_dirs: default_scan_exclude_dirs(),
             exclude_rules: Vec::new(),
         }
     }
@@ -218,6 +219,9 @@ struct SecurityConfigFile {
 #[serde(default)]
 struct ScanConfigFile {
     exclude_dirs: Option<Vec<String>>,
+    include_tests: Option<bool>,
+    tool_include_dirs: Option<Vec<String>>,
+    tool_exclude_dirs: Option<Vec<String>>,
     exclude_rules: Option<Vec<String>>,
 }
 
@@ -257,7 +261,11 @@ const PREFERRED_DISCOVERY_CONTAINERS: &[&str] = &["apps", "services", "packages"
 pub fn resolve_project_context(static_only: bool) -> ProjectContext {
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let repo_root = env_path("DOCTOR_REPO_ROOT", &cwd).unwrap_or_else(|| cwd.clone());
-    let effective_config = load_effective_project_config(&repo_root);
+    let mut effective_config = load_effective_project_config(&repo_root);
+    if env_truthy("DOCTOR_INCLUDE_TESTS") {
+        effective_config.scan.include_tests = true;
+        normalize_scan_settings(&mut effective_config.scan);
+    }
     let explicit_code_dir = env_path("DOCTOR_CODE_DIR", &repo_root);
     let explicit_import_root = env_path("DOCTOR_IMPORT_ROOT", &repo_root);
     let explicit_app_module = env::var("DOCTOR_APP_MODULE").ok();
@@ -427,11 +435,67 @@ fn load_effective_project_config(repo_root: &Path) -> EffectiveProjectConfig {
             config.scan.exclude_dirs = values;
         }
     }
+    if let Some(include_tests) = parsed.scan.include_tests {
+        config.scan.include_tests = include_tests;
+    }
+    if let Some(values) = parsed.scan.tool_include_dirs {
+        config.scan.tool_include_dirs = sanitize_string_list(values);
+    }
+    if let Some(values) = parsed.scan.tool_exclude_dirs {
+        let values = sanitize_string_list(values);
+        if !values.is_empty() {
+            config.scan.tool_exclude_dirs = values;
+        }
+    }
     if let Some(values) = parsed.scan.exclude_rules {
         config.scan.exclude_rules = sanitize_string_list(values);
     }
 
+    normalize_scan_settings(&mut config.scan);
+
     config
+}
+
+fn normalize_scan_settings(scan: &mut ScanSettings) {
+    if scan.include_tests {
+        scan.exclude_dirs
+            .retain(|value| !matches!(value.as_str(), "tests" | "test"));
+        if scan.tool_include_dirs.is_empty() {
+            scan.tool_exclude_dirs
+                .retain(|value| !matches!(value.as_str(), "tests" | "test"));
+        }
+    }
+}
+
+fn default_scan_exclude_dirs() -> Vec<String> {
+    vec![
+        "lib".to_string(),
+        "vendor".to_string(),
+        "vendored".to_string(),
+        "third_party".to_string(),
+        "generated".to_string(),
+        ".venv".to_string(),
+        "venv".to_string(),
+        "site-packages".to_string(),
+        "__pycache__".to_string(),
+        "node_modules".to_string(),
+        "dist".to_string(),
+        "build".to_string(),
+        ".pytest_cache".to_string(),
+        ".ruff_cache".to_string(),
+        ".mypy_cache".to_string(),
+        "tests".to_string(),
+        "test".to_string(),
+    ]
+}
+
+fn env_truthy(name: &str) -> bool {
+    env::var(name).ok().is_some_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 fn sanitize_string_list(values: Vec<String>) -> Vec<String> {
@@ -845,8 +909,29 @@ mod tests {
         // Scan defaults
         assert_eq!(
             config.scan.exclude_dirs,
-            vec!["lib", "vendor", "vendored", "third_party"]
+            vec![
+                "lib",
+                "vendor",
+                "vendored",
+                "third_party",
+                "generated",
+                ".venv",
+                "venv",
+                "site-packages",
+                "__pycache__",
+                "node_modules",
+                "dist",
+                "build",
+                ".pytest_cache",
+                ".ruff_cache",
+                ".mypy_cache",
+                "tests",
+                "test",
+            ]
         );
+        assert!(!config.scan.include_tests);
+        assert!(config.scan.tool_include_dirs.is_empty());
+        assert_eq!(config.scan.tool_exclude_dirs, config.scan.exclude_dirs);
         assert!(config.scan.exclude_rules.is_empty());
     }
 
@@ -884,6 +969,11 @@ scan:
   exclude_dirs:
     - generated
     - proto
+  include_tests: true
+  tool_include_dirs:
+    - backend
+  tool_exclude_dirs:
+    - vendor
   exclude_rules:
     - R001
     - R002
@@ -925,6 +1015,9 @@ scan:
         );
 
         assert_eq!(config.scan.exclude_dirs, vec!["generated", "proto"]);
+        assert!(config.scan.include_tests);
+        assert_eq!(config.scan.tool_include_dirs, vec!["backend"]);
+        assert_eq!(config.scan.tool_exclude_dirs, vec!["vendor"]);
         assert_eq!(config.scan.exclude_rules, vec!["R001", "R002"]);
     }
 
@@ -953,8 +1046,29 @@ scan:
         // Scan: exclude_dirs keeps default, exclude_rules is overridden
         assert_eq!(
             config.scan.exclude_dirs,
-            vec!["lib", "vendor", "vendored", "third_party"]
+            vec![
+                "lib",
+                "vendor",
+                "vendored",
+                "third_party",
+                "generated",
+                ".venv",
+                "venv",
+                "site-packages",
+                "__pycache__",
+                "node_modules",
+                "dist",
+                "build",
+                ".pytest_cache",
+                ".ruff_cache",
+                ".mypy_cache",
+                "tests",
+                "test",
+            ]
         );
+        assert!(!config.scan.include_tests);
+        assert!(config.scan.tool_include_dirs.is_empty());
+        assert_eq!(config.scan.tool_exclude_dirs, config.scan.exclude_dirs);
         assert_eq!(config.scan.exclude_rules, vec!["R100"]);
 
         // API keeps defaults
@@ -984,7 +1098,25 @@ scan:
         let config = load_effective_project_config(tmp.path());
         assert_eq!(
             config.scan.exclude_dirs,
-            vec!["lib", "vendor", "vendored", "third_party"]
+            vec![
+                "lib",
+                "vendor",
+                "vendored",
+                "third_party",
+                "generated",
+                ".venv",
+                "venv",
+                "site-packages",
+                "__pycache__",
+                "node_modules",
+                "dist",
+                "build",
+                ".pytest_cache",
+                ".ruff_cache",
+                ".mypy_cache",
+                "tests",
+                "test",
+            ]
         );
     }
 

@@ -299,6 +299,7 @@ struct ProjectBundleResult {
     routes: Vec<RouteTuple>,
     suppressions: Vec<SuppressionTuple>,
     route_count: usize,
+    analyzed_file_count: usize,
     categories: Vec<(String, usize)>,
     score: usize,
     label: String,
@@ -315,7 +316,7 @@ struct ProjectAnalysisResult {
 }
 
 impl ProjectAnalysisResult {
-    fn into_bundle(self, include_route_payload: bool) -> ProjectBundleResult {
+    fn into_bundle(self, include_route_payload: bool, analyzed_file_count: usize) -> ProjectBundleResult {
         let summary = score_summary(&self.raw_issues);
         let route_count = self.finalized_routes.len();
         let routes = if include_route_payload {
@@ -326,6 +327,7 @@ impl ProjectAnalysisResult {
         let issues = self.raw_issues.iter().map(issue_tuple).collect();
         ProjectBundleResult {
             route_count,
+            analyzed_file_count,
             categories: summary.categories.into_iter().collect(),
             score: summary.score,
             label: summary.label,
@@ -351,6 +353,7 @@ fn empty_project_bundle_result(engine_reason: &str) -> ProjectBundleResult {
         routes: Vec::new(),
         suppressions: Vec::new(),
         route_count: 0,
+        analyzed_file_count: 0,
         categories: Vec::new(),
         score: 100,
         label: "A".to_string(),
@@ -433,7 +436,7 @@ fn analyze_loaded_project_bundle(
 ) -> PyResult<ProjectBundleResult> {
     let analysis =
         analyze_loaded_project_bundle_core(py, project, config, active_rules, engine_reason)?;
-    Ok(analysis.into_bundle(include_routes))
+    Ok(analysis.into_bundle(include_routes, project.modules.len()))
 }
 
 fn analyze_loaded_project_bundle_core(
@@ -567,7 +570,7 @@ fn analyze_selected_current_project_impl(
         active_rules,
         "using Rust-native auto project module v2",
     )?;
-    Ok((analysis.into_bundle(include_routes), bundle.context))
+    Ok((analysis.into_bundle(include_routes, bundle.project.modules.len()), bundle.context))
 }
 
 impl ScanSession {
@@ -618,7 +621,9 @@ impl ScanSession {
 
         let payload = PyDict::new(py);
         payload.set_item("tool_target", project_tool_target(&self.context))?;
+        payload.set_item("tool_targets", project_tool_targets(&self.context))?;
         payload.set_item("active_rules", active_rules.clone())?;
+        payload.set_item("active_rule_count", active_rules.len())?;
         payload.set_item("native_requested", !active_rules.is_empty())?;
         payload.set_item("project_context", project_context_payload(py, &self.context)?)?;
         Ok(payload.unbind())
@@ -714,6 +719,7 @@ fn project_bundle_payload(py: Python<'_>, result: ProjectBundleResult) -> PyResu
     payload.set_item("routes", result.routes)?;
     payload.set_item("suppressions", result.suppressions)?;
     payload.set_item("route_count", result.route_count)?;
+    payload.set_item("analyzed_file_count", result.analyzed_file_count)?;
     payload.set_item("openapi_path_count", py.None())?;
     let categories = PyDict::new(py);
     for (category, count) in result.categories {
@@ -863,11 +869,42 @@ fn project_context_payload(
         "exclude_dirs",
         context.effective_config.scan.exclude_dirs.clone(),
     )?;
+    scan.set_item("include_tests", context.effective_config.scan.include_tests)?;
+    scan.set_item(
+        "tool_include_dirs",
+        context.effective_config.scan.tool_include_dirs.clone(),
+    )?;
+    scan.set_item(
+        "tool_exclude_dirs",
+        context.effective_config.scan.tool_exclude_dirs.clone(),
+    )?;
     scan.set_item(
         "exclude_rules",
         context.effective_config.scan.exclude_rules.clone(),
     )?;
     effective_config.set_item("scan", scan)?;
+
+    let scope = PyDict::new(py);
+    let doctor_scope = PyDict::new(py);
+    doctor_scope.set_item(
+        "root",
+        relativize_to_repo(&context.layout.repo_root, &context.layout.code_dir),
+    )?;
+    doctor_scope.set_item(
+        "exclude_dirs",
+        context.effective_config.scan.exclude_dirs.clone(),
+    )?;
+    doctor_scope.set_item("include_tests", context.effective_config.scan.include_tests)?;
+    scope.set_item("doctor_scope", doctor_scope)?;
+
+    let tool_scope = PyDict::new(py);
+    tool_scope.set_item("targets", project_tool_targets(context))?;
+    tool_scope.set_item(
+        "exclude_dirs",
+        context.effective_config.scan.tool_exclude_dirs.clone(),
+    )?;
+    scope.set_item("tool_scope", tool_scope)?;
+    payload.set_item("scope", scope)?;
 
     payload.set_item("effective_config", effective_config)?;
     Ok(payload.unbind())
@@ -881,6 +918,35 @@ fn project_tool_target(context: &fastapi_doctor_project::ProjectContext) -> Stri
         Ok(relative) => relative.to_string_lossy().to_string().replace('\\', "/"),
         Err(_) => code_dir.to_string_lossy().to_string(),
     }
+}
+
+fn relativize_to_repo(repo_root: &std::path::Path, path: &std::path::Path) -> String {
+    match path.strip_prefix(repo_root) {
+        Ok(relative) if relative.as_os_str().is_empty() => ".".to_string(),
+        Ok(relative) => relative.to_string_lossy().to_string().replace('\\', "/"),
+        Err(_) => path.to_string_lossy().to_string(),
+    }
+}
+
+fn project_tool_targets(context: &fastapi_doctor_project::ProjectContext) -> Vec<String> {
+    if !context.effective_config.scan.tool_include_dirs.is_empty() {
+        return context
+            .effective_config
+            .scan
+            .tool_include_dirs
+            .iter()
+            .map(|entry| {
+                let path = std::path::PathBuf::from(entry);
+                let resolved = if path.is_absolute() {
+                    path
+                } else {
+                    context.layout.repo_root.join(path)
+                };
+                relativize_to_repo(&context.layout.repo_root, &resolved)
+            })
+            .collect();
+    }
+    vec![project_tool_target(context)]
 }
 
 fn issue_tuple(issue: &Issue) -> IssueTuple {
@@ -966,7 +1032,9 @@ fn get_scan_plan(
 
     let payload = PyDict::new(py);
     payload.set_item("tool_target", project_tool_target(&context))?;
+    payload.set_item("tool_targets", project_tool_targets(&context))?;
     payload.set_item("active_rules", active_rules.clone())?;
+    payload.set_item("active_rule_count", active_rules.len())?;
     payload.set_item("native_requested", !active_rules.is_empty())?;
     payload.set_item("project_context", project_context_payload(py, &context)?)?;
     Ok(payload.unbind())

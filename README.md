@@ -24,7 +24,13 @@ Point it at your project:
 fastapi-doctor --repo-root /path/to/your/project
 ```
 
-By default it scans the current directory. Common flags:
+By default it scans the current directory. Profiles are intentionally different:
+
+- `security` — security and config boundary checks only
+- `balanced` — high-confidence security, correctness, resilience, and API contract checks
+- `strict` — everything in balanced plus broader architecture pressure rules
+
+Common flags:
 
 ```bash
 # Choose an audit profile: security, balanced (default), or strict
@@ -33,15 +39,18 @@ fastapi-doctor --profile strict
 # Machine-readable JSON output
 fastapi-doctor --json
 
-# Score only (0–100)
+# Doctor score only (0–100)
 fastapi-doctor --score
 
 # Show all findings, not just one per rule
 fastapi-doctor --verbose
 
-# Fail in CI on errors or warnings
+# Fail in CI on doctor findings
 fastapi-doctor --fail-on error
 fastapi-doctor --fail-on warning
+
+# Also fail if requested external tools are unavailable or fail
+fastapi-doctor --fail-on-tools configured
 
 # Filter rules
 fastapi-doctor --only-rules "security/*"
@@ -64,7 +73,7 @@ If your source code lives in a subdirectory:
 fastapi-doctor --repo-root . --code-dir src/myapp
 ```
 
-When `--code-dir` is set, or when discovery resolves a project code root, Ruff, ty, and Bandit run against that target instead of scanning the entire repository.
+When `--code-dir` is set, or when discovery resolves a project code root, Ruff, ty, and Bandit run against that target instead of scanning the entire repository. Structural analysis excludes common noise directories such as virtualenvs, caches, vendored code, generated code, and tests by default. Use `--include-tests` or config if you intentionally want tests included in native structural scoring.
 
 ## What It Checks
 
@@ -102,7 +111,13 @@ For intentional serverless-safe temp writes that still need a local suppression,
 
 ## Scoring
 
-fastapi-doctor produces a score from 0 to 100:
+fastapi-doctor now reports:
+
+- `doctor_score` — score from doctor findings only
+- `composite_score` — optional convenience score that adds Bandit high-severity penalties when Bandit runs successfully
+- `toolchain` — separate status for Ruff, ty, Bandit, and pytest (`passed`, `failed`, `not_found`, or `skipped`)
+
+The doctor score is:
 
 ```
 score = 100 - (unique_error_rules × 2) - (unique_warning_rules × 1)
@@ -112,7 +127,7 @@ Key details:
 - **Unique rules** — multiple findings of the same rule count once
 - **Errors** cost 2 points per unique rule, **warnings** cost 1
 - Score floors at 0
-- External tool penalties (when `--with-bandit`, ruff, or ty fail) subtract additional points
+- Missing optional tools do not reduce `doctor_score`
 
 Labels:
 - **Great** — score >= 80
@@ -163,8 +178,18 @@ security:
 
 scan:
   exclude_dirs:
+    - .venv
+    - venv
+    - site-packages
+    - __pycache__
+    - node_modules
     - vendor
     - generated
+    - tests
+  include_tests: false
+  tool_include_dirs: []
+  tool_exclude_dirs:
+    - tests
   exclude_rules: []
 ```
 

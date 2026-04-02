@@ -20,6 +20,7 @@ def _make_args(tmp_path: Path, **overrides) -> argparse.Namespace:
         init=False,
         output_format=None,
         fail_on="none",
+        fail_on_tools="none",
         profile="balanced",
         ignore_rules=None,
         only_rules=None,
@@ -27,6 +28,7 @@ def _make_args(tmp_path: Path, **overrides) -> argparse.Namespace:
         code_dir=None,
         import_root=None,
         app_module=None,
+        include_tests=False,
         skip_ruff=True,
         skip_ty=True,
         skip_structure=False,
@@ -56,6 +58,7 @@ _MOCK_RESULT_WITH_ISSUES = {
     "routes": [],
     "suppressions": [],
     "route_count": 0,
+    "analyzed_file_count": 1,
     "openapi_path_count": None,
     "categories": {"Security": 1},
     "score": 98,
@@ -90,7 +93,17 @@ _MOCK_RESULT_WITH_ISSUES = {
                     "/oauth",
                 ],
             },
-            "scan": {"exclude_dirs": [], "exclude_rules": []},
+            "scan": {
+                "exclude_dirs": [],
+                "include_tests": False,
+                "tool_include_dirs": [],
+                "tool_exclude_dirs": ["tests"],
+                "exclude_rules": [],
+            },
+        },
+        "scope": {
+            "doctor_scope": {"root": "pkg", "exclude_dirs": [], "include_tests": False},
+            "tool_scope": {"targets": ["pkg"], "exclude_dirs": ["tests"]},
         },
     },
 }
@@ -100,6 +113,7 @@ _MOCK_RESULT_CLEAN = {
     "routes": [],
     "suppressions": [],
     "route_count": 0,
+    "analyzed_file_count": 1,
     "openapi_path_count": None,
     "categories": {},
     "score": 100,
@@ -115,6 +129,10 @@ _MOCK_RESULT_CLEAN = {
             "discovery_source": "default",
         },
         "effective_config": {},
+        "scope": {
+            "doctor_scope": {"root": "pkg", "exclude_dirs": [], "include_tests": False},
+            "tool_scope": {"targets": ["pkg"], "exclude_dirs": ["tests"]},
+        },
     },
 }
 
@@ -124,6 +142,8 @@ def _patch_cli(monkeypatch, tmp_path, mock_result, **args_overrides):
         def get_scan_plan(self, **_: object) -> dict[str, object]:
             return {
                 "tool_target": "pkg",
+                "tool_targets": ["pkg"],
+                "active_rule_count": 1,
                 "active_rules": ["security/unsafe-yaml-load"],
                 "native_requested": True,
                 "project_context": dict(mock_result["project_context"]),
@@ -154,6 +174,9 @@ def test_json_output_includes_project_and_config(monkeypatch, capsys, tmp_path: 
     assert "project" in payload
     assert "effective_config" in payload
     assert "requested" in payload
+    assert "toolchain" in payload
+    assert "score_components" in payload
+    assert payload["doctor_score"] == payload["score"]
 
 
 def test_json_output_clean_project(monkeypatch, capsys, tmp_path: Path) -> None:
@@ -196,7 +219,7 @@ def test_human_output_contains_version_and_score(monkeypatch, capsys, tmp_path: 
     cli_module.main()
     out = capsys.readouterr().out
     assert "fastapi-doctor v" in out
-    assert "Score:" in out
+    assert "Doctor score:" in out
     assert "98/100" in out
 
 
@@ -233,6 +256,7 @@ def test_main_starts_tool_jobs_before_native_analysis_finishes(
         def get_scan_plan(self, **_: object) -> dict[str, object]:
             return {
                 "tool_target": "pkg",
+                "tool_targets": ["pkg"],
                 "active_rules": ["security/unsafe-yaml-load"],
                 "native_requested": True,
                 "project_context": {
@@ -242,7 +266,11 @@ def test_main_starts_tool_jobs_before_native_analysis_finishes(
                         "code_dir": str(tmp_path / "pkg"),
                         "app_module": None,
                         "discovery_source": "test",
-                    }
+                    },
+                    "scope": {
+                        "doctor_scope": {"root": "pkg", "exclude_dirs": [], "include_tests": False},
+                        "tool_scope": {"targets": ["pkg"], "exclude_dirs": []},
+                    },
                 },
             }
 
@@ -283,6 +311,7 @@ def test_main_uses_single_scan_session_for_plan_and_analysis(
             calls.append("plan")
             return {
                 "tool_target": "pkg",
+                "tool_targets": ["pkg"],
                 "active_rules": ["security/unsafe-yaml-load"],
                 "native_requested": True,
                 "project_context": dict(_MOCK_RESULT_CLEAN["project_context"]),
@@ -308,6 +337,7 @@ def test_main_avoids_analysis_when_scan_plan_has_no_active_rules(
         def get_scan_plan(self, **_: object) -> dict[str, object]:
             return {
                 "tool_target": "pkg",
+                "tool_targets": ["pkg"],
                 "active_rules": [],
                 "native_requested": False,
                 "project_context": dict(_MOCK_RESULT_CLEAN["project_context"]),
@@ -368,10 +398,36 @@ def test_fail_on_warning_returns_1_when_warnings(monkeypatch, tmp_path: Path) ->
 
 
 def test_fail_on_none_returns_0_despite_errors(monkeypatch, tmp_path: Path) -> None:
-    # fail_on=none skips the fail_on check, but main() still returns 1 on errors
-    # because of the final has_command_failure/structure_failed check
+    # fail_on=none skips the fail_on check, but doctor errors still fail the run.
     _patch_cli(monkeypatch, tmp_path, _MOCK_RESULT_WITH_ISSUES, fail_on="none")
     assert cli_module.main() == 1  # structure_failed is True (error severity)
+
+
+def test_fail_on_tools_configured_returns_1_when_requested_tool_missing(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _patch_cli(
+        monkeypatch,
+        tmp_path,
+        _MOCK_RESULT_CLEAN,
+        skip_ruff=False,
+        fail_on_tools="configured",
+    )
+
+    def fake_run_command(name: str, command: list[str], cwd: Path) -> dict[str, object]:
+        return {
+            "name": name,
+            "command": command,
+            "returncode": 127,
+            "passed": False,
+            "status": "command-not-found",
+            "failure_reason": "command-not-found",
+            "stdout": "",
+            "stderr": "ruff missing",
+        }
+
+    monkeypatch.setattr(cli_module, "_run_command", fake_run_command)
+    assert cli_module.main() == 1
 
 
 # ── Profile normalization ───────────────────────────────────────────
@@ -401,38 +457,46 @@ def test_matches_selector_wildcard() -> None:
     assert not cli_module._matches_selector("correctness/naive-datetime", "security/*")
 
 
-# ── Score computation ───────────────────────────────────────────────
+# ── Score / toolchain helpers ───────────────────────────────────────
 
-def test_compute_combined_score_no_penalties() -> None:
-    score, label = cli_module._compute_combined_score(100, None, None, None)
-    assert score == 100
-    assert label == "Great"
-
-
-def test_compute_combined_score_ruff_penalty() -> None:
-    score, label = cli_module._compute_combined_score(100, False, None, None)
-    assert score == 95
-    assert label == "Great"
+def test_label_for_score() -> None:
+    assert cli_module._label_for_score(85) == "Great"
+    assert cli_module._label_for_score(70) == "Needs work"
+    assert cli_module._label_for_score(50) == "Critical"
 
 
-def test_compute_combined_score_all_penalties() -> None:
-    score, label = cli_module._compute_combined_score(100, False, False, 3)
-    assert score == 75
-    assert label == "Needs work"
+def test_build_score_components_only_bandit_changes_composite() -> None:
+    components = cli_module._build_score_components(
+        _MOCK_RESULT_CLEAN,
+        {
+            "ty": {"stdout": "", "passed": False},
+            "bandit": {
+                "stdout": json.dumps(
+                    {"results": [{"issue_severity": "HIGH"}, {"issue_severity": "LOW"}]}
+                ),
+                "passed": True,
+            },
+        },
+    )
+    assert components["doctor_score"] == 100
+    assert components["composite_score"] == 95
+    assert components["toolchain_impact"]["bandit_high_findings"] == 1
 
 
-def test_compute_combined_score_floor_at_zero() -> None:
-    score, _ = cli_module._compute_combined_score(0, False, False, 10)
-    assert score == 0
-
-
-def test_compute_combined_score_labels() -> None:
-    _, label_great = cli_module._compute_combined_score(85, None, None, None)
-    _, label_needs = cli_module._compute_combined_score(70, None, None, None)
-    _, label_crit = cli_module._compute_combined_score(50, None, None, None)
-    assert label_great == "Great"
-    assert label_needs == "Needs work"
-    assert label_crit == "Critical"
+def test_build_toolchain_status_marks_missing_tool_not_found(tmp_path: Path) -> None:
+    args = _make_args(tmp_path, skip_ruff=False)
+    toolchain = cli_module._build_toolchain_status(
+        args,
+        {
+            "ruff": {
+                "status": "command-not-found",
+                "failure_reason": "command-not-found",
+                "stderr": "missing",
+                "passed": False,
+            }
+        },
+    )
+    assert toolchain["ruff"]["status"] == "not_found"
 
 
 # ── Ruff mapping ────────────────────────────────────────────────────
@@ -537,8 +601,8 @@ def test_build_tool_jobs_uses_target_path(tmp_path: Path) -> None:
     jobs = cli_module._build_tool_jobs(args=args, repo_root=tmp_path, target="src/pkg")
     assert jobs["ruff"][1][:4] == ["uvx", "ruff", "check", "src/pkg"]
     assert jobs["ty"][1][:4] == ["uvx", "ty", "check", "src/pkg"]
-    assert jobs["bandit"][1][:5] == ["uv", "run", "bandit", "-q", "-r"]
-    assert jobs["bandit"][1][5] == "src/pkg"
+    assert jobs["bandit"][1][:7] == ["uv", "run", "bandit", "-q", "-f", "json", "-r"]
+    assert jobs["bandit"][1][7] == "src/pkg"
 
 
 # ── CSV splitting ───────────────────────────────────────────────────

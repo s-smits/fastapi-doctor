@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from importlib.metadata import PackageNotFoundError, version as metadata_version
 from pathlib import Path
@@ -20,7 +21,7 @@ from .native_core import (
     get_rule_metadata,
 )
 
-SCHEMA_VERSION = "1.2"
+SCHEMA_VERSION = "1.3"
 
 
 def get_cli_version() -> str:
@@ -92,7 +93,17 @@ def _run_command(name: str, command: list[str], cwd: Path) -> dict[str, Any]:
 
 
 def _count_bandit_highs(stdout: str) -> int:
-    return stdout.count("Severity: High")
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return 0
+    results = payload.get("results", []) if isinstance(payload, dict) else []
+    return sum(
+        1
+        for finding in results
+        if isinstance(finding, dict)
+        and str(finding.get("issue_severity", "")).upper() == "HIGH"
+    )
 
 
 def _parse_ruff_json(stdout: str) -> list[dict[str, Any]]:
@@ -188,6 +199,8 @@ def _build_requested_payload(args: argparse.Namespace) -> dict[str, Any]:
         "ignore_rules": args.ignore_rules,
         "profile": args.profile,
         "fail_on": args.fail_on,
+        "fail_on_tools": args.fail_on_tools,
+        "include_tests": args.include_tests,
         "with_bandit": args.with_bandit,
         "with_tests": args.with_tests,
         "skip_ruff": args.skip_ruff,
@@ -232,6 +245,7 @@ def _empty_doctor_report_from_scan_plan(scan_plan: dict[str, Any]) -> dict[str, 
         "routes": [],
         "suppressions": [],
         "route_count": 0,
+        "analyzed_file_count": 0,
         "openapi_path_count": None,
         "categories": {},
         "score": 100,
@@ -239,6 +253,106 @@ def _empty_doctor_report_from_scan_plan(scan_plan: dict[str, Any]) -> dict[str, 
         "checks_not_evaluated": [],
         "engine_reason": "no rules selected",
         "project_context": scan_plan.get("project_context"),
+    }
+
+
+def _tool_requested(args: argparse.Namespace, tool_name: str) -> bool:
+    return {
+        "ruff": not args.skip_ruff,
+        "ty": not args.skip_ty,
+        "bandit": args.with_bandit,
+        "pytest": args.with_tests,
+    }[tool_name]
+
+
+def _result_status(result: dict[str, Any] | None) -> tuple[str, str | None]:
+    if not result:
+        return "skipped", None
+    stderr = str(result.get("stderr", ""))
+    if result.get("status") == "command-not-found" or (
+        "Failed to spawn:" in stderr and "No such file or directory" in stderr
+    ):
+        return "not_found", result.get("failure_reason") or "command-not-found"
+    if result.get("passed"):
+        return "passed", None
+    return "failed", result.get("failure_reason") or "failed"
+
+
+def _build_toolchain_status(
+    args: argparse.Namespace,
+    tool_results: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    toolchain: dict[str, dict[str, Any]] = {}
+    for tool_name in ("ruff", "ty", "bandit", "pytest"):
+        requested = _tool_requested(args, tool_name)
+        result = tool_results.get(tool_name)
+        status, reason = _result_status(result if requested else None)
+        entry: dict[str, Any] = {
+            "requested": requested,
+            "status": status if requested else "skipped",
+            "reason": reason if requested else None,
+        }
+        if result:
+            entry["command"] = result.get("command")
+            entry["returncode"] = result.get("returncode")
+        toolchain[tool_name] = entry
+    return toolchain
+
+
+def _build_score_components(
+    doctor_report: dict[str, Any] | None,
+    tool_results: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    issues = doctor_report["issues"] if doctor_report else []
+    error_rules = Counter(issue["check"] for issue in issues if issue["severity"] == "error")
+    warning_rules = Counter(issue["check"] for issue in issues if issue["severity"] != "error")
+    bandit_highs = _count_bandit_highs(tool_results["bandit"]["stdout"]) if "bandit" in tool_results else 0
+    doctor_score = doctor_report["score"] if doctor_report else 100
+    composite_score = max(0, doctor_score - min(15, bandit_highs * 5)) if tool_results else None
+    return {
+        "doctor_score": doctor_score,
+        "composite_score": composite_score,
+        "doctor_deductions": {
+            "unique_error_rules": len(error_rules),
+            "unique_warning_rules": len(warning_rules),
+            "error_points": len(error_rules) * 2,
+            "warning_points": len(warning_rules),
+        },
+        "toolchain_impact": {
+            "bandit_high_findings": bandit_highs,
+            "bandit_penalty_points": min(15, bandit_highs * 5),
+        },
+    }
+
+
+def _issue_scope_bucket(issue_path: str, project_context: dict[str, Any] | None) -> str:
+    if not issue_path:
+        return "production"
+    normalized = Path(issue_path).as_posix()
+    parts = set(Path(normalized).parts)
+    if "tests" in parts or "test" in parts:
+        return "tests"
+    scope = project_context.get("scope", {}) if isinstance(project_context, dict) else {}
+    tool_scope = scope.get("tool_scope", {}) if isinstance(scope, dict) else {}
+    excluded = set(tool_scope.get("exclude_dirs", []) if isinstance(tool_scope, dict) else [])
+    if parts & excluded:
+        return "excluded-but-tool-scanned"
+    return "production"
+
+
+def _build_diagnostics_summary(doctor_report: dict[str, Any] | None) -> dict[str, Any]:
+    issues = doctor_report["issues"] if doctor_report else []
+    error_rules = Counter(issue["check"] for issue in issues if issue["severity"] == "error")
+    warning_rules = Counter(issue["check"] for issue in issues if issue["severity"] != "error")
+    top_rules = Counter(issue["check"] for issue in issues).most_common(10)
+    return {
+        "total_findings": len(issues),
+        "unique_error_rules": len(error_rules),
+        "unique_warning_rules": len(warning_rules),
+        "top_rule_families": [
+            {"rule": rule, "count": count}
+            for rule, count in top_rules
+        ],
     }
 
 
@@ -258,33 +372,40 @@ def _build_tool_jobs(
     *,
     args: argparse.Namespace,
     repo_root: Path,
-    target: str,
+    target: str | list[str],
+    tool_exclude_dirs: list[str] | None = None,
 ) -> dict[str, tuple[str, list[str]]]:
+    targets = [target] if isinstance(target, str) else list(target)
+    tool_exclude_dirs = tool_exclude_dirs or []
     tool_jobs: dict[str, tuple[str, list[str]]] = {}
     if not args.skip_ruff:
         ruff_bin = _resolve_tool_executable("ruff", repo_root)
-        ruff_cmd = [ruff_bin, "check", target, "--output-format", "json"] if ruff_bin else [
+        ruff_cmd = [ruff_bin, "check", *targets, "--output-format", "json"] if ruff_bin else [
             "uvx",
             "ruff",
             "check",
-            target,
+            *targets,
             "--output-format",
             "json",
         ]
+        if tool_exclude_dirs:
+            ruff_cmd.extend(["--exclude", ",".join(tool_exclude_dirs)])
         tool_jobs["ruff"] = ("ruff", ruff_cmd)
     if not args.skip_ty:
         ty_bin = _resolve_tool_executable("ty", repo_root)
-        ty_cmd = [ty_bin, "check", target, "--output-format", "concise"] if ty_bin else [
+        ty_cmd = [ty_bin, "check", *targets, "--output-format", "concise"] if ty_bin else [
             "uvx",
             "ty",
             "check",
-            target,
+            *targets,
             "--output-format",
             "concise",
         ]
         tool_jobs["ty"] = ("ty", ty_cmd)
     if args.with_bandit:
-        bandit_cmd = ["uv", "run", "bandit", "-q", "-r", target]
+        bandit_cmd = ["uv", "run", "bandit", "-q", "-f", "json", "-r", *targets]
+        if tool_exclude_dirs:
+            bandit_cmd.extend(["-x", ",".join(tool_exclude_dirs)])
         if (repo_root / "pyproject.toml").exists():
             bandit_cmd.extend(["-c", "pyproject.toml"])
         tool_jobs["bandit"] = ("bandit", bandit_cmd)
@@ -298,8 +419,10 @@ def _build_json_payload(
     args: argparse.Namespace,
     command_results: list[dict[str, Any]],
     doctor_report: dict[str, Any] | None,
-    final_score: int,
-    final_label: str,
+    doctor_score: int,
+    composite_score: int | None,
+    toolchain: dict[str, dict[str, Any]],
+    score_components: dict[str, Any],
 ) -> dict[str, Any]:
     project_context = (doctor_report or {}).get("project_context") if doctor_report else None
     layout = project_context.get("layout", {}) if isinstance(project_context, dict) else {}
@@ -308,10 +431,13 @@ def _build_json_payload(
         if isinstance(project_context, dict)
         else {}
     )
+    scope = project_context.get("scope", {}) if isinstance(project_context, dict) else {}
     return {
         "schema_version": SCHEMA_VERSION,
-        "score": final_score,
-        "label": final_label,
+        "score": doctor_score,
+        "doctor_score": doctor_score,
+        "composite_score": composite_score,
+        "label": _label_for_score(doctor_score),
         "requested": _build_requested_payload(args),
         "project": {
             "repo_root": layout.get("repo_root"),
@@ -320,7 +446,18 @@ def _build_json_payload(
             "app_module": layout.get("app_module"),
             "discovery_source": layout.get("discovery_source"),
         },
+        "scope": {
+            "doctor_scope": scope.get("doctor_scope", {}),
+            "tool_scope": scope.get("tool_scope", {}),
+            "test_scope": {
+                "enabled": args.with_tests,
+                "pytest_args": args.pytest_args if args.with_tests else None,
+            },
+        },
         "effective_config": effective_config,
+        "toolchain": toolchain,
+        "score_components": score_components,
+        "diagnostics_summary": _build_diagnostics_summary(doctor_report),
         "commands": command_results,
         "doctor": doctor_report,
     }
@@ -329,14 +466,16 @@ def _build_json_payload(
 def _print_human_report(
     *,
     doctor_report: dict[str, Any] | None,
-    command_results: list[dict[str, Any]],
-    final_score: int,
-    final_label: str,
+    toolchain: dict[str, dict[str, Any]],
+    doctor_score: int,
+    composite_score: int | None,
     verbose: bool,
 ) -> None:
     print(f"fastapi-doctor v{get_cli_version()}")
     print()
-    print(f"Score: {final_score}/100 {final_label}")
+    print(f"Doctor score: {doctor_score}/100 {_label_for_score(doctor_score)}")
+    if composite_score is not None:
+        print(f"Composite score: {composite_score}/100 {_label_for_score(composite_score)}")
     if doctor_report:
         error_count = sum(1 for issue in doctor_report["issues"] if issue["severity"] == "error")
         warning_count = sum(
@@ -344,8 +483,17 @@ def _print_human_report(
         )
         print(
             f"Findings: {error_count} errors, {warning_count} warnings, "
-            f"{doctor_report['route_count']} routes"
+            f"{doctor_report['route_count']} routes, {doctor_report.get('analyzed_file_count', 0)} files"
         )
+        project_context = doctor_report.get("project_context")
+        scope = project_context.get("scope", {}) if isinstance(project_context, dict) else {}
+        tool_scope = scope.get("tool_scope", {}) if isinstance(scope, dict) else {}
+        if scope:
+            print("Scan scope:")
+            print(f"  doctor root: {scope.get('doctor_scope', {}).get('root', '.')}")
+            print(f"  tool targets: {', '.join(tool_scope.get('targets', [])) or '.'}")
+            if tool_scope.get("exclude_dirs"):
+                print(f"  tool excludes: {', '.join(tool_scope['exclude_dirs'])}")
         if doctor_report.get("categories"):
             print("Categories:")
             for category, count in sorted(doctor_report["categories"].items()):
@@ -360,40 +508,39 @@ def _print_human_report(
                 location = issue["path"]
                 if issue["line"]:
                     location = f"{location}:{issue['line']}"
+                if verbose:
+                    location = f"{location} [{_issue_scope_bucket(issue['path'], project_context)}]"
                 print(f"  [{issue['check']}] {issue['message']}")
                 print(f"    {location}")
                 if verbose and issue.get("help"):
                     print(f"    {issue['help']}")
         else:
             print("No structural issues found.")
-    if command_results:
-        print("External tools:")
-        for result in command_results:
-            status = "passed" if result["passed"] else result["status"]
-            print(f"  {result['name']}: {status}")
+    if toolchain:
+        print("Toolchain:")
+        for tool_name, entry in toolchain.items():
+            suffix = f" ({entry['reason']})" if entry.get("reason") else ""
+            print(f"  {tool_name}: {entry['status']}{suffix}")
     elif not doctor_report:
         print("No checks were run.")
 
 
-def _compute_combined_score(
-    base_score: int,
-    ruff_passed: bool | None,
-    ty_passed: bool | None,
-    bandit_high_count: int | None,
-) -> tuple[int, str]:
-    score = float(base_score)
-    if ruff_passed is False:
-        score -= 5
-    if ty_passed is False:
-        score -= 5
-    if bandit_high_count:
-        score -= min(15, bandit_high_count * 5)
-    final = max(0, min(100, int(score)))
-    if final >= 80:
-        return final, "Great"
-    if final >= 60:
-        return final, "Needs work"
-    return final, "Critical"
+def _label_for_score(score: int) -> str:
+    if score >= 80:
+        return "Great"
+    if score >= 60:
+        return "Needs work"
+    return "Critical"
+
+
+def _should_fail_for_tools(
+    args: argparse.Namespace,
+    toolchain: dict[str, dict[str, Any]],
+) -> bool:
+    if args.fail_on_tools == "none":
+        return False
+    relevant = toolchain.values()
+    return any(entry["status"] in {"failed", "not_found"} for entry in relevant)
 
 
 def parse_args() -> argparse.Namespace:
@@ -417,13 +564,19 @@ def parse_args() -> argparse.Namespace:
         "--fail-on",
         choices=["error", "warning", "none"],
         default="none",
-        help="Exit non-zero on diagnostics of the selected severity.",
+        help="Exit non-zero on doctor diagnostics of the selected severity.",
+    )
+    parser.add_argument(
+        "--fail-on-tools",
+        choices=["none", "configured", "all"],
+        default="none",
+        help="Exit non-zero when external tools fail or are unavailable.",
     )
     parser.add_argument(
         "--profile",
         type=_normalize_profile,
         default="balanced",
-        help="Audit intensity profile: security, balanced, or strict. Legacy alias: medium.",
+        help="Audit profile: security focuses on boundary checks, balanced adds high-confidence correctness/API checks, strict adds broad architecture pressure.",
     )
     parser.add_argument("--ignore-rules", help="Comma-separated list of rule IDs or prefixes.")
     parser.add_argument("--only-rules", help="Comma-separated list of rule IDs or prefixes.")
@@ -434,6 +587,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--code-dir", help="Source directory to scan.")
     parser.add_argument("--import-root", help="Import root to add to the project context.")
     parser.add_argument("--app-module", help="FastAPI entrypoint module:attr or module:function.")
+    parser.add_argument(
+        "--include-tests",
+        action="store_true",
+        help="Include tests in native structural analysis for this run.",
+    )
     parser.add_argument("--skip-ruff", action="store_true", help="Skip Ruff checks.")
     parser.add_argument("--skip-ty", action="store_true", help="Skip ty checks.")
     parser.add_argument("--skip-pyright", dest="skip_ty", action="store_true", help=argparse.SUPPRESS)
@@ -511,7 +669,39 @@ security:
 
 scan:
   exclude_dirs:
+    - .venv
+    - venv
+    - site-packages
+    - __pycache__
+    - node_modules
+    - dist
+    - build
+    - .pytest_cache
+    - .ruff_cache
+    - .mypy_cache
+    - tests
+    - test
     - vendor
+    - vendored
+    - third_party
+    - generated
+  include_tests: false
+  tool_include_dirs: []
+  tool_exclude_dirs:
+    - .venv
+    - venv
+    - site-packages
+    - __pycache__
+    - node_modules
+    - dist
+    - build
+    - .pytest_cache
+    - .ruff_cache
+    - .mypy_cache
+    - tests
+    - test
+    - vendor
+    - vendored
     - third_party
     - generated
   exclude_rules: []
@@ -541,6 +731,10 @@ def main() -> int:
         os.environ["DOCTOR_IMPORT_ROOT"] = args.import_root
     if args.app_module:
         os.environ["DOCTOR_APP_MODULE"] = args.app_module
+    if args.include_tests:
+        os.environ["DOCTOR_INCLUDE_TESTS"] = "1"
+    else:
+        os.environ.pop("DOCTOR_INCLUDE_TESTS", None)
 
     repo_root = Path(args.repo_root or os.environ.get("DOCTOR_REPO_ROOT") or os.getcwd()).resolve()
     only_rules = set(_split_csv(args.only_rules) or [])
@@ -560,8 +754,16 @@ def main() -> int:
         return 1
 
     native_result: dict[str, Any] | None = None
-    tool_target = str(scan_plan.get("tool_target", "."))
-    tool_jobs = _build_tool_jobs(args=args, repo_root=repo_root, target=tool_target)
+    tool_targets = scan_plan.get("tool_targets") or [str(scan_plan.get("tool_target", "."))]
+    project_context = scan_plan.get("project_context") if isinstance(scan_plan, dict) else {}
+    scope = project_context.get("scope", {}) if isinstance(project_context, dict) else {}
+    tool_scope = scope.get("tool_scope", {}) if isinstance(scope, dict) else {}
+    tool_jobs = _build_tool_jobs(
+        args=args,
+        repo_root=repo_root,
+        target=tool_targets,
+        tool_exclude_dirs=list(tool_scope.get("exclude_dirs", [])),
+    )
 
     command_results: list[dict[str, Any]] = []
     tool_results: dict[str, dict[str, Any]] = {}
@@ -614,49 +816,41 @@ def main() -> int:
     if native_result is not None:
         native_result["issues"] = _merge_issues(native_result["issues"], ruff_issues)
 
-    final_score, final_label = _compute_combined_score(
-        native_result["score"] if native_result else 100,
-        tool_results.get("ruff", {}).get("passed"),
-        tool_results.get("ty", {}).get("passed"),
-        _count_bandit_highs(tool_results["bandit"]["stdout"]) if "bandit" in tool_results else None,
-    )
+    toolchain = _build_toolchain_status(args, tool_results)
+    score_components = _build_score_components(native_result, tool_results)
+    doctor_score = int(score_components["doctor_score"])
+    composite_score = score_components["composite_score"]
 
     if args.score:
-        print(final_score)
+        print(doctor_score)
         return 0
 
     if args.explain_score:
         all_issues = native_result["issues"] if native_result else []
-        error_rules: dict[str, int] = {}
-        warning_rules: dict[str, int] = {}
-        for issue in all_issues:
-            bucket = error_rules if issue["severity"] == "error" else warning_rules
-            bucket[issue["check"]] = bucket.get(issue["check"], 0) + 1
-        base_score = native_result["score"] if native_result else 100
-        print(f"Base score: {base_score}/100")
+        error_rules = Counter(issue["check"] for issue in all_issues if issue["severity"] == "error")
+        warning_rules = Counter(issue["check"] for issue in all_issues if issue["severity"] != "error")
+        print(f"Doctor score: {doctor_score}/100 ({_label_for_score(doctor_score)})")
         if error_rules:
-            print(f"\nErrors ({len(error_rules)} unique rules, -{len(error_rules) * 2} points):")
+            print(f"\nDoctor errors ({len(error_rules)} unique rules, -{len(error_rules) * 2} points):")
             for rule_id, count in sorted(error_rules.items()):
                 print(f"  {rule_id} ({count} finding{'s' if count > 1 else ''})")
         if warning_rules:
-            print(f"\nWarnings ({len(warning_rules)} unique rules, -{len(warning_rules)} points):")
+            print(f"\nDoctor warnings ({len(warning_rules)} unique rules, -{len(warning_rules)} points):")
             for rule_id, count in sorted(warning_rules.items()):
                 print(f"  {rule_id} ({count} finding{'s' if count > 1 else ''})")
-        penalties = []
-        ruff_passed = tool_results.get("ruff", {}).get("passed")
-        ty_passed = tool_results.get("ty", {}).get("passed")
-        if ruff_passed is False:
-            penalties.append("ruff failed: -5")
-        if ty_passed is False:
-            penalties.append("ty failed: -5")
-        bandit_highs = _count_bandit_highs(tool_results["bandit"]["stdout"]) if "bandit" in tool_results else 0
+        print("\nToolchain impact:")
+        for tool_name, entry in toolchain.items():
+            suffix = f" ({entry['reason']})" if entry.get("reason") else ""
+            print(f"  {tool_name}: {entry['status']}{suffix}")
+        bandit_highs = score_components["toolchain_impact"]["bandit_high_findings"]
         if bandit_highs:
-            penalties.append(f"bandit {bandit_highs} high findings: -{min(15, bandit_highs * 5)}")
-        if penalties:
-            print(f"\nTool penalties:")
-            for p in penalties:
-                print(f"  {p}")
-        print(f"\nFinal score: {final_score}/100 ({final_label})")
+            penalty = score_components["toolchain_impact"]["bandit_penalty_points"]
+            print(f"  bandit high findings: {bandit_highs} (-{penalty} composite points)")
+        print(
+            f"\nComposite score: "
+            f"{composite_score if composite_score is not None else doctor_score}/100 "
+            f"({_label_for_score(composite_score if composite_score is not None else doctor_score)})"
+        )
         return 0
 
     output_format = args.output_format or ("json" if args.json else "text")
@@ -676,16 +870,18 @@ def main() -> int:
             args=args,
             command_results=command_results,
             doctor_report=native_result,
-            final_score=final_score,
-            final_label=final_label,
+            doctor_score=doctor_score,
+            composite_score=composite_score,
+            toolchain=toolchain,
+            score_components=score_components,
         )
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
         _print_human_report(
             doctor_report=native_result,
-            command_results=command_results,
-            final_score=final_score,
-            final_label=final_label,
+            toolchain=toolchain,
+            doctor_score=doctor_score,
+            composite_score=composite_score,
             verbose=args.verbose,
         )
 
@@ -701,11 +897,10 @@ def main() -> int:
         if args.fail_on == "warning" and (has_error or has_warning):
             return 1
 
-    has_command_failure = any(not result["passed"] for result in command_results)
     structure_failed = bool(
         native_result and any(issue["severity"] == "error" for issue in native_result["issues"])
     )
-    return 1 if has_command_failure or structure_failed else 0
+    return 1 if structure_failed or _should_fail_for_tools(args, toolchain) else 0
 
 
 if __name__ == "__main__":

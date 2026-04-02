@@ -498,6 +498,18 @@ mod rule_tests {
         let issues = issues_for("architecture/giant-function", "app/main.py", &source);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].check, "architecture/giant-function");
+        assert_eq!(issues[0].severity, "warning");
+    }
+
+    #[test]
+    fn giant_route_handler_positive() {
+        let mut source = "from fastapi import APIRouter\nrouter = APIRouter()\n\n@router.get('/items')\ndef huge():\n".to_string();
+        for i in 0..450 {
+            source.push_str(&format!("    x{} = {}\n", i, i));
+        }
+        let issues = issues_for("architecture/giant-route-handler", "app/routers/items.py", &source);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].check, "architecture/giant-route-handler");
         assert_eq!(issues[0].severity, "error");
     }
 
@@ -513,7 +525,7 @@ mod rule_tests {
             source.push_str(&format!("    x{} = {}\n", i, i));
         }
         let issues =
-            issues_for_with_config("architecture/giant-function", "app/main.py", &source, cfg);
+            issues_for_with_config("architecture/large-function", "app/main.py", &source, cfg);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].check, "architecture/large-function");
         assert_eq!(issues[0].severity, "warning");
@@ -1446,6 +1458,7 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
         assert!(ids.len() >= 50);
         assert!(ids.contains(&"security/unsafe-yaml-load".to_string()));
         assert!(ids.contains(&"architecture/giant-function".to_string()));
+        assert!(ids.contains(&"architecture/giant-route-handler".to_string()));
         assert!(ids.contains(&"architecture/large-function".to_string()));
         assert!(ids.contains(&"api-surface/missing-tags".to_string()));
     }

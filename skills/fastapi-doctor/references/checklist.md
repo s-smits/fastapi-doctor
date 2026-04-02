@@ -3,7 +3,7 @@
 > **Prerequisite:** Run from the target project's working directory, or pass
 > `--repo-root /path/to/project` when scanning a different checkout.
 
-## Fast Pass (score + ruff + pyright)
+## Fast Pass (doctor + ruff + ty status)
 
 ```bash
 uv run fastapi-doctor
@@ -54,7 +54,7 @@ Use for:
 uv run fastapi-doctor --json
 ```
 
-Returns JSON with `score`, `label`, `categories`, `issues[]`, and external tool results.
+Returns JSON with `score`/`doctor_score`, optional `composite_score`, `toolchain`, `score_components`, `scope`, `categories`, and `issues[]`.
 Useful for CI integration.
 
 ## Monorepo Pass
@@ -101,6 +101,6 @@ backends are the security boundary.
 uv run pytest tests/routers/ -q
 uv run pytest tests/interfaces/ -q
 uv run pytest tests/test_doctor_checks.py -q
-uv run pyright
+uv run ty check
 uv run ruff check <code-dir-or-package>
 ```

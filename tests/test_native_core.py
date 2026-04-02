@@ -18,6 +18,7 @@ def test_native_rule_ids_expose_the_rust_registry() -> None:
     assert "security/unsafe-yaml-load" in rule_ids
     assert "correctness/naive-datetime" in rule_ids
     assert "architecture/giant-function" in rule_ids
+    assert "architecture/giant-route-handler" in rule_ids
 
 
 def test_get_project_context_returns_layout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -32,6 +33,7 @@ def test_get_project_context_returns_layout(monkeypatch: pytest.MonkeyPatch, tmp
 
     assert context["layout"]["repo_root"] == str(tmp_path)
     assert context["layout"]["code_dir"] == str(package_dir)
+    assert context["scope"]["doctor_scope"]["root"] == "pkg"
 
 
 def test_get_scan_plan_returns_tool_target(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -45,6 +47,7 @@ def test_get_scan_plan_returns_tool_target(monkeypatch: pytest.MonkeyPatch, tmp_
     plan = native_core.get_scan_plan(static_only=True)
 
     assert plan["tool_target"] == "pkg"
+    assert plan["tool_targets"] == ["pkg"]
     assert isinstance(plan["active_rules"], list)
     assert "project_context" in plan
 
@@ -61,6 +64,7 @@ def test_create_scan_session_returns_reusable_plan(monkeypatch: pytest.MonkeyPat
     plan = session.get_scan_plan()
 
     assert plan["tool_target"] == "pkg"
+    assert plan["tool_targets"] == ["pkg"]
     assert isinstance(plan["active_rules"], list)
 
 

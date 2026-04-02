@@ -118,6 +118,7 @@ def _coerce_native_result(raw: dict[str, Any]) -> dict[str, Any]:
             "routes": [dict(item) for item in raw.get("routes", [])],
             "suppressions": [dict(item) for item in raw.get("suppressions", [])],
             "route_count": int(raw.get("route_count", 0) or 0),
+            "analyzed_file_count": int(raw.get("analyzed_file_count", 0) or 0),
             "openapi_path_count": raw.get("openapi_path_count"),
             "categories": dict(raw.get("categories", {})),
             "score": int(raw.get("score", 100) or 100),
@@ -134,6 +135,7 @@ def _coerce_native_result(raw: dict[str, Any]) -> dict[str, Any]:
             _suppression_tuple_to_dict(item) for item in raw.get("suppressions", [])
         ],
         "route_count": int(raw.get("route_count", 0) or 0),
+        "analyzed_file_count": int(raw.get("analyzed_file_count", 0) or 0),
         "openapi_path_count": raw.get("openapi_path_count"),
         "categories": dict(raw.get("categories", {})),
         "score": int(raw.get("score", 100) or 100),

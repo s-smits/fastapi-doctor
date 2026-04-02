@@ -4,6 +4,8 @@ use std::collections::HashSet;
 use fastapi_doctor_core::ast_helpers::*;
 use fastapi_doctor_core::{Config, Issue, ModuleIndex};
 
+use crate::engine::RuleSelection;
+
 pub(crate) fn collect_async_without_await_issues(
     module: &ModuleIndex,
     function_index: &FunctionIndex,
@@ -89,6 +91,8 @@ pub(crate) fn collect_async_without_await_issues(
 pub(crate) fn collect_giant_function_issues(
     module: &ModuleIndex,
     suite: &ast::Suite,
+    function_index: &FunctionIndex,
+    rules: &RuleSelection,
     config: &Config,
 ) -> Vec<Issue> {
     let mut issues = Vec::new();
@@ -101,10 +105,39 @@ pub(crate) fn collect_giant_function_issues(
             continue;
         }
 
-        if config.giant_function_threshold > 0 && size > config.giant_function_threshold {
+        let is_route_handler = function_index
+            .functions
+            .iter()
+            .find(|candidate| candidate.name == function.name && candidate.line == line)
+            .is_some_and(|candidate| candidate.is_route_handler);
+
+        if rules.giant_route_handler
+            && is_route_handler
+            && config.giant_function_threshold > 0
+            && size > config.giant_function_threshold
+        {
+            issues.push(Issue {
+                check: "architecture/giant-route-handler",
+                severity: "error",
+                category: "Architecture",
+                line,
+                path: module.rel_path.to_string(),
+                message: Box::leak(
+                    format!(
+                        "Route handler '{}' is {} lines (>{}) — split request handling from business logic",
+                        function.name, size, config.giant_function_threshold
+                    )
+                    .into_boxed_str(),
+                ),
+                help: "Large API handlers hide validation, auth, and side-effect boundaries. Move orchestration to services and keep request handlers narrow.",
+            });
+        } else if rules.giant_function
+            && config.giant_function_threshold > 0
+            && size > config.giant_function_threshold
+        {
             issues.push(Issue {
                 check: "architecture/giant-function",
-                severity: "error",
+                severity: "warning",
                 category: "Architecture",
                 line,
                 path: module.rel_path.to_string(),
@@ -117,7 +150,10 @@ pub(crate) fn collect_giant_function_issues(
                 ),
                 help: "Break into smaller, testable functions. Each should do one thing.",
             });
-        } else if config.large_function_threshold > 0 && size > config.large_function_threshold {
+        } else if rules.large_function
+            && config.large_function_threshold > 0
+            && size > config.large_function_threshold
+        {
             issues.push(Issue {
                 check: "architecture/large-function",
                 severity: "warning",

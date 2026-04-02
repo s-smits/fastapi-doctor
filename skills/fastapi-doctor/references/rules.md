@@ -104,10 +104,14 @@ The rule keeps real writes as findings, but treats `/tmp`, `tempfile`, and recog
 
 ## Architecture Rules
 
-### `architecture/giant-function` (error)
-Functions >400 lines are genuinely unmanageable. Python functions are naturally longer than
-React components (type hints, docstrings, explicit error handling), so the threshold is
-higher than react-doctor's. Extract sub-functions with clear responsibilities.
+### `architecture/giant-route-handler` (error)
+Strict-only blocker for oversized API route handlers. Large request-boundary functions hide
+auth, validation, and side-effect boundaries. Keep handlers narrow and move orchestration to services.
+
+### `architecture/giant-function` (warning)
+Strict-only advisory pressure for non-route functions >400 lines. This rule is intentionally
+context-blind: it highlights review targets, but long deterministic offline builders are not
+automatically treated as the same risk as giant request handlers.
 
 ### `architecture/large-function` (warning)
 Functions >200 lines should be considered for splitting.
@@ -233,7 +237,8 @@ error before trusting the report.
 ## Extension Guidance
 
 If you add a new rule, update:
-- `src/fastapi_doctor/runner.py` and the appropriate `src/fastapi_doctor/checks/*.py` module
-- `tests/test_doctor_checks.py` (regression tests)
+- `rust/fastapi_doctor_rules/src/registry.rs` and the relevant Rust rule module
+- `rust/fastapi_doctor_rules/src/tests.rs` (regression tests)
+- `rust/fastapi_doctor_rules/src/rule_selector.rs` if the rule is selectable by ID/profile
 - this reference file (rule definitions)
 - `skills/fastapi-doctor/SKILL.md` (rule tables)

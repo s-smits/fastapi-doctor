@@ -5,7 +5,7 @@ description: Use when refactoring fastapi-doctor toward a Ruff/Ty-style Rust-fir
 
 # Astral Rust Refactor
 
-Use this skill when changing the Rust architecture in `/Users/air/Developer/fastapi-doctor`.
+Use this skill when changing the Rust architecture in the current `fastapi-doctor` workspace.
 
 ## Goal
 
@@ -19,23 +19,23 @@ Refactor `fastapi-doctor` toward these constraints:
 
 ## Read Order
 
-Read [MIMIC_RULES.md](/Users/air/Developer/fastapi-doctor/skills/astral-rust-refactor/references/MIMIC_RULES.md) first.
+Read [MIMIC_RULES.md](references/MIMIC_RULES.md) first.
 
 Then load only the relevant Rust references:
 - workspace root / thin crate export shape:
-  [REFERENCE_1_workspace_lib.rs](/Users/air/Developer/fastapi-doctor/skills/astral-rust-refactor/references/REFERENCE_1_workspace_lib.rs)
+  [REFERENCE_1_workspace_lib.rs](references/REFERENCE_1_workspace_lib.rs)
 - workspace resolver / scoped settings resolution:
-  [REFERENCE_2_workspace_resolver.rs](/Users/air/Developer/fastapi-doctor/skills/astral-rust-refactor/references/REFERENCE_2_workspace_resolver.rs)
+  [REFERENCE_2_workspace_resolver.rs](references/REFERENCE_2_workspace_resolver.rs)
 - parsed-module wrapper and parser facade shape:
-  [REFERENCE_3_parsed_module.rs](/Users/air/Developer/fastapi-doctor/skills/astral-rust-refactor/references/REFERENCE_3_parsed_module.rs)
+  [REFERENCE_3_parsed_module.rs](references/REFERENCE_3_parsed_module.rs)
 - project file filter and walker shape:
-  [REFERENCE_4_project_walk.rs](/Users/air/Developer/fastapi-doctor/skills/astral-rust-refactor/references/REFERENCE_4_project_walk.rs)
+  [REFERENCE_4_project_walk.rs](references/REFERENCE_4_project_walk.rs)
 - project model and rules access shape:
-  [REFERENCE_5_project_core.rs](/Users/air/Developer/fastapi-doctor/skills/astral-rust-refactor/references/REFERENCE_5_project_core.rs)
+  [REFERENCE_5_project_core.rs](references/REFERENCE_5_project_core.rs)
 - rule selector and selection parsing shape:
-  [REFERENCE_6_rule_selector.rs](/Users/air/Developer/fastapi-doctor/skills/astral-rust-refactor/references/REFERENCE_6_rule_selector.rs)
+  [REFERENCE_6_rule_selector.rs](references/REFERENCE_6_rule_selector.rs)
 - structured suppression handling shape:
-  [REFERENCE_7_suppression.rs](/Users/air/Developer/fastapi-doctor/skills/astral-rust-refactor/references/REFERENCE_7_suppression.rs)
+  [REFERENCE_7_suppression.rs](references/REFERENCE_7_suppression.rs)
 
 ## Hard Rules
 
