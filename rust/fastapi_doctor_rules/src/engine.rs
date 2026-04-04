@@ -1,8 +1,12 @@
-use fastapi_doctor_core::ast_helpers::FunctionIndex;
+use std::collections::HashSet;
+
+use fastapi_doctor_core::ast_helpers::{
+    walk_expr_tree, walk_suite_exprs, walk_suite_stmts, FunctionIndex,
+};
 use fastapi_doctor_core::{
     issue, parse_suite, Config, Issue, ModuleIndex, ModuleRecord, RouteRecord,
 };
-use rustpython_parser::ast;
+use rustpython_parser::ast::{self, Expr, Stmt};
 
 use crate::architecture;
 use crate::configuration;
@@ -15,22 +19,194 @@ use crate::routes;
 use crate::rule_selector::parse_static_rule;
 use crate::security;
 
-fn is_startup_entrypoint_module(module: &ModuleIndex<'_>) -> bool {
-    module.file_name.as_deref() == Some("main.py")
-        && (module.source.contains("FastAPI(")
-            || module.source.contains("FastAPI (")
-            || module.source.contains("def create_app(")
-            || module.source.contains("async def create_app("))
+fn is_startup_entrypoint_module(module: &ModuleIndex<'_>, suite: &ast::Suite) -> bool {
+    if module.file_name.as_deref() != Some("main.py") {
+        return false;
+    }
+
+    let mut has_fastapi_call = false;
+    for stmt in suite {
+        match stmt {
+            Stmt::FunctionDef(node) if node.name.as_str() == "create_app" => return true,
+            Stmt::AsyncFunctionDef(node) if node.name.as_str() == "create_app" => return true,
+            _ => {}
+        }
+    }
+
+    walk_suite_exprs(suite, &mut |expr| {
+        let Expr::Call(call) = expr else { return };
+        if call_callee_name(&call.func).is_some_and(|name| name == "FastAPI") {
+            has_fastapi_call = true;
+        }
+    });
+
+    has_fastapi_call
 }
 
-fn has_startup_validation_signal(module: &ModuleIndex<'_>) -> bool {
-    module.source.contains("validate_") && module.source.contains("startup")
-        || module.source.contains("settings.validate")
-        || module.source.contains("check_config")
-        || module.source.contains("verify_env")
-        || ((module.source.contains("config import settings")
-            || module.source.contains("settings import settings"))
-            && module.source.contains("settings."))
+fn call_callee_name(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Name(name) => Some(name.id.as_str()),
+        Expr::Attribute(attr) => Some(attr.attr.as_str()),
+        _ => None,
+    }
+}
+
+fn is_config_like_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower == "settings"
+        || lower.ends_with("_settings")
+        || lower == "config"
+        || lower.ends_with("_config")
+        || lower == "get_settings"
+        || lower == "load_settings"
+}
+
+fn is_config_like_module_path(module_path: &str) -> bool {
+    module_path.split('.').any(is_config_like_name)
+}
+
+fn expr_mentions_config(expr: &Expr, config_names: &HashSet<String>) -> bool {
+    let mut found = false;
+    walk_expr_tree(expr, &mut |node| {
+        if found {
+            return;
+        }
+        match node {
+            Expr::Name(name)
+                if config_names.contains(name.id.as_str()) || is_config_like_name(name.id.as_str()) =>
+            {
+                found = true;
+            }
+            Expr::Attribute(attr)
+                if matches!(
+                    &*attr.value,
+                    Expr::Name(base)
+                        if config_names.contains(base.id.as_str())
+                            || is_config_like_name(base.id.as_str())
+                ) =>
+            {
+                found = true;
+            }
+            _ => {}
+        }
+    });
+    found
+}
+
+fn decorator_is_startup_event(decorator: &Expr) -> bool {
+    let Expr::Call(call) = decorator else {
+        return false;
+    };
+    let Expr::Attribute(attr) = &*call.func else {
+        return false;
+    };
+    if attr.attr.as_str() != "on_event" {
+        return false;
+    }
+    matches!(
+        call.args.first(),
+        Some(Expr::Constant(constant))
+            if matches!(&constant.value, ast::Constant::Str(value) if value == "startup")
+    )
+}
+
+fn has_startup_validation_signal(suite: &ast::Suite) -> bool {
+    let mut config_names: HashSet<String> = HashSet::new();
+    let mut has_startup_hook = false;
+
+    walk_suite_stmts(suite, &mut |stmt| match stmt {
+        Stmt::Import(node) => {
+            for alias in &node.names {
+                let binding = alias.asname.as_deref().unwrap_or(alias.name.as_str());
+                if is_config_like_name(binding) || is_config_like_module_path(alias.name.as_str()) {
+                    config_names.insert(binding.to_string());
+                }
+            }
+        }
+        Stmt::ImportFrom(node) => {
+            let module_is_config = node
+                .module
+                .as_deref()
+                .is_some_and(is_config_like_module_path);
+            for alias in &node.names {
+                let binding = alias.asname.as_deref().unwrap_or(alias.name.as_str());
+                if module_is_config
+                    || is_config_like_name(binding)
+                    || is_config_like_name(alias.name.as_str())
+                {
+                    config_names.insert(binding.to_string());
+                }
+            }
+        }
+        Stmt::FunctionDef(node) => {
+            if node.decorator_list.iter().any(decorator_is_startup_event) {
+                has_startup_hook = true;
+            }
+        }
+        Stmt::AsyncFunctionDef(node) => {
+            if node.decorator_list.iter().any(decorator_is_startup_event) {
+                has_startup_hook = true;
+            }
+        }
+        _ => {}
+    });
+
+    if has_startup_hook {
+        return true;
+    }
+
+    let mut has_lifespan = false;
+    let mut has_config_usage = false;
+    let mut has_validation_call = false;
+
+    walk_suite_exprs(suite, &mut |expr| {
+        if has_lifespan && has_config_usage && has_validation_call {
+            return;
+        }
+
+        let Expr::Call(call) = expr else {
+            return;
+        };
+
+        if call_callee_name(&call.func).is_some_and(|name| name == "FastAPI")
+            && call
+                .keywords
+                .iter()
+                .any(|kw| kw.arg.as_deref() == Some("lifespan"))
+        {
+            has_lifespan = true;
+        }
+
+        if expr_mentions_config(expr, &config_names) {
+            has_config_usage = true;
+        }
+
+        if let Some(callee_name) = call_callee_name(&call.func) {
+            let lower = callee_name.to_ascii_lowercase();
+            let is_validationish = (lower.contains("validate")
+                || lower.contains("verify")
+                || lower.starts_with("check"))
+                && (lower.contains("config")
+                    || lower.contains("setting")
+                    || lower.contains("env")
+                    || lower.contains("startup"));
+
+            if is_validationish
+                || call.args.iter().any(|arg| expr_mentions_config(arg, &config_names))
+                || call
+                    .keywords
+                    .iter()
+                    .any(|kw| expr_mentions_config(&kw.value, &config_names))
+            {
+                if lower.contains("validate") || lower.contains("verify") || lower.starts_with("check")
+                {
+                    has_validation_call = true;
+                }
+            }
+        }
+    });
+
+    has_lifespan || has_config_usage || has_validation_call
 }
 
 #[derive(Clone, Default)]
@@ -50,11 +226,11 @@ pub struct RuleSelection {
     pub avoid_os_path: bool,
     pub deprecated_typing_imports: bool,
     pub mutable_default_arg: bool,
+    pub import_time_default_call: bool,
     pub naive_datetime: bool,
     pub return_in_finally: bool,
     pub threading_lock_in_async: bool,
     pub unreachable_code: bool,
-    pub heavy_imports: bool,
     pub assert_in_production: bool,
     pub cors_wildcard: bool,
     pub exception_detail_leak: bool,
@@ -79,10 +255,13 @@ pub struct RuleSelection {
     pub sensitive_field_type: bool,
     pub normalized_name_collision: bool,
     pub get_with_side_effect: bool,
+    pub exposed_mutable_state: bool,
     pub serverless_filesystem_write: bool,
     pub missing_http_timeout: bool,
     pub god_module: bool,
     pub passthrough_function: bool,
+    pub hidden_dependency_instantiation: bool,
+    pub flag_argument_dispatch: bool,
     pub avoid_sys_exit: bool,
     pub engine_pool_pre_ping: bool,
     pub missing_startup_validation: bool,
@@ -124,6 +303,10 @@ impl RuleSelection {
             StaticRule::ArchitectureStarImport => self.star_import = true,
             StaticRule::ArchitectureGodModule => self.god_module = true,
             StaticRule::ArchitecturePassthroughFunction => self.passthrough_function = true,
+            StaticRule::ArchitectureHiddenDependencyInstantiation => {
+                self.hidden_dependency_instantiation = true
+            }
+            StaticRule::ArchitectureFlagArgumentDispatch => self.flag_argument_dispatch = true,
             StaticRule::ArchitectureAvoidSysExit => self.avoid_sys_exit = true,
             StaticRule::ArchitectureEnginePoolPrePing => self.engine_pool_pre_ping = true,
             StaticRule::ArchitectureMissingStartupValidation => {
@@ -154,16 +337,17 @@ impl RuleSelection {
             StaticRule::CorrectnessAvoidOsPath => self.avoid_os_path = true,
             StaticRule::CorrectnessDeprecatedTypingImports => self.deprecated_typing_imports = true,
             StaticRule::CorrectnessMutableDefaultArg => self.mutable_default_arg = true,
+            StaticRule::CorrectnessImportTimeDefaultCall => self.import_time_default_call = true,
             StaticRule::CorrectnessNaiveDatetime => self.naive_datetime = true,
             StaticRule::CorrectnessReturnInFinally => self.return_in_finally = true,
             StaticRule::CorrectnessThreadingLockInAsync => self.threading_lock_in_async = true,
             StaticRule::CorrectnessUnreachableCode => self.unreachable_code = true,
             StaticRule::CorrectnessGetWithSideEffect => self.get_with_side_effect = true,
+            StaticRule::CorrectnessExposedMutableState => self.exposed_mutable_state = true,
             StaticRule::CorrectnessServerlessFilesystemWrite => {
                 self.serverless_filesystem_write = true
             }
             StaticRule::CorrectnessMissingHttpTimeout => self.missing_http_timeout = true,
-            StaticRule::PerformanceHeavyImports => self.heavy_imports = true,
             StaticRule::PerformanceSequentialAwaits => self.sequential_awaits = true,
             StaticRule::PerformanceRegexInLoop => self.regex_in_loop = true,
             StaticRule::PerformanceNPlusOneHint => self.n_plus_one_hint = true,
@@ -204,6 +388,7 @@ impl RuleSelection {
             || self.sync_io_in_async
             || self.misused_async_constructs
             || self.mutable_default_arg
+            || self.import_time_default_call
             || self.return_in_finally
             || self.threading_lock_in_async
             || self.unreachable_code
@@ -224,9 +409,12 @@ impl RuleSelection {
             || self.sensitive_field_type
             || self.normalized_name_collision
             || self.get_with_side_effect
+            || self.exposed_mutable_state
             || self.serverless_filesystem_write
             || self.missing_http_timeout
             || self.passthrough_function
+            || self.hidden_dependency_instantiation
+            || self.flag_argument_dispatch
             || self.avoid_sys_exit
             || self.engine_pool_pre_ping
             || self.fat_route_handler
@@ -239,7 +427,6 @@ impl RuleSelection {
             || self.avoid_os_path
             || self.deprecated_typing_imports
             || self.naive_datetime
-            || self.heavy_imports
             || self.assert_in_production
             || self.cors_wildcard
             || self.subprocess_shell_true
@@ -324,6 +511,11 @@ pub fn analyze_suite(
             module, suite,
         ));
     }
+    if rules.import_time_default_call {
+        issues.extend(correctness::collect_import_time_default_call_issues(
+            module, suite,
+        ));
+    }
     if rules.return_in_finally {
         issues.extend(correctness::collect_return_in_finally_issues(module, suite));
     }
@@ -384,6 +576,11 @@ pub fn analyze_suite(
             module, suite,
         ));
     }
+    if rules.exposed_mutable_state {
+        issues.extend(correctness::collect_exposed_mutable_state_issues(
+            module, suite,
+        ));
+    }
     if rules.fat_route_handler {
         issues.extend(architecture::collect_fat_route_handler_issues(
             module, suite, config,
@@ -391,6 +588,16 @@ pub fn analyze_suite(
     }
     if rules.passthrough_function {
         issues.extend(architecture::collect_passthrough_function_issues(
+            module, suite,
+        ));
+    }
+    if rules.hidden_dependency_instantiation {
+        issues.extend(architecture::collect_hidden_dependency_instantiation_issues(
+            module, suite,
+        ));
+    }
+    if rules.flag_argument_dispatch {
+        issues.extend(architecture::collect_flag_argument_dispatch_issues(
             module, suite,
         ));
     }
@@ -535,17 +742,6 @@ pub fn analyze_module_with_suite(
         "Optional",
         "Union",
     ];
-    let heavy_libs = [
-        "agno",
-        "openai",
-        "pandas",
-        "numpy",
-        "torch",
-        "transformers",
-        "playwright",
-        "langchain",
-    ];
-
     for line in &module.lines {
         if allow_assert
             && (line.trimmed_start.starts_with("assert ")
@@ -721,34 +917,6 @@ pub fn analyze_module_with_suite(
             }
         }
 
-        if rules.heavy_imports && (line.raw.starts_with("import ") || line.raw.starts_with("from "))
-        {
-            for lib in heavy_libs {
-                let import_prefix = format!("import {}", lib);
-                let from_prefix = format!("from {}", lib);
-                if line.trimmed_start.starts_with(&import_prefix)
-                    || line.trimmed_start.starts_with(&from_prefix)
-                {
-                    issues.push(Issue {
-                        check: "performance/heavy-imports",
-                        severity: "warning",
-                        category: "Performance",
-                        line: line.number,
-                        path: module.rel_path.to_string(),
-                        message: Box::leak(
-                            format!(
-                                "Heavy library '{{{}}}' imported at module level — degrades serverless cold-starts",
-                                lib
-                            )
-                            .into_boxed_str(),
-                        ),
-                        help: "Move the import inside the function or router handler that uses it (lazy loading).",
-                    });
-                    break;
-                }
-            }
-        }
-
         if allow_direct_env {
             let direct_env_candidate = line.trimmed.contains("os.environ")
                 && !line.trimmed.contains("# noqa: direct-env")
@@ -863,18 +1031,18 @@ pub fn analyze_module_with_suite(
         }
 
         if rules.missing_startup_validation
-            && is_startup_entrypoint_module(module)
+            && is_startup_entrypoint_module(module, suite)
             && line.number == 1
         {
-            if !has_startup_validation_signal(module) {
+            if !has_startup_validation_signal(suite) {
                 issues.push(issue(
                     "architecture/missing-startup-validation",
                     "warning",
                     "Architecture",
                     1,
                     module.rel_path,
-                    "Main app entry point missing explicit startup configuration validation",
-                    "Add a 'fail-fast' validation step during app startup to verify critical settings.",
+                    "Main app entry point creates the FastAPI app without an evident startup/lifespan validation or settings bootstrap signal",
+                    "Add a lifespan/startup hook or touch validated settings/config during app bootstrap so startup fails fast when configuration is broken.",
                 ));
             }
         }

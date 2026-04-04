@@ -1,4 +1,4 @@
-use rustpython_parser::ast::{self, Expr, Ranged, Stmt};
+use rustpython_parser::ast::{self, Expr, Pattern, Ranged, Stmt};
 use std::collections::HashSet;
 
 use fastapi_doctor_core::ast_helpers::*;
@@ -482,4 +482,333 @@ pub(crate) fn collect_passthrough_function_issues(
     issues
 }
 
-// ── Performance: sequential-awaits ──────────────────────────────────────
+const HIDDEN_DEP_CONSTRUCTORS: &[&str] = &[
+    "Session",
+    "AsyncSession",
+    "AsyncClient",
+    "Client",
+    "KafkaProducer",
+    "KafkaConsumer",
+    "Redis",
+    "StrictRedis",
+    "MongoClient",
+    "Elasticsearch",
+];
+
+const HIDDEN_DEP_PROVIDERS: &[&str] = &[
+    "get_db",
+    "get_session",
+    "get_async_session",
+    "get_client",
+    "get_http_client",
+    "get_settings",
+];
+
+pub(crate) fn collect_hidden_dependency_instantiation_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
+    if module.rel_path.contains("tests/")
+        || module.rel_path.contains("scripts/")
+        || !module.has_path_part(&["routers", "services", "interfaces"])
+    {
+        return Vec::new();
+    }
+
+    let mut issues = Vec::new();
+    collect_hidden_dependency_issues_in_block(module, suite, &mut issues);
+    issues
+}
+
+fn collect_hidden_dependency_issues_in_block(
+    module: &ModuleIndex,
+    stmts: &[Stmt],
+    issues: &mut Vec<Issue>,
+) {
+    for stmt in stmts {
+        match stmt {
+            Stmt::FunctionDef(node) => {
+                analyze_hidden_dependency_function(
+                    module,
+                    node.name.as_str(),
+                    &node.body,
+                    node.range(),
+                    issues,
+                );
+                collect_hidden_dependency_issues_in_block(module, &node.body, issues);
+            }
+            Stmt::AsyncFunctionDef(node) => {
+                analyze_hidden_dependency_function(
+                    module,
+                    node.name.as_str(),
+                    &node.body,
+                    node.range(),
+                    issues,
+                );
+                collect_hidden_dependency_issues_in_block(module, &node.body, issues);
+            }
+            Stmt::ClassDef(node) => {
+                collect_hidden_dependency_issues_in_block(module, &node.body, issues);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn analyze_hidden_dependency_function(
+    module: &ModuleIndex,
+    name: &str,
+    body: &[Stmt],
+    range: rustpython_parser::ast::text_size::TextRange,
+    issues: &mut Vec<Issue>,
+) {
+    if name == "__init__" {
+        return;
+    }
+
+    let source = module.source_slice(range);
+    if source.contains("# noqa: architecture") {
+        return;
+    }
+
+    let nested_ranges = nested_def_ranges(body);
+    let mut first_hit: Option<(usize, &'static str)> = None;
+
+    walk_suite_exprs(body, &mut |expr| {
+        if first_hit.is_some() || expr_inside_nested_range(expr.range(), &nested_ranges) {
+            return;
+        }
+
+        let Expr::Call(call) = expr else {
+            return;
+        };
+        if let Some(dep_name) = hidden_dependency_call_name(call) {
+            let line = module.line_for_offset(call.range.start().to_usize());
+            if !module.is_rule_suppressed(line, "architecture/hidden-dependency-instantiation") {
+                first_hit = Some((line, dep_name));
+            }
+        }
+    });
+
+    let Some((line, dep_name)) = first_hit else {
+        return;
+    };
+    issues.push(Issue {
+        check: "architecture/hidden-dependency-instantiation",
+        severity: "warning",
+        category: "Architecture",
+        line,
+        path: module.rel_path.to_string(),
+        message: Box::leak(
+            format!(
+                "Function '{}' resolves dependency '{}' inside its body",
+                name, dep_name
+            )
+            .into_boxed_str(),
+        ),
+        help: "Inject dependencies via function arguments, Depends(...), or class __init__ instead of wiring them inside application logic. Lazy imports for performance are fine; hidden dependency resolution is not.",
+    });
+}
+
+fn nested_def_ranges(stmts: &[Stmt]) -> Vec<rustpython_parser::ast::text_size::TextRange> {
+    let mut ranges = Vec::new();
+    for stmt in stmts {
+        match stmt {
+            Stmt::FunctionDef(node) => ranges.push(node.range()),
+            Stmt::AsyncFunctionDef(node) => ranges.push(node.range()),
+            Stmt::ClassDef(node) => ranges.push(node.range()),
+            _ => {}
+        }
+    }
+    ranges
+}
+
+fn expr_inside_nested_range(
+    range: rustpython_parser::ast::text_size::TextRange,
+    nested_ranges: &[rustpython_parser::ast::text_size::TextRange],
+) -> bool {
+    let start = range.start().to_usize();
+    nested_ranges.iter().any(|nested| {
+        let nested_start = nested.start().to_usize();
+        let nested_end = nested.end().to_usize();
+        nested_start <= start && start < nested_end
+    })
+}
+
+fn hidden_dependency_call_name(call: &ast::ExprCall) -> Option<&'static str> {
+    match &*call.func {
+        Expr::Name(name) => hidden_dependency_name(name.id.as_str(), true),
+        Expr::Attribute(attr) => {
+            let is_self_like = matches!(
+                &*attr.value,
+                Expr::Name(base) if matches!(base.id.as_str(), "self" | "cls" | "super")
+            );
+            if is_self_like {
+                None
+            } else {
+                hidden_dependency_name(attr.attr.as_str(), false)
+            }
+        }
+        _ => None,
+    }
+}
+
+fn hidden_dependency_name(name: &str, allow_provider_functions: bool) -> Option<&'static str> {
+    HIDDEN_DEP_CONSTRUCTORS
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == name)
+        .or_else(|| {
+            allow_provider_functions
+                .then_some(())
+                .and_then(|_| HIDDEN_DEP_PROVIDERS.iter().copied().find(|candidate| *candidate == name))
+        })
+}
+
+pub(crate) fn collect_flag_argument_dispatch_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
+    let mut issues = Vec::new();
+
+    for stmt in suite {
+        let (args, body, name, range) = match stmt {
+            Stmt::FunctionDef(node) => (&node.args, &node.body, node.name.as_str(), node.range()),
+            Stmt::AsyncFunctionDef(node) => {
+                (&node.args, &node.body, node.name.as_str(), node.range())
+            }
+            _ => continue,
+        };
+
+        let param_names: HashSet<&str> = args
+            .args
+            .iter()
+            .skip(usize::from(
+                args.args
+                    .first()
+                    .is_some_and(|arg| arg.def.arg.as_str() == "self"),
+            ))
+            .map(|arg| arg.def.arg.as_str())
+            .collect();
+        if param_names.is_empty() {
+            continue;
+        }
+
+        let source = module.source_slice(range);
+        if source.contains("# noqa: architecture") {
+            continue;
+        }
+
+        let Some(discriminant) = top_level_flag_discriminant(body, &param_names) else {
+            continue;
+        };
+        let line = module.line_for_offset(range.start().to_usize());
+        if module.is_rule_suppressed(line, "architecture/flag-argument-dispatch") {
+            continue;
+        }
+
+        issues.push(Issue {
+            check: "architecture/flag-argument-dispatch",
+            severity: "warning",
+            category: "Architecture",
+            line,
+            path: module.rel_path.to_string(),
+            message: Box::leak(
+                format!(
+                    "Function '{}' dispatches behavior by branching on parameter '{}'",
+                    name, discriminant
+                )
+                .into_boxed_str(),
+            ),
+            help: "Split target-specific behavior into explicit functions or strategies instead of branching on a mode/target flag.",
+        });
+    }
+
+    issues
+}
+
+fn top_level_flag_discriminant<'a>(body: &'a [Stmt], params: &HashSet<&'a str>) -> Option<&'a str> {
+    for stmt in body {
+        match stmt {
+            Stmt::If(node) => {
+                if !node.orelse.is_empty()
+                    && branch_body_has_material_behavior(&node.body)
+                    && branch_body_has_material_behavior(&node.orelse)
+                {
+                    if let Some(name) = compare_uses_param_literal(&node.test, params) {
+                        return Some(name);
+                    }
+                }
+            }
+            Stmt::Match(node) => {
+                if let Expr::Name(subject) = &*node.subject {
+                    if params.contains(subject.id.as_str())
+                        && node.cases.len() >= 2
+                        && node.cases.iter().all(|case| {
+                            case.guard.is_none()
+                                && pattern_is_literal_like(&case.pattern)
+                                && branch_body_has_material_behavior(&case.body)
+                        })
+                    {
+                        return Some(subject.id.as_str());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn compare_uses_param_literal<'a>(expr: &'a Expr, params: &HashSet<&'a str>) -> Option<&'a str> {
+    let Expr::Compare(compare) = expr else {
+        return None;
+    };
+    if compare.ops.len() != 1 || compare.comparators.len() != 1 {
+        return None;
+    }
+    let left_name = match &*compare.left {
+        Expr::Name(name) if params.contains(name.id.as_str()) => Some(name.id.as_str()),
+        _ => None,
+    };
+    let right_name = match &compare.comparators[0] {
+        Expr::Name(name) if params.contains(name.id.as_str()) => Some(name.id.as_str()),
+        _ => None,
+    };
+    if let Some(name) = left_name {
+        if expr_is_literal_like(&compare.comparators[0]) {
+            return Some(name);
+        }
+    }
+    if let Some(name) = right_name {
+        if expr_is_literal_like(&compare.left) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+fn expr_is_literal_like(expr: &Expr) -> bool {
+    matches!(expr, Expr::Constant(_))
+        || matches!(expr, Expr::Attribute(_))
+        || matches!(expr, Expr::Name(name) if matches!(name.id.as_str(), "True" | "False"))
+}
+
+fn pattern_is_literal_like(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::MatchValue(node) => expr_is_literal_like(&node.value),
+        Pattern::MatchSingleton(_) => true,
+        Pattern::MatchOr(node) => node.patterns.iter().all(pattern_is_literal_like),
+        _ => false,
+    }
+}
+
+fn branch_body_has_material_behavior(body: &[Stmt]) -> bool {
+    body.iter().any(|stmt| match stmt {
+        Stmt::Expr(expr) => matches!(&*expr.value, Expr::Call(_)),
+        Stmt::Assign(_) | Stmt::AnnAssign(_) | Stmt::AugAssign(_) => true,
+        Stmt::Return(ret) => ret.value.is_some(),
+        Stmt::Raise(_) => true,
+        _ => false,
+    })
+}

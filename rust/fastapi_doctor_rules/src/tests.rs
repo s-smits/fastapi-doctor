@@ -507,7 +507,11 @@ mod rule_tests {
         for i in 0..450 {
             source.push_str(&format!("    x{} = {}\n", i, i));
         }
-        let issues = issues_for("architecture/giant-route-handler", "app/routers/items.py", &source);
+        let issues = issues_for(
+            "architecture/giant-route-handler",
+            "app/routers/items.py",
+            &source,
+        );
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].check, "architecture/giant-route-handler");
         assert_eq!(issues[0].severity, "error");
@@ -756,6 +760,127 @@ mod rule_tests {
         assert!(issues.is_empty());
     }
 
+    #[test]
+    fn flag_argument_dispatch_positive_literal_if() {
+        let issues = issues_for(
+            "architecture/flag-argument-dispatch",
+            "app/main.py",
+            "def export(data, target):\n    if target == 'file':\n        write_file(data)\n    else:\n        print(data)\n",
+        );
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn flag_argument_dispatch_positive_match_enum_style() {
+        let issues = issues_for(
+            "architecture/flag-argument-dispatch",
+            "app/main.py",
+            "def export(data, mode):\n    match mode:\n        case Output.FILE:\n            write_file(data)\n        case Output.STDOUT:\n            print(data)\n",
+        );
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn flag_argument_dispatch_negative_boolean_guard() {
+        let issues = issues_for(
+            "architecture/flag-argument-dispatch",
+            "app/main.py",
+            "def process(enabled, data):\n    if not enabled:\n        return None\n    return transform(data)\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn flag_argument_dispatch_negative_validation_only() {
+        let issues = issues_for(
+            "architecture/flag-argument-dispatch",
+            "app/main.py",
+            "def process(mode, data):\n    if mode == 'bad':\n        raise ValueError('bad mode')\n    return transform(data)\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn hidden_dependency_instantiation_positive_router_session() {
+        let issues = issues_for(
+            "architecture/hidden-dependency-instantiation",
+            "app/routers/users.py",
+            "def handler():\n    db = Session()\n    return db\n",
+        );
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn hidden_dependency_instantiation_positive_service_provider_call() {
+        let issues = issues_for(
+            "architecture/hidden-dependency-instantiation",
+            "app/services/users.py",
+            "class UserService:\n    def load(self):\n        db = get_db()\n        return db\n",
+        );
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn hidden_dependency_instantiation_positive_nested_import_and_client() {
+        let issues = issues_for(
+            "architecture/hidden-dependency-instantiation",
+            "app/services/http.py",
+            "def fetch():\n    from httpx import AsyncClient\n    client = AsyncClient()\n    return client\n",
+        );
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn hidden_dependency_instantiation_negative_depends_injection() {
+        let issues = issues_for(
+            "architecture/hidden-dependency-instantiation",
+            "app/routers/users.py",
+            "from fastapi import Depends\n\ndef handler(db: Session = Depends(get_db)):\n    return use_db(db)\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn hidden_dependency_instantiation_negative_constructor_injection() {
+        let issues = issues_for(
+            "architecture/hidden-dependency-instantiation",
+            "app/services/users.py",
+            "class UserService:\n    def __init__(self):\n        self.db = Session()\n\n    def load(self):\n        return self.db\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn hidden_dependency_instantiation_negative_outside_scoped_path() {
+        let issues = issues_for(
+            "architecture/hidden-dependency-instantiation",
+            "app/utils/http.py",
+            "def fetch():\n    client = AsyncClient()\n    return client\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn hidden_dependency_instantiation_negative_lazy_import_outside_scope() {
+        let issues = issues_for(
+            "architecture/hidden-dependency-instantiation",
+            "app/utils/http.py",
+            "def fetch():\n    from httpx import AsyncClient\n    client = AsyncClient()\n    return client\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn hidden_dependency_instantiation_negative_nested_function_only_hits_inner() {
+        let issues = issues_for(
+            "architecture/hidden-dependency-instantiation",
+            "app/services/users.py",
+            "def outer():\n    def inner():\n        return AsyncClient()\n    return inner\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].message.contains("inner"));
+    }
+
     // ── Performance Rules ───────────────────────────────────────────────
 
     #[test]
@@ -981,6 +1106,96 @@ mod rule_tests {
             "config/env-mutation",
             "app/main.py",
             "import os\nos.environ['TOKEN'] = 'x'\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn import_time_default_call_positive_dataclass() {
+        let issues = issues_for(
+            "correctness/import-time-default-call",
+            "app/models.py",
+            "from dataclasses import dataclass\nfrom datetime import datetime\n\n@dataclass\nclass Event:\n    created_at: datetime = datetime.now()\n",
+        );
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn import_time_default_call_positive_pydantic() {
+        let issues = issues_for(
+            "correctness/import-time-default-call",
+            "app/models.py",
+            "from pydantic import BaseModel\nimport uuid\n\nclass Event(BaseModel):\n    id: str = uuid.uuid4()\n",
+        );
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn import_time_default_call_negative_default_factory_dataclass() {
+        let issues = issues_for(
+            "correctness/import-time-default-call",
+            "app/models.py",
+            "from dataclasses import dataclass, field\nfrom datetime import datetime\n\n@dataclass\nclass Event:\n    created_at: datetime = field(default_factory=datetime.now)\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn import_time_default_call_negative_init_assignment() {
+        let issues = issues_for(
+            "correctness/import-time-default-call",
+            "app/models.py",
+            "from dataclasses import dataclass\nfrom datetime import datetime\n\n@dataclass\nclass Event:\n    created_at: datetime\n\n    def __init__(self):\n        self.created_at = datetime.now()\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn exposed_mutable_state_positive_list() {
+        let issues = issues_for(
+            "correctness/exposed-mutable-state",
+            "app/models.py",
+            "class Store:\n    def __init__(self):\n        self.items = []\n\n    def get_items(self):\n        return self.items\n",
+        );
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn exposed_mutable_state_positive_dict_property() {
+        let issues = issues_for(
+            "correctness/exposed-mutable-state",
+            "app/models.py",
+            "class Store:\n    def __init__(self):\n        self.index = {}\n\n    @property\n    def index_view(self):\n        return self.index\n",
+        );
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn exposed_mutable_state_negative_list_copy() {
+        let issues = issues_for(
+            "correctness/exposed-mutable-state",
+            "app/models.py",
+            "class Store:\n    def __init__(self):\n        self.items = []\n\n    def get_items(self):\n        return list(self.items)\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn exposed_mutable_state_negative_tuple_copy() {
+        let issues = issues_for(
+            "correctness/exposed-mutable-state",
+            "app/models.py",
+            "class Store:\n    def __init__(self):\n        self.items = []\n\n    def get_items(self):\n        return tuple(self.items)\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn exposed_mutable_state_negative_copy_method() {
+        let issues = issues_for(
+            "correctness/exposed-mutable-state",
+            "app/models.py",
+            "class Store:\n    def __init__(self):\n        self.index = {}\n\n    def get_index(self):\n        return self.index.copy()\n",
         );
         assert!(issues.is_empty());
     }
@@ -1458,6 +1673,7 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
         assert!(ids.len() >= 50);
         assert!(ids.contains(&"security/unsafe-yaml-load".to_string()));
         assert!(ids.contains(&"architecture/giant-function".to_string()));
+        assert!(ids.contains(&"architecture/hidden-dependency-instantiation".to_string()));
         assert!(ids.contains(&"architecture/giant-route-handler".to_string()));
         assert!(ids.contains(&"architecture/large-function".to_string()));
         assert!(ids.contains(&"api-surface/missing-tags".to_string()));
@@ -1477,11 +1693,15 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
         let ids = select_rule_ids(Some("balanced"), &[], &[], &[], false, false);
         assert!(ids.contains(&"security/unsafe-yaml-load".to_string()));
         assert!(ids.contains(&"correctness/mutable-default-arg".to_string()));
+        assert!(ids.contains(&"correctness/import-time-default-call".to_string()));
         assert!(ids.contains(&"resilience/bare-except-pass".to_string()));
         assert!(ids.contains(&"pydantic/normalized-name-collision".to_string()));
         assert!(ids.contains(&"api-surface/missing-tags".to_string()));
         assert!(ids.contains(&"api-surface/missing-docstring".to_string()));
         assert!(!ids.contains(&"config/env-mutation".to_string()));
+        assert!(!ids.contains(&"architecture/hidden-dependency-instantiation".to_string()));
+        assert!(!ids.contains(&"architecture/flag-argument-dispatch".to_string()));
+        assert!(!ids.contains(&"correctness/exposed-mutable-state".to_string()));
         // Architecture rules not in balanced unless explicitly listed
         assert!(!ids.contains(&"architecture/giant-function".to_string()));
     }

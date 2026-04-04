@@ -296,6 +296,133 @@ pub(crate) fn collect_mutable_default_arg_issues(
     issues
 }
 
+pub(crate) fn collect_import_time_default_call_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
+    let mut issues = Vec::new();
+
+    for stmt in suite {
+        let Stmt::ClassDef(class_node) = stmt else {
+            continue;
+        };
+        if !is_dataclass_node(class_node) && !is_pydantic_model_node(class_node) {
+            continue;
+        }
+
+        for body_stmt in &class_node.body {
+            let Stmt::AnnAssign(ann) = body_stmt else {
+                continue;
+            };
+            let Some(value) = ann.value.as_ref() else {
+                continue;
+            };
+            if !looks_like_import_time_factory_call(value) || is_default_factory_call(value) {
+                continue;
+            }
+
+            let line = module.line_for_offset(ann.range.start().to_usize());
+            if module.is_rule_suppressed(line, "correctness/import-time-default-call") {
+                continue;
+            }
+
+            let field_name = match &*ann.target {
+                Expr::Name(name) => name.id.as_str(),
+                _ => "field",
+            };
+            issues.push(Issue {
+                check: "correctness/import-time-default-call",
+                severity: "warning",
+                category: "Correctness",
+                line,
+                path: module.rel_path.to_string(),
+                message: Box::leak(
+                    format!(
+                        "Field '{}' in class '{}' calls a factory at import time",
+                        field_name, class_node.name
+                    )
+                    .into_boxed_str(),
+                ),
+                help: "Use field(default_factory=...) or Field(default_factory=...) so each instance gets a fresh value.",
+            });
+        }
+    }
+
+    issues
+}
+
+pub(crate) fn collect_exposed_mutable_state_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
+    let mut issues = Vec::new();
+
+    for stmt in suite {
+        let Stmt::ClassDef(class_node) = stmt else {
+            continue;
+        };
+
+        let mutable_attrs = collect_mutable_attr_names(class_node);
+        if mutable_attrs.is_empty() {
+            continue;
+        }
+
+        for body_stmt in &class_node.body {
+            let (name, body, decorators, range, args) = match body_stmt {
+                Stmt::FunctionDef(node) => (
+                    node.name.as_str(),
+                    &node.body,
+                    &node.decorator_list,
+                    node.range(),
+                    &node.args,
+                ),
+                Stmt::AsyncFunctionDef(node) => (
+                    node.name.as_str(),
+                    &node.body,
+                    &node.decorator_list,
+                    node.range(),
+                    &node.args,
+                ),
+                _ => continue,
+            };
+
+            if !is_getter_like_method(name, decorators, args) {
+                continue;
+            }
+
+            let Some(returned_attr) = returned_self_attr_directly(body) else {
+                continue;
+            };
+            if !mutable_attrs.contains(returned_attr) {
+                continue;
+            }
+
+            let line = module.line_for_offset(range.start().to_usize());
+            if module.is_rule_suppressed(line, "correctness/exposed-mutable-state") {
+                continue;
+            }
+
+            issues.push(Issue {
+                check: "correctness/exposed-mutable-state",
+                severity: "warning",
+                category: "Correctness",
+                line,
+                path: module.rel_path.to_string(),
+                message: Box::leak(
+                    format!(
+                        "Method '{}.{}()' returns internal mutable state directly",
+                        class_node.name, name
+                    )
+                    .into_boxed_str(),
+                ),
+                help: "Return a copy or immutable view instead of exposing the internal collection directly.",
+            });
+        }
+    }
+
+    issues
+}
+
 pub(crate) fn collect_return_in_finally_issues(
     module: &ModuleIndex,
     suite: &ast::Suite,
@@ -1343,3 +1470,189 @@ pub(crate) fn collect_get_with_side_effect_issues(
 }
 
 // ── Architecture: fat-route-handler ─────────────────────────────────────
+
+fn is_dataclass_node(node: &ast::StmtClassDef) -> bool {
+    node.decorator_list.iter().any(|dec| match dec {
+        Expr::Name(n) => n.id.as_str() == "dataclass",
+        Expr::Attribute(a) => a.attr.as_str() == "dataclass",
+        Expr::Call(c) => match &*c.func {
+            Expr::Name(n) => n.id.as_str() == "dataclass",
+            Expr::Attribute(a) => a.attr.as_str() == "dataclass",
+            _ => false,
+        },
+        _ => false,
+    })
+}
+
+fn is_pydantic_model_node(node: &ast::StmtClassDef) -> bool {
+    node.bases.iter().any(|base| match base {
+        Expr::Name(n) => n.id.as_str() == "BaseModel",
+        Expr::Attribute(a) => a.attr.as_str() == "BaseModel",
+        _ => false,
+    })
+}
+
+fn looks_like_import_time_factory_call(expr: &Expr) -> bool {
+    let Expr::Call(call) = expr else {
+        return false;
+    };
+    match &*call.func {
+        Expr::Attribute(attr) => {
+            let attr_name = attr.attr.as_str();
+            match &*attr.value {
+                Expr::Name(base) => matches!(
+                    (base.id.as_str(), attr_name),
+                    ("datetime", "now")
+                        | ("datetime", "utcnow")
+                        | ("date", "today")
+                        | ("time", "time")
+                        | ("uuid", "uuid4")
+                        | ("uuid", "uuid1")
+                ),
+                Expr::Attribute(base_attr) => matches!(
+                    (base_attr.attr.as_str(), attr_name),
+                    ("datetime", "now")
+                        | ("datetime", "utcnow")
+                        | ("date", "today")
+                        | ("time", "time")
+                        | ("uuid", "uuid4")
+                        | ("uuid", "uuid1")
+                ),
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+fn is_default_factory_call(expr: &Expr) -> bool {
+    let Expr::Call(call) = expr else {
+        return false;
+    };
+    let is_factory_wrapper = matches!(&*call.func, Expr::Name(name) if matches!(name.id.as_str(), "Field" | "field"))
+        || matches!(&*call.func, Expr::Attribute(attr) if matches!(attr.attr.as_str(), "Field" | "field"));
+    if !is_factory_wrapper {
+        return false;
+    }
+    call.keywords
+        .iter()
+        .any(|kw| kw.arg.as_deref() == Some("default_factory"))
+}
+
+fn is_mutable_collection_expr(expr: &Expr) -> bool {
+    matches!(expr, Expr::List(_))
+        || matches!(expr, Expr::Dict(_))
+        || matches!(expr, Expr::Set(_))
+        || matches!(
+            expr,
+            Expr::Call(call)
+                if matches!(&*call.func, Expr::Name(name) if matches!(name.id.as_str(), "list" | "dict" | "set"))
+                    && call.keywords.is_empty()
+        )
+}
+
+fn collect_mutable_attr_names(node: &ast::StmtClassDef) -> HashSet<&str> {
+    let mut attrs = HashSet::new();
+
+    for stmt in &node.body {
+        match stmt {
+            Stmt::AnnAssign(ann) => {
+                if let (Expr::Name(name), Some(value)) = (&*ann.target, ann.value.as_ref()) {
+                    if is_mutable_collection_expr(value) {
+                        attrs.insert(name.id.as_str());
+                    }
+                }
+            }
+            Stmt::Assign(assign) => {
+                if is_mutable_collection_expr(&assign.value) {
+                    for target in &assign.targets {
+                        if let Expr::Name(name) = target {
+                            attrs.insert(name.id.as_str());
+                        }
+                    }
+                }
+            }
+            Stmt::FunctionDef(method) => {
+                collect_mutable_attrs_from_init(method.name.as_str(), &method.body, &mut attrs)
+            }
+            Stmt::AsyncFunctionDef(method) => {
+                collect_mutable_attrs_from_init(method.name.as_str(), &method.body, &mut attrs)
+            }
+            _ => {}
+        }
+    }
+
+    attrs
+}
+
+fn collect_mutable_attrs_from_init<'a>(
+    method_name: &str,
+    body: &'a [Stmt],
+    attrs: &mut HashSet<&'a str>,
+) {
+    if method_name != "__init__" {
+        return;
+    }
+    walk_suite_stmts(body, &mut |stmt| match stmt {
+        Stmt::Assign(assign) if is_mutable_collection_expr(&assign.value) => {
+            for target in &assign.targets {
+                if let Expr::Attribute(attr) = target {
+                    if matches!(&*attr.value, Expr::Name(name) if name.id.as_str() == "self") {
+                        attrs.insert(attr.attr.as_str());
+                    }
+                }
+            }
+        }
+        Stmt::AnnAssign(ann) => {
+            if let Some(value) = ann.value.as_ref() {
+                if is_mutable_collection_expr(value) {
+                    if let Expr::Attribute(attr) = &*ann.target {
+                        if matches!(&*attr.value, Expr::Name(name) if name.id.as_str() == "self") {
+                            attrs.insert(attr.attr.as_str());
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    });
+}
+
+fn is_getter_like_method(name: &str, decorators: &[Expr], args: &ast::Arguments) -> bool {
+    let positional = args.args.len();
+    let has_property = decorators.iter().any(|dec| {
+        matches!(dec, Expr::Name(name) if name.id.as_str() == "property")
+            || matches!(dec, Expr::Attribute(attr) if attr.attr.as_str() == "property")
+    });
+    has_property || (positional == 1 && (name.starts_with("get_") || !name.starts_with('_')))
+}
+
+fn returned_self_attr_directly(body: &[Stmt]) -> Option<&str> {
+    let body = strip_leading_docstring(body);
+    let [Stmt::Return(ret)] = body else {
+        return None;
+    };
+    let value = ret.value.as_ref()?;
+    let Expr::Attribute(attr) = &**value else {
+        return None;
+    };
+    if matches!(&*attr.value, Expr::Name(name) if name.id.as_str() == "self") {
+        Some(attr.attr.as_str())
+    } else {
+        None
+    }
+}
+
+fn strip_leading_docstring(body: &[Stmt]) -> &[Stmt] {
+    if body.first().is_some_and(|stmt| {
+        matches!(
+            stmt,
+            Stmt::Expr(expr)
+                if matches!(&*expr.value, Expr::Constant(node) if matches!(node.value, ast::Constant::Str(_)))
+        )
+    }) {
+        &body[1..]
+    } else {
+        body
+    }
+}

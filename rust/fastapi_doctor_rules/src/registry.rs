@@ -10,6 +10,7 @@ pub enum StaticRule {
     ArchitectureStarImport,
     ArchitectureGodModule,
     ArchitecturePassthroughFunction,
+    ArchitectureHiddenDependencyInstantiation,
     ArchitectureAvoidSysExit,
     ArchitectureEnginePoolPrePing,
     ArchitectureMissingStartupValidation,
@@ -34,13 +35,16 @@ pub enum StaticRule {
     CorrectnessAvoidOsPath,
     CorrectnessDeprecatedTypingImports,
     CorrectnessMutableDefaultArg,
+    CorrectnessImportTimeDefaultCall,
     CorrectnessNaiveDatetime,
     CorrectnessReturnInFinally,
     CorrectnessThreadingLockInAsync,
     CorrectnessUnreachableCode,
     CorrectnessGetWithSideEffect,
+    CorrectnessExposedMutableState,
     CorrectnessServerlessFilesystemWrite,
     CorrectnessMissingHttpTimeout,
+    ArchitectureFlagArgumentDispatch,
     PerformanceHeavyImports,
     PerformanceSequentialAwaits,
     PerformanceRegexInLoop,
@@ -82,9 +86,8 @@ impl StaticRule {
             ArchitectureStarImport,
             ArchitectureGodModule,
             ArchitecturePassthroughFunction,
+            ArchitectureHiddenDependencyInstantiation,
             ArchitectureAvoidSysExit,
-            ArchitectureEnginePoolPrePing,
-            ArchitectureMissingStartupValidation,
             ArchitectureFatRouteHandler,
             SecurityMissingAuthDep,
             SecurityForbiddenWriteParam,
@@ -106,14 +109,16 @@ impl StaticRule {
             CorrectnessAvoidOsPath,
             CorrectnessDeprecatedTypingImports,
             CorrectnessMutableDefaultArg,
+            CorrectnessImportTimeDefaultCall,
             CorrectnessNaiveDatetime,
             CorrectnessReturnInFinally,
             CorrectnessThreadingLockInAsync,
             CorrectnessUnreachableCode,
             CorrectnessGetWithSideEffect,
+            CorrectnessExposedMutableState,
             CorrectnessServerlessFilesystemWrite,
             CorrectnessMissingHttpTimeout,
-            PerformanceHeavyImports,
+            ArchitectureFlagArgumentDispatch,
             PerformanceSequentialAwaits,
             PerformanceRegexInLoop,
             PerformanceNPlusOneHint,
@@ -153,9 +158,10 @@ impl StaticRule {
             Self::ArchitectureStarImport => "architecture/star-import",
             Self::ArchitectureGodModule => "architecture/god-module",
             Self::ArchitecturePassthroughFunction => "architecture/passthrough-function",
+            Self::ArchitectureHiddenDependencyInstantiation => {
+                "architecture/hidden-dependency-instantiation"
+            }
             Self::ArchitectureAvoidSysExit => "architecture/avoid-sys-exit",
-            Self::ArchitectureEnginePoolPrePing => "architecture/engine-pool-pre-ping",
-            Self::ArchitectureMissingStartupValidation => "architecture/missing-startup-validation",
             Self::ArchitectureFatRouteHandler => "architecture/fat-route-handler",
             Self::SecurityMissingAuthDep => "security/missing-auth-dep",
             Self::SecurityForbiddenWriteParam => "security/forbidden-write-param",
@@ -177,14 +183,16 @@ impl StaticRule {
             Self::CorrectnessAvoidOsPath => "correctness/avoid-os-path",
             Self::CorrectnessDeprecatedTypingImports => "correctness/deprecated-typing-imports",
             Self::CorrectnessMutableDefaultArg => "correctness/mutable-default-arg",
+            Self::CorrectnessImportTimeDefaultCall => "correctness/import-time-default-call",
             Self::CorrectnessNaiveDatetime => "correctness/naive-datetime",
             Self::CorrectnessReturnInFinally => "correctness/return-in-finally",
             Self::CorrectnessThreadingLockInAsync => "correctness/threading-lock-in-async",
             Self::CorrectnessUnreachableCode => "correctness/unreachable-code",
             Self::CorrectnessGetWithSideEffect => "correctness/get-with-side-effect",
+            Self::CorrectnessExposedMutableState => "correctness/exposed-mutable-state",
             Self::CorrectnessServerlessFilesystemWrite => "correctness/serverless-filesystem-write",
             Self::CorrectnessMissingHttpTimeout => "correctness/missing-http-timeout",
-            Self::PerformanceHeavyImports => "performance/heavy-imports",
+            Self::ArchitectureFlagArgumentDispatch => "architecture/flag-argument-dispatch",
             Self::PerformanceSequentialAwaits => "performance/sequential-awaits",
             Self::PerformanceRegexInLoop => "performance/regex-in-loop",
             Self::PerformanceNPlusOneHint => "performance/n-plus-one-hint",
@@ -241,9 +249,9 @@ impl StaticRule {
             | Self::ArchitectureStarImport
             | Self::ArchitectureGodModule
             | Self::ArchitecturePassthroughFunction
+            | Self::ArchitectureHiddenDependencyInstantiation
+            | Self::ArchitectureFlagArgumentDispatch
             | Self::ArchitectureAvoidSysExit
-            | Self::ArchitectureEnginePoolPrePing
-            | Self::ArchitectureMissingStartupValidation
             | Self::ArchitectureFatRouteHandler => "Architecture",
 
             Self::SecurityMissingAuthDep
@@ -268,11 +276,13 @@ impl StaticRule {
             | Self::CorrectnessAvoidOsPath
             | Self::CorrectnessDeprecatedTypingImports
             | Self::CorrectnessMutableDefaultArg
+            | Self::CorrectnessImportTimeDefaultCall
             | Self::CorrectnessNaiveDatetime
             | Self::CorrectnessReturnInFinally
             | Self::CorrectnessThreadingLockInAsync
             | Self::CorrectnessUnreachableCode
             | Self::CorrectnessGetWithSideEffect
+            | Self::CorrectnessExposedMutableState
             | Self::CorrectnessServerlessFilesystemWrite
             | Self::CorrectnessMissingHttpTimeout => "Correctness",
 
@@ -286,8 +296,7 @@ impl StaticRule {
             | Self::ConfigAlembicEmptyAutogenRevision
             | Self::ConfigSqlalchemyNamingConvention => "Configuration",
 
-            Self::PerformanceHeavyImports
-            | Self::PerformanceSequentialAwaits
+            Self::PerformanceSequentialAwaits
             | Self::PerformanceRegexInLoop
             | Self::PerformanceNPlusOneHint => "Performance",
 

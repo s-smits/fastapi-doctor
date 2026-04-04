@@ -316,7 +316,11 @@ struct ProjectAnalysisResult {
 }
 
 impl ProjectAnalysisResult {
-    fn into_bundle(self, include_route_payload: bool, analyzed_file_count: usize) -> ProjectBundleResult {
+    fn into_bundle(
+        self,
+        include_route_payload: bool,
+        analyzed_file_count: usize,
+    ) -> ProjectBundleResult {
         let summary = score_summary(&self.raw_issues);
         let route_count = self.finalized_routes.len();
         let routes = if include_route_payload {
@@ -570,7 +574,10 @@ fn analyze_selected_current_project_impl(
         active_rules,
         "using Rust-native auto project module v2",
     )?;
-    Ok((analysis.into_bundle(include_routes, bundle.project.modules.len()), bundle.context))
+    Ok((
+        analysis.into_bundle(include_routes, bundle.project.modules.len()),
+        bundle.context,
+    ))
 }
 
 impl ScanSession {
@@ -625,7 +632,10 @@ impl ScanSession {
         payload.set_item("active_rules", active_rules.clone())?;
         payload.set_item("active_rule_count", active_rules.len())?;
         payload.set_item("native_requested", !active_rules.is_empty())?;
-        payload.set_item("project_context", project_context_payload(py, &self.context)?)?;
+        payload.set_item(
+            "project_context",
+            project_context_payload(py, &self.context)?,
+        )?;
         Ok(payload.unbind())
     }
 
