@@ -39,7 +39,6 @@ const MEDIUM_SELECTORS: &[&str] = &[
     "pydantic/deprecated-validator",
     "architecture/async-without-await",
     "architecture/avoid-sys-exit",
-    "architecture/engine-pool-pre-ping",
     "architecture/missing-startup-validation",
     "architecture/passthrough-function",
     "architecture/print-in-production",
@@ -54,7 +53,7 @@ pub fn parse_static_rule(rule_id: &str) -> Option<StaticRule> {
         "architecture/giant-route-handler" => StaticRule::ArchitectureGiantRouteHandler,
         "architecture/large-function" => StaticRule::ArchitectureLargeFunction,
         "architecture/deep-nesting" => StaticRule::ArchitectureDeepNesting,
-    "architecture/async-without-await" => StaticRule::ArchitectureAsyncWithoutAwait,
+        "architecture/async-without-await" => StaticRule::ArchitectureAsyncWithoutAwait,
         "architecture/import-bloat" => StaticRule::ArchitectureImportBloat,
         "architecture/print-in-production" => StaticRule::ArchitecturePrintInProduction,
         "architecture/star-import" => StaticRule::ArchitectureStarImport,
@@ -64,8 +63,11 @@ pub fn parse_static_rule(rule_id: &str) -> Option<StaticRule> {
             StaticRule::ArchitectureHiddenDependencyInstantiation
         }
         "architecture/flag-argument-dispatch" => StaticRule::ArchitectureFlagArgumentDispatch,
-    "architecture/avoid-sys-exit" => StaticRule::ArchitectureAvoidSysExit,
-    "architecture/fat-route-handler" => StaticRule::ArchitectureFatRouteHandler,
+        "architecture/avoid-sys-exit" => StaticRule::ArchitectureAvoidSysExit,
+        "architecture/missing-startup-validation" => {
+            StaticRule::ArchitectureMissingStartupValidation
+        }
+        "architecture/fat-route-handler" => StaticRule::ArchitectureFatRouteHandler,
         "security/missing-auth-dep" => StaticRule::SecurityMissingAuthDep,
         "security/forbidden-write-param" => StaticRule::SecurityForbiddenWriteParam,
         "correctness/duplicate-route" => StaticRule::CorrectnessDuplicateRoute,
@@ -92,14 +94,14 @@ pub fn parse_static_rule(rule_id: &str) -> Option<StaticRule> {
         "correctness/threading-lock-in-async" => StaticRule::CorrectnessThreadingLockInAsync,
         "correctness/unreachable-code" => StaticRule::CorrectnessUnreachableCode,
         "correctness/get-with-side-effect" => StaticRule::CorrectnessGetWithSideEffect,
-    "correctness/exposed-mutable-state" => StaticRule::CorrectnessExposedMutableState,
-    "correctness/serverless-filesystem-write" => {
+        "correctness/exposed-mutable-state" => StaticRule::CorrectnessExposedMutableState,
+        "correctness/serverless-filesystem-write" => {
             StaticRule::CorrectnessServerlessFilesystemWrite
         }
-    "correctness/missing-http-timeout" => StaticRule::CorrectnessMissingHttpTimeout,
-    "performance/sequential-awaits" => StaticRule::PerformanceSequentialAwaits,
-    "performance/regex-in-loop" => StaticRule::PerformanceRegexInLoop,
-    "performance/n-plus-one-hint" => StaticRule::PerformanceNPlusOneHint,
+        "correctness/missing-http-timeout" => StaticRule::CorrectnessMissingHttpTimeout,
+        "performance/sequential-awaits" => StaticRule::PerformanceSequentialAwaits,
+        "performance/regex-in-loop" => StaticRule::PerformanceRegexInLoop,
+        "performance/n-plus-one-hint" => StaticRule::PerformanceNPlusOneHint,
         "pydantic/deprecated-validator" => StaticRule::PydanticDeprecatedValidator,
         "pydantic/mutable-default" => StaticRule::PydanticMutableDefault,
         "pydantic/extra-allow-on-request" => StaticRule::PydanticExtraAllowOnRequest,

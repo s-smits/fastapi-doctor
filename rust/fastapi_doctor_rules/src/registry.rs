@@ -12,7 +12,6 @@ pub enum StaticRule {
     ArchitecturePassthroughFunction,
     ArchitectureHiddenDependencyInstantiation,
     ArchitectureAvoidSysExit,
-    ArchitectureEnginePoolPrePing,
     ArchitectureMissingStartupValidation,
     ArchitectureFatRouteHandler,
     SecurityMissingAuthDep,
@@ -45,7 +44,6 @@ pub enum StaticRule {
     CorrectnessServerlessFilesystemWrite,
     CorrectnessMissingHttpTimeout,
     ArchitectureFlagArgumentDispatch,
-    PerformanceHeavyImports,
     PerformanceSequentialAwaits,
     PerformanceRegexInLoop,
     PerformanceNPlusOneHint,
@@ -88,6 +86,7 @@ impl StaticRule {
             ArchitecturePassthroughFunction,
             ArchitectureHiddenDependencyInstantiation,
             ArchitectureAvoidSysExit,
+            ArchitectureMissingStartupValidation,
             ArchitectureFatRouteHandler,
             SecurityMissingAuthDep,
             SecurityForbiddenWriteParam,
@@ -162,6 +161,7 @@ impl StaticRule {
                 "architecture/hidden-dependency-instantiation"
             }
             Self::ArchitectureAvoidSysExit => "architecture/avoid-sys-exit",
+            Self::ArchitectureMissingStartupValidation => "architecture/missing-startup-validation",
             Self::ArchitectureFatRouteHandler => "architecture/fat-route-handler",
             Self::SecurityMissingAuthDep => "security/missing-auth-dep",
             Self::SecurityForbiddenWriteParam => "security/forbidden-write-param",
@@ -252,6 +252,7 @@ impl StaticRule {
             | Self::ArchitectureHiddenDependencyInstantiation
             | Self::ArchitectureFlagArgumentDispatch
             | Self::ArchitectureAvoidSysExit
+            | Self::ArchitectureMissingStartupValidation
             | Self::ArchitectureFatRouteHandler => "Architecture",
 
             Self::SecurityMissingAuthDep

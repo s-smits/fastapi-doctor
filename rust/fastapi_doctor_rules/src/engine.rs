@@ -40,7 +40,7 @@ fn is_startup_entrypoint_module(module: &ModuleIndex<'_>, suite: &ast::Suite) ->
         }
     });
 
-    has_fastapi_call
+    has_fastapi_call || module.source.contains("FastAPI(") || module.source.contains("FastAPI (")
 }
 
 fn call_callee_name(expr: &Expr) -> Option<&str> {
@@ -73,7 +73,8 @@ fn expr_mentions_config(expr: &Expr, config_names: &HashSet<String>) -> bool {
         }
         match node {
             Expr::Name(name)
-                if config_names.contains(name.id.as_str()) || is_config_like_name(name.id.as_str()) =>
+                if config_names.contains(name.id.as_str())
+                    || is_config_like_name(name.id.as_str()) =>
             {
                 found = true;
             }
@@ -192,13 +193,18 @@ fn has_startup_validation_signal(suite: &ast::Suite) -> bool {
                     || lower.contains("startup"));
 
             if is_validationish
-                || call.args.iter().any(|arg| expr_mentions_config(arg, &config_names))
+                || call
+                    .args
+                    .iter()
+                    .any(|arg| expr_mentions_config(arg, &config_names))
                 || call
                     .keywords
                     .iter()
                     .any(|kw| expr_mentions_config(&kw.value, &config_names))
             {
-                if lower.contains("validate") || lower.contains("verify") || lower.starts_with("check")
+                if lower.contains("validate")
+                    || lower.contains("verify")
+                    || lower.starts_with("check")
                 {
                     has_validation_call = true;
                 }
@@ -263,7 +269,6 @@ pub struct RuleSelection {
     pub hidden_dependency_instantiation: bool,
     pub flag_argument_dispatch: bool,
     pub avoid_sys_exit: bool,
-    pub engine_pool_pre_ping: bool,
     pub missing_startup_validation: bool,
     pub fat_route_handler: bool,
     pub missing_auth_dep: bool,
@@ -308,7 +313,6 @@ impl RuleSelection {
             }
             StaticRule::ArchitectureFlagArgumentDispatch => self.flag_argument_dispatch = true,
             StaticRule::ArchitectureAvoidSysExit => self.avoid_sys_exit = true,
-            StaticRule::ArchitectureEnginePoolPrePing => self.engine_pool_pre_ping = true,
             StaticRule::ArchitectureMissingStartupValidation => {
                 self.missing_startup_validation = true
             }
@@ -416,7 +420,7 @@ impl RuleSelection {
             || self.hidden_dependency_instantiation
             || self.flag_argument_dispatch
             || self.avoid_sys_exit
-            || self.engine_pool_pre_ping
+            || self.missing_startup_validation
             || self.fat_route_handler
     }
 
@@ -550,11 +554,6 @@ pub fn analyze_suite(
     if rules.avoid_sys_exit {
         issues.extend(architecture::collect_avoid_sys_exit_issues(module, suite));
     }
-    if rules.engine_pool_pre_ping {
-        issues.extend(architecture::collect_engine_pool_pre_ping_issues(
-            module, suite,
-        ));
-    }
     if rules.serverless_filesystem_write {
         issues.extend(correctness::collect_serverless_filesystem_write_issues(
             module, suite,
@@ -592,9 +591,7 @@ pub fn analyze_suite(
         ));
     }
     if rules.hidden_dependency_instantiation {
-        issues.extend(architecture::collect_hidden_dependency_instantiation_issues(
-            module, suite,
-        ));
+        issues.extend(architecture::collect_hidden_dependency_instantiation_issues(module, suite));
     }
     if rules.flag_argument_dispatch {
         issues.extend(architecture::collect_flag_argument_dispatch_issues(
@@ -1031,10 +1028,10 @@ pub fn analyze_module_with_suite(
         }
 
         if rules.missing_startup_validation
-            && is_startup_entrypoint_module(module, suite)
             && line.number == 1
+            && suite.is_some_and(|parsed_suite| is_startup_entrypoint_module(module, parsed_suite))
         {
-            if !has_startup_validation_signal(suite) {
+            if suite.is_some_and(|parsed_suite| !has_startup_validation_signal(parsed_suite)) {
                 issues.push(issue(
                     "architecture/missing-startup-validation",
                     "warning",

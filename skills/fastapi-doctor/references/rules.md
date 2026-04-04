@@ -132,6 +132,13 @@ FastAPI runs plain `def` handlers in a threadpool, which is safer for synchronou
 Production code should use the structured logger, not `print()`.
 `print()` output is unstructured, unleveled, and easy to miss in production logging.
 
+### `architecture/missing-startup-validation` (warning)
+Main FastAPI entrypoints in `main.py` should show an explicit fail-fast bootstrap signal:
+validated settings/config usage during app construction, a `lifespan=` hook, or a
+`@app.on_event("startup")` startup hook. This is intentionally narrower than a generic
+"startup policy" lint; it only fires for real app entrypoints and looks for AST-backed
+bootstrap signals rather than loose string matches.
+
 ## API Surface Rules
 
 ### `api-surface/missing-tags` (warning)

@@ -691,26 +691,6 @@ mod rule_tests {
     }
 
     #[test]
-    fn engine_pool_pre_ping_positive() {
-        let issues = issues_for(
-            "architecture/engine-pool-pre-ping",
-            "app/db.py",
-            "from sqlalchemy import create_engine\nengine = create_engine('sqlite://')\n",
-        );
-        assert_eq!(issues.len(), 1);
-    }
-
-    #[test]
-    fn engine_pool_pre_ping_negative() {
-        let issues = issues_for(
-            "architecture/engine-pool-pre-ping",
-            "app/db.py",
-            "from sqlalchemy import create_engine\nengine = create_engine('sqlite://', pool_pre_ping=True)\n",
-        );
-        assert!(issues.is_empty());
-    }
-
-    #[test]
     fn missing_startup_validation_positive() {
         let issues = issues_for(
             "architecture/missing-startup-validation",
@@ -726,6 +706,26 @@ mod rule_tests {
             "architecture/missing-startup-validation",
             "app/main.py",
             "from fastapi import FastAPI\nfrom app.core.config import settings\n\napp = FastAPI(title=settings.PROJECT_NAME)\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn missing_startup_validation_negative_lifespan() {
+        let issues = issues_for(
+            "architecture/missing-startup-validation",
+            "app/main.py",
+            "from contextlib import asynccontextmanager\nfrom fastapi import FastAPI\n\n@asynccontextmanager\nasync def lifespan(app):\n    yield\n\napp = FastAPI(lifespan=lifespan)\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn missing_startup_validation_negative_startup_event() {
+        let issues = issues_for(
+            "architecture/missing-startup-validation",
+            "app/main.py",
+            "from fastapi import FastAPI\n\napp = FastAPI()\n\n@app.on_event('startup')\nasync def warmup():\n    await verify_env()\n",
         );
         assert!(issues.is_empty());
     }
@@ -882,32 +882,6 @@ mod rule_tests {
     }
 
     // ── Performance Rules ───────────────────────────────────────────────
-
-    #[test]
-    fn heavy_imports_positive_pandas() {
-        let issues = issues_for(
-            "performance/heavy-imports",
-            "app/main.py",
-            "import pandas\n",
-        );
-        assert_eq!(issues.len(), 1);
-    }
-
-    #[test]
-    fn heavy_imports_positive_from_torch() {
-        let issues = issues_for(
-            "performance/heavy-imports",
-            "app/main.py",
-            "from torch import nn\n",
-        );
-        assert_eq!(issues.len(), 1);
-    }
-
-    #[test]
-    fn heavy_imports_negative_stdlib() {
-        let issues = issues_for("performance/heavy-imports", "app/main.py", "import json\n");
-        assert!(issues.is_empty());
-    }
 
     #[test]
     fn sequential_awaits_positive() {
@@ -1685,7 +1659,6 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
         assert!(ids.contains(&"security/unsafe-yaml-load".to_string()));
         assert!(ids.contains(&"security/cors-wildcard".to_string()));
         assert!(!ids.contains(&"architecture/giant-function".to_string()));
-        assert!(!ids.contains(&"performance/heavy-imports".to_string()));
     }
 
     #[test]
@@ -1698,6 +1671,7 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
         assert!(ids.contains(&"pydantic/normalized-name-collision".to_string()));
         assert!(ids.contains(&"api-surface/missing-tags".to_string()));
         assert!(ids.contains(&"api-surface/missing-docstring".to_string()));
+        assert!(ids.contains(&"architecture/missing-startup-validation".to_string()));
         assert!(!ids.contains(&"config/env-mutation".to_string()));
         assert!(!ids.contains(&"architecture/hidden-dependency-instantiation".to_string()));
         assert!(!ids.contains(&"architecture/flag-argument-dispatch".to_string()));

@@ -257,45 +257,6 @@ pub(crate) fn collect_avoid_sys_exit_issues(
     issues
 }
 
-// ── Architecture: engine-pool-pre-ping ──────────────────────────────────
-
-pub(crate) fn collect_engine_pool_pre_ping_issues(
-    module: &ModuleIndex,
-    suite: &ast::Suite,
-) -> Vec<Issue> {
-    let mut issues = Vec::new();
-    walk_suite_exprs(suite, &mut |expr| {
-        let Expr::Call(call) = expr else { return };
-        let func_name = match &*call.func {
-            Expr::Name(n) => n.id.as_str(),
-            Expr::Attribute(a) => a.attr.as_str(),
-            _ => return,
-        };
-        if func_name != "create_engine" && func_name != "create_async_engine" {
-            return;
-        }
-        let has_pre_ping = call.keywords.iter().any(|kw| {
-            kw.arg.as_deref() == Some("pool_pre_ping")
-                && matches!(&kw.value, Expr::Constant(c) if matches!(c.value, ast::Constant::Bool(true)))
-        });
-        if !has_pre_ping {
-            let line = module.line_for_offset(call.range.start().to_usize());
-            issues.push(Issue {
-                check: "architecture/engine-pool-pre-ping",
-                severity: "warning",
-                category: "Architecture",
-                line,
-                path: module.rel_path.to_string(),
-                message: Box::leak(
-                    format!("{}() called without pool_pre_ping=True", func_name).into_boxed_str(),
-                ),
-                help: "Set pool_pre_ping=True to automatically recover from dropped connections.",
-            });
-        }
-    });
-    issues
-}
-
 // ── Correctness: serverless-filesystem-write ────────────────────────────
 
 pub(crate) fn collect_print_in_production_issues(
@@ -659,9 +620,12 @@ fn hidden_dependency_name(name: &str, allow_provider_functions: bool) -> Option<
         .copied()
         .find(|candidate| *candidate == name)
         .or_else(|| {
-            allow_provider_functions
-                .then_some(())
-                .and_then(|_| HIDDEN_DEP_PROVIDERS.iter().copied().find(|candidate| *candidate == name))
+            allow_provider_functions.then_some(()).and_then(|_| {
+                HIDDEN_DEP_PROVIDERS
+                    .iter()
+                    .copied()
+                    .find(|candidate| *candidate == name)
+            })
         })
 }
 
