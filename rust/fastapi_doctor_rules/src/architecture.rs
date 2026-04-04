@@ -2,7 +2,7 @@ use rustpython_parser::ast::{self, Expr, Pattern, Ranged, Stmt};
 use std::collections::HashSet;
 
 use fastapi_doctor_core::ast_helpers::*;
-use fastapi_doctor_core::{Config, Issue, ModuleIndex};
+use fastapi_doctor_core::{Config, ImportSurfaceSummary, Issue, ModuleIndex};
 
 use crate::engine::RuleSelection;
 
@@ -206,6 +206,73 @@ pub(crate) fn collect_deep_nesting_issues(
         }
     }
     issues
+}
+
+pub(crate) fn collect_import_bloat_issue(
+    module: &ModuleIndex,
+    summary: &ImportSurfaceSummary,
+    threshold: usize,
+) -> Option<Issue> {
+    if threshold == 0 || summary.score <= threshold {
+        return None;
+    }
+
+    let dependency_preview = summary
+        .dependencies
+        .iter()
+        .take(3)
+        .map(|dependency| {
+            let preview = dependency
+                .symbol_paths
+                .iter()
+                .take(3)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{}[{preview}]", dependency.dependency)
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+
+    let extraction_candidates = summary
+        .dependencies
+        .iter()
+        .filter(|dependency| dependency.symbol_paths.len() <= 4)
+        .take(3)
+        .map(|dependency| {
+            format!(
+                "{}({})",
+                dependency.dependency,
+                dependency.symbol_paths.len()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let mut message = format!(
+        "File touches {} imported symbols across {} dependencies (>{})",
+        summary.score, summary.dependency_count, threshold
+    );
+    if !dependency_preview.is_empty() {
+        message.push_str(&format!(" — {}", dependency_preview));
+    }
+
+    let mut help = "Count actual imported symbol usage, not raw import lines. Split low-surface dependencies into adapters, move type-only imports behind TYPE_CHECKING, and lazy-import bulky libraries at the boundary.".to_string();
+    if !extraction_candidates.is_empty() {
+        help.push_str(&format!(
+            " Small-surface extraction candidates: {extraction_candidates}."
+        ));
+    }
+
+    Some(Issue {
+        check: "architecture/import-bloat",
+        severity: "warning",
+        category: "Architecture",
+        line: 0,
+        path: module.rel_path.to_string(),
+        message: Box::leak(message.into_boxed_str()),
+        help: Box::leak(help.into_boxed_str()),
+    })
 }
 
 // =========================================================================

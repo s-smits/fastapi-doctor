@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use crate::ast_helpers;
@@ -122,6 +122,21 @@ pub struct RouteScan {
     pub includes: Vec<(String, String, Vec<String>, Vec<String>)>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ImportDependencySurface {
+    pub dependency: String,
+    pub symbol_paths: Vec<String>,
+    pub reference_count: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ImportSurfaceSummary {
+    pub score: usize,
+    pub dependency_count: usize,
+    pub reference_count: usize,
+    pub dependencies: Vec<ImportDependencySurface>,
+}
+
 pub struct LineRecord<'a> {
     pub number: usize,
     pub raw: &'a str,
@@ -212,6 +227,227 @@ impl<'a> ModuleIndex<'a> {
 
 pub fn path_to_string(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+#[derive(Clone, Debug)]
+struct ImportBinding {
+    dependency: String,
+    symbol_prefix: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct ImportUsageCandidate {
+    dependency: String,
+    symbol_path: String,
+    start: usize,
+    end: usize,
+}
+
+#[derive(Default)]
+struct ImportSurfaceEntry {
+    symbols: BTreeSet<String>,
+    reference_count: usize,
+}
+
+fn absolute_dependency_name(module_path: &str) -> String {
+    module_path
+        .split('.')
+        .next()
+        .unwrap_or(module_path)
+        .to_string()
+}
+
+fn relative_dependency_name(level: usize, module: Option<&str>) -> String {
+    let dots = ".".repeat(level);
+    match module {
+        Some(module) if !module.is_empty() => format!("{dots}{module}"),
+        _ => dots,
+    }
+}
+
+fn binding_for_import(alias: &ast::Alias) -> Option<(String, ImportBinding)> {
+    let module_path = alias.name.as_str();
+    let binding_name = alias
+        .asname
+        .as_deref()
+        .map(|name| name.to_string())
+        .or_else(|| module_path.split('.').next().map(str::to_string))?;
+    let parts: Vec<String> = module_path.split('.').map(str::to_string).collect();
+    let dependency = absolute_dependency_name(module_path);
+    let symbol_prefix = parts.into_iter().skip(1).collect();
+    Some((
+        binding_name,
+        ImportBinding {
+            dependency,
+            symbol_prefix,
+        },
+    ))
+}
+
+fn binding_for_import_from(
+    module: &ast::StmtImportFrom,
+    alias: &ast::Alias,
+) -> Option<(String, ImportBinding)> {
+    if alias.name.as_str() == "*" {
+        return None;
+    }
+
+    let binding_name = alias
+        .asname
+        .as_deref()
+        .unwrap_or(alias.name.as_str())
+        .to_string();
+    let base_module = module.module.as_ref().map(|name| name.as_str());
+    let level = module.level.as_ref().map_or(0, |level| level.to_usize());
+    let dependency = if level > 0 {
+        relative_dependency_name(level, base_module)
+    } else {
+        absolute_dependency_name(base_module.unwrap_or(alias.name.as_str()))
+    };
+
+    let mut symbol_prefix = Vec::new();
+    if let Some(module_name) = base_module {
+        if level == 0 {
+            symbol_prefix.extend(module_name.split('.').skip(1).map(str::to_string));
+        }
+    }
+    symbol_prefix.push(alias.name.to_string());
+
+    Some((
+        binding_name,
+        ImportBinding {
+            dependency,
+            symbol_prefix,
+        },
+    ))
+}
+
+fn collect_import_bindings(suite: &ast::Suite) -> HashMap<String, ImportBinding> {
+    let mut bindings = HashMap::new();
+    ast_helpers::walk_suite_stmts(suite, &mut |stmt| match stmt {
+        Stmt::Import(node) => {
+            for alias in &node.names {
+                if let Some((binding_name, binding)) = binding_for_import(alias) {
+                    bindings.insert(binding_name, binding);
+                }
+            }
+        }
+        Stmt::ImportFrom(node) => {
+            for alias in &node.names {
+                if let Some((binding_name, binding)) = binding_for_import_from(node, alias) {
+                    bindings.insert(binding_name, binding);
+                }
+            }
+        }
+        _ => {}
+    });
+    bindings
+}
+
+fn attribute_binding_path(expr: &Expr) -> Option<(String, Vec<String>)> {
+    match expr {
+        Expr::Name(node) => Some((node.id.to_string(), Vec::new())),
+        Expr::Attribute(node) => {
+            let (binding_name, mut path) = attribute_binding_path(&node.value)?;
+            path.push(node.attr.to_string());
+            Some((binding_name, path))
+        }
+        _ => None,
+    }
+}
+
+fn import_usage_candidate(
+    expr: &Expr,
+    bindings: &HashMap<String, ImportBinding>,
+) -> Option<ImportUsageCandidate> {
+    let (binding_name, member_path) = match expr {
+        Expr::Name(node) => (node.id.to_string(), Vec::new()),
+        Expr::Attribute(_) => attribute_binding_path(expr)?,
+        _ => return None,
+    };
+
+    let binding = bindings.get(&binding_name)?;
+    let mut full_path = binding.symbol_prefix.clone();
+    full_path.extend(member_path);
+
+    let symbol_path = if full_path.is_empty() {
+        "<module>".to_string()
+    } else {
+        full_path.join(".")
+    };
+    let range = expr.range();
+    Some(ImportUsageCandidate {
+        dependency: binding.dependency.clone(),
+        symbol_path,
+        start: range.start().to_usize(),
+        end: range.end().to_usize(),
+    })
+}
+
+fn dedupe_import_usage_candidates(
+    mut candidates: Vec<ImportUsageCandidate>,
+) -> Vec<ImportUsageCandidate> {
+    candidates.sort_by(|left, right| {
+        let left_span = left.end.saturating_sub(left.start);
+        let right_span = right.end.saturating_sub(right.start);
+        right_span
+            .cmp(&left_span)
+            .then_with(|| left.start.cmp(&right.start))
+            .then_with(|| left.end.cmp(&right.end))
+    });
+
+    let mut kept: Vec<ImportUsageCandidate> = Vec::new();
+    for candidate in candidates {
+        let covered = kept
+            .iter()
+            .any(|existing| existing.start <= candidate.start && candidate.end <= existing.end);
+        if !covered {
+            kept.push(candidate);
+        }
+    }
+    kept.sort_by_key(|candidate| candidate.start);
+    kept
+}
+
+pub fn analyze_import_surface(suite: &ast::Suite) -> ImportSurfaceSummary {
+    let bindings = collect_import_bindings(suite);
+    if bindings.is_empty() {
+        return ImportSurfaceSummary::default();
+    }
+
+    let mut candidates = Vec::new();
+    ast_helpers::walk_suite_exprs(suite, &mut |expr| {
+        if let Some(candidate) = import_usage_candidate(expr, &bindings) {
+            candidates.push(candidate);
+        }
+    });
+
+    let mut per_dependency: BTreeMap<String, ImportSurfaceEntry> = BTreeMap::new();
+    for candidate in dedupe_import_usage_candidates(candidates) {
+        let entry = per_dependency.entry(candidate.dependency).or_default();
+        entry.symbols.insert(candidate.symbol_path);
+        entry.reference_count += 1;
+    }
+
+    let mut dependencies = Vec::new();
+    let mut score = 0;
+    let mut reference_count = 0;
+    for (dependency, entry) in per_dependency {
+        score += entry.symbols.len();
+        reference_count += entry.reference_count;
+        dependencies.push(ImportDependencySurface {
+            dependency,
+            symbol_paths: entry.symbols.into_iter().collect(),
+            reference_count: entry.reference_count,
+        });
+    }
+
+    ImportSurfaceSummary {
+        score,
+        dependency_count: dependencies.len(),
+        reference_count,
+        dependencies,
+    }
 }
 
 fn parse_bool_expr(expr: &Expr) -> Option<bool> {

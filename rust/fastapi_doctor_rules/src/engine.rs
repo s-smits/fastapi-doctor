@@ -4,7 +4,8 @@ use fastapi_doctor_core::ast_helpers::{
     walk_expr_tree, walk_suite_exprs, walk_suite_stmts, FunctionIndex,
 };
 use fastapi_doctor_core::{
-    issue, parse_suite, Config, Issue, ModuleIndex, ModuleRecord, RouteRecord,
+    analyze_import_surface, issue, parse_suite, Config, Issue, ModuleIndex, ModuleRecord,
+    RouteRecord,
 };
 use rustpython_parser::ast::{self, Expr, Stmt};
 
@@ -387,6 +388,7 @@ impl RuleSelection {
             || self.large_function
             || self.deep_nesting
             || self.async_without_await
+            || self.import_bloat
             || self.print_in_production
             || self.asyncio_run_in_async
             || self.sync_io_in_async
@@ -674,23 +676,17 @@ pub fn analyze_module_with_suite(
         && module.file_name.as_deref() != Some("__init__.py")
         && module.file_name.as_deref() != Some("main.py")
         && !module.has_noqa_architecture
-        && module.import_count > config.import_bloat_threshold
     {
-        issues.push(Issue {
-            check: "architecture/import-bloat",
-            severity: "warning",
-            category: "Architecture",
-            line: 0,
-            path: module.rel_path.to_string(),
-            message: Box::leak(
-                format!(
-                    "File has {} imports (>{}) — consider decomposing",
-                    module.import_count, config.import_bloat_threshold
-                )
-                .into_boxed_str(),
-            ),
-            help: "Use TYPE_CHECKING guards for type-only imports, lazy-import heavy libraries, or split the module.",
-        });
+        if let Some(parsed_suite) = suite {
+            let summary = analyze_import_surface(parsed_suite);
+            if let Some(issue) = architecture::collect_import_bloat_issue(
+                module,
+                &summary,
+                config.import_bloat_threshold,
+            ) {
+                issues.push(issue);
+            }
+        }
     }
 
     if rules.god_module

@@ -597,16 +597,27 @@ mod rule_tests {
 
     #[test]
     fn import_bloat_positive() {
-        let source = "import a\nimport b\nimport c\nimport d\n";
+        let source = "from pandas import DataFrame, Series, Index, concat\nframe = DataFrame()\nseries = Series()\nindex = Index([])\nresult = concat([])\n";
         let issues = issues_for("architecture/import-bloat", "app/mod.py", source);
         assert_eq!(issues.len(), 1);
+        assert!(issues[0].message.contains("pandas"));
     }
 
     #[test]
     fn import_bloat_negative_below_threshold() {
-        let source = "import a\nimport b\n";
+        let source =
+            "from slugify import slugify, Slugify\nvalue = slugify('hello')\nfactory = Slugify()\n";
         let issues = issues_for("architecture/import-bloat", "app/mod.py", source);
         assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn import_bloat_positive_dotted_alias_usage() {
+        let source = "import torch.utils.data as data\nloader = data.DataLoader([])\ninfo = data.get_worker_info()\ncollate = data.default_collate([])\ndataset = data.IterableDataset()\n";
+        let issues = issues_for("architecture/import-bloat", "app/mod.py", source);
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].message.contains("torch"));
+        assert!(issues[0].message.contains("utils.data.DataLoader"));
     }
 
     #[test]
