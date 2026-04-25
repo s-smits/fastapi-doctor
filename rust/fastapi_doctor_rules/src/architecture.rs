@@ -374,28 +374,41 @@ pub(crate) fn collect_fat_route_handler_issues(
         if source.contains("# noqa: architecture") {
             continue;
         }
-        // Check for route decorator
         let func_line = module.line_for_offset(function.range.start().to_usize());
-        let is_route = if func_line >= 2 {
+        if module.is_rule_suppressed_near(func_line, "architecture/fat-route-handler", 8) {
+            continue;
+        }
+
+        let route_decorator = if func_line >= 2 {
             let dec_start = func_line.saturating_sub(5);
-            (dec_start..func_line).any(|l| {
+            (dec_start..func_line).find_map(|l| {
                 if l > 0 && l <= module.lines.len() {
                     let trimmed = &module.lines[l - 1].trimmed;
-                    trimmed.starts_with("@")
+                    if trimmed.starts_with("@")
                         && (trimmed.contains("router") || trimmed.contains("app"))
+                    {
+                        Some(trimmed.as_ref())
+                    } else {
+                        None
+                    }
                 } else {
-                    false
+                    None
                 }
             })
         } else {
-            false
+            None
         };
-        if !is_route {
+        let Some(route_decorator) = route_decorator else {
             continue;
-        }
+        };
         let end_line = module.line_for_offset(function.range.end().to_usize().saturating_sub(1));
         let func_len = end_line.saturating_sub(func_line) + 1;
-        if func_len > config.fat_route_handler_threshold {
+        let effective_threshold = if is_mutating_route_decorator(route_decorator) {
+            config.fat_route_handler_threshold.saturating_mul(3) / 2
+        } else {
+            config.fat_route_handler_threshold
+        };
+        if func_len > effective_threshold {
             issues.push(Issue {
                 check: "architecture/fat-route-handler",
                 severity: "warning",
@@ -411,8 +424,9 @@ pub(crate) fn collect_fat_route_handler_issues(
                 ),
                 help: Box::leak(
                     format!(
-                        "Keep handlers under {} lines. Move logic to a service function.",
-                        config.fat_route_handler_threshold
+                        "Keep handlers under {} lines ({} for mutating endpoints). Move logic to a service function.",
+                        config.fat_route_handler_threshold,
+                        config.fat_route_handler_threshold.saturating_mul(3) / 2
                     )
                     .into_boxed_str(),
                 ),
@@ -420,6 +434,12 @@ pub(crate) fn collect_fat_route_handler_issues(
         }
     }
     issues
+}
+
+fn is_mutating_route_decorator(decorator: &str) -> bool {
+    [".post(", ".put(", ".patch(", ".delete("]
+        .iter()
+        .any(|marker| decorator.contains(marker))
 }
 
 // ── Architecture: passthrough-function ──────────────────────────────────

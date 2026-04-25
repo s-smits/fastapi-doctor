@@ -522,6 +522,40 @@ pub(crate) fn collect_sequential_awaits_issues(
         None
     }
 
+    fn call_terminal_name(call: &ast::ExprCall) -> Option<&str> {
+        match &*call.func {
+            Expr::Attribute(a) => Some(a.attr.as_str()),
+            Expr::Name(n) => Some(n.id.as_str()),
+            _ => None,
+        }
+    }
+
+    fn is_ordered_side_effect_call(
+        call: &ast::ExprCall,
+        side_effect_attrs: &HashSet<&str>,
+    ) -> bool {
+        let Some(name) = call_terminal_name(call) else {
+            return false;
+        };
+        if side_effect_attrs.contains(name) {
+            return true;
+        }
+        [
+            "emit_",
+            "log_",
+            "save_",
+            "persist_",
+            "cancel_",
+            "mark_",
+            "clear_",
+            "acquire_",
+            "release_",
+            "invalidate_",
+        ]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+    }
+
     for function in all_functions(suite) {
         if !function.is_async {
             continue;
@@ -541,16 +575,7 @@ pub(crate) fn collect_sequential_awaits_issues(
                 };
 
                 // Check side-effect calls
-                let is_side_effect = match &*call.func {
-                    Expr::Attribute(a) => side_effect_attrs.contains(a.attr.as_str()),
-                    Expr::Name(n) => {
-                        n.id.starts_with("emit_")
-                            || n.id.starts_with("log_")
-                            || n.id.starts_with("save_")
-                    }
-                    _ => false,
-                };
-                if is_side_effect {
+                if is_ordered_side_effect_call(call, &side_effect_attrs) {
                     break;
                 }
 

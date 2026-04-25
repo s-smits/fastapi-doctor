@@ -128,6 +128,7 @@ Key details:
 - **Errors** cost 2 points per unique rule, **warnings** cost 1
 - Score floors at 0
 - Missing optional tools do not reduce `doctor_score`
+- Opinionated rules are use-case aware where possible: sequential-await warnings avoid ordered lifecycle/write side effects, and mutating route handlers get modest extra line-count headroom compared with read endpoints.
 
 Labels:
 - **Great** — score >= 80

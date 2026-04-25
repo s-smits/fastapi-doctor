@@ -518,6 +518,65 @@ mod rule_tests {
     }
 
     #[test]
+    fn fat_route_handler_negative_with_preceding_doctor_ignore() {
+        let cfg = Config {
+            fat_route_handler_threshold: 10,
+            ..config()
+        };
+        let mut source = "from fastapi import APIRouter\nrouter = APIRouter()\n\n@router.patch('/items/{item_id}')\n# doctor:ignore architecture/fat-route-handler reason=\"legacy write path; service extraction planned\"\ndef update_item(item_id: str):\n".to_string();
+        for i in 0..15 {
+            source.push_str(&format!("    x{} = {}\n", i, i));
+        }
+        let issues = issues_for_with_config(
+            "architecture/fat-route-handler",
+            "app/routers/items.py",
+            &source,
+            cfg,
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn fat_route_handler_allows_some_extra_write_path_scaffolding() {
+        let cfg = Config {
+            fat_route_handler_threshold: 10,
+            ..config()
+        };
+        let mut source = "from fastapi import APIRouter\nrouter = APIRouter()\n\n@router.patch('/items/{item_id}')\ndef update_item(item_id: str):\n".to_string();
+        for i in 0..12 {
+            source.push_str(&format!("    x{} = {}\n", i, i));
+        }
+        let issues = issues_for_with_config(
+            "architecture/fat-route-handler",
+            "app/routers/items.py",
+            &source,
+            cfg,
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn fat_route_handler_keeps_read_paths_tight() {
+        let cfg = Config {
+            fat_route_handler_threshold: 10,
+            ..config()
+        };
+        let mut source =
+            "from fastapi import APIRouter\nrouter = APIRouter()\n\n@router.get('/items')\ndef list_items():\n"
+                .to_string();
+        for i in 0..12 {
+            source.push_str(&format!("    x{} = {}\n", i, i));
+        }
+        let issues = issues_for_with_config(
+            "architecture/fat-route-handler",
+            "app/routers/items.py",
+            &source,
+            cfg,
+        );
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
     fn large_function_positive() {
         let cfg = Config {
             large_function_threshold: 10,
@@ -902,6 +961,16 @@ mod rule_tests {
             "async def handler():\n    a = await fetch_a()\n    b = await fetch_b()\n    return a, b\n",
         );
         assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn sequential_awaits_negative_for_ordered_lifecycle_side_effects() {
+        let issues = issues_for(
+            "performance/sequential-awaits",
+            "app/main.py",
+            "async def pause_session():\n    cancelled = await cancel_registered_background_run(session_id)\n    updated = await persist_session_lifecycle_status(session_id=session_id, status='paused')\n    return cancelled, updated\n",
+        );
+        assert!(issues.is_empty());
     }
 
     // ── Pydantic Rules ──────────────────────────────────────────────────
