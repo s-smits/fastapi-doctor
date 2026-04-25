@@ -176,7 +176,7 @@ uv run fastapi-doctor --profile strict --repo-root . --code-dir apps/service_api
 | `architecture/passthrough-function` | Architecture | Function that purely delegates to another |
 | `architecture/async-without-await` | Architecture | `async def` handler that never awaits |
 | `architecture/print-in-production` | Architecture | `print()` instead of logger |
-| `architecture/fat-route-handler` | Architecture | Route handler >threshold lines (configurable, default 100) |
+| `architecture/fat-route-handler` | Architecture | Route handler >threshold lines (configurable, default 100; mutating endpoints get modest write-path headroom) |
 | `architecture/avoid-sys-exit` | Architecture | Hard exit from internal library logic via `sys.exit()` |
 | `api-surface/missing-tags` | API Surface | Route missing tags |
 | `api-surface/missing-pagination` | API Surface | Collection endpoint missing standard pagination parameters |
@@ -188,6 +188,11 @@ uv run fastapi-doctor --profile strict --repo-root . --code-dir apps/service_api
 | `resilience/bare-except-pass` | Resilience | `except: pass` without logging or comment |
 | `resilience/reraise-without-context` | Resilience | Re-raise without adding any context |
 | `config/direct-env-access` | Config | Service/router reads `os.environ` instead of settings |
+
+Rule intent notes:
+
+- `performance/sequential-awaits` is for independent read-style awaits. Ordered lifecycle/write side effects such as `cancel_*`, `persist_*`, `mark_*`, `clear_*`, `acquire_*`, `release_*`, and `invalidate_*` are treated as intentionally sequential.
+- `architecture/fat-route-handler` keeps read endpoints tight while allowing some extra scaffolding for POST/PUT/PATCH/DELETE handlers. Use a nearby `doctor:ignore architecture/fat-route-handler reason="..."` only when the route is intentionally deferred and has an owner.
 | `config/env-mutation` | Config | Service/router mutates process env outside bootstrap entrypoints |
 | `resilience/exception-log-without-traceback` | Resilience | Exception is logged without traceback context |
 | `security/exception-detail-leak` | Security | Exposing unhandled internal `Exception` messages to users |

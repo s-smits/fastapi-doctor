@@ -223,6 +223,19 @@ impl<'a> ModuleIndex<'a> {
         }
         line_suppresses_rule(&self.lines[line_number - 1].raw, rule_id)
     }
+
+    pub fn is_rule_suppressed_near(
+        &self,
+        line_number: usize,
+        rule_id: &str,
+        lookback_lines: usize,
+    ) -> bool {
+        if line_number == 0 {
+            return false;
+        }
+        let start = line_number.saturating_sub(lookback_lines).max(1);
+        (start..=line_number).any(|line| self.is_rule_suppressed(line, rule_id))
+    }
 }
 
 pub fn path_to_string(path: &Path) -> String {
