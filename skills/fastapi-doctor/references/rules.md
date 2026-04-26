@@ -80,6 +80,15 @@ Deployable app code must not create apps or servers with `debug=True` or
 Credentialed CORS must use explicit trusted origins. Wildcard origins with
 `allow_credentials=True` are unsafe.
 
+### `security/sql-execute-fstring` (error)
+Raw f-strings passed directly to `.execute(...)` bypass bind parameters and can
+become SQL injection. Use typed SQLAlchemy statements or `text(...)` with bind
+params.
+
+### `security/unvalidated-redirect` (warning)
+`RedirectResponse` fed by request-like names such as `redirect_uri`, `next_url`,
+`return_to`, or `location` needs an allowlist or safe relative-path conversion.
+
 ### `security/insecure-cookie` (warning)
 Cookies set from backend responses should carry `secure=True`, `httponly=True`,
 and an explicit `samesite` value unless they are deliberately non-session cookies.

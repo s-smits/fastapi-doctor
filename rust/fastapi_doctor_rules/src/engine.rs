@@ -251,6 +251,8 @@ pub struct RuleSelection {
     pub jwt_insecure_decode: bool,
     pub debug_enabled: bool,
     pub cors_wildcard_credentials: bool,
+    pub sql_execute_fstring: bool,
+    pub unvalidated_redirect: bool,
     pub weak_hash_without_flag: bool,
     pub sqlalchemy_pool_pre_ping: bool,
     pub bare_except_pass: bool,
@@ -387,6 +389,8 @@ impl RuleSelection {
             StaticRule::SecurityJwtInsecureDecode => self.jwt_insecure_decode = true,
             StaticRule::SecurityDebugEnabled => self.debug_enabled = true,
             StaticRule::SecurityCorsWildcardCredentials => self.cors_wildcard_credentials = true,
+            StaticRule::SecuritySqlExecuteFstring => self.sql_execute_fstring = true,
+            StaticRule::SecurityUnvalidatedRedirect => self.unvalidated_redirect = true,
             StaticRule::SecurityWeakHashWithoutFlag => self.weak_hash_without_flag = true,
             StaticRule::SecuritySqlFstringInterpolation => self.sql_fstring_interpolation = true,
             StaticRule::SecurityHardcodedSecret => self.hardcoded_secret = true,
@@ -432,6 +436,8 @@ impl RuleSelection {
             || self.jwt_insecure_decode
             || self.debug_enabled
             || self.cors_wildcard_credentials
+            || self.sql_execute_fstring
+            || self.unvalidated_redirect
             || self.hardcoded_secret
             || self.pydantic_secretstr
             || self.exception_detail_leak
@@ -570,6 +576,9 @@ pub fn analyze_suite(
     if rules.sql_fstring_interpolation {
         issues.extend(security::collect_sql_fstring_issues(module, suite));
     }
+    if rules.sql_execute_fstring {
+        issues.extend(security::collect_sql_execute_fstring_issues(module, suite));
+    }
     if rules.unsafe_eval_exec {
         issues.extend(security::collect_unsafe_eval_exec_issues(module, suite));
     }
@@ -597,6 +606,9 @@ pub fn analyze_suite(
         issues.extend(security::collect_cors_wildcard_credentials_issues(
             module, suite,
         ));
+    }
+    if rules.unvalidated_redirect {
+        issues.extend(security::collect_unvalidated_redirect_issues(module, suite));
     }
     if rules.hardcoded_secret {
         issues.extend(security::collect_hardcoded_secret_issues(module, suite));

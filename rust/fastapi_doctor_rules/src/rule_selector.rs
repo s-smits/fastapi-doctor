@@ -124,6 +124,8 @@ pub fn parse_static_rule(rule_id: &str) -> Option<StaticRule> {
         "security/jwt-insecure-decode" => StaticRule::SecurityJwtInsecureDecode,
         "security/debug-enabled" => StaticRule::SecurityDebugEnabled,
         "security/cors-wildcard-credentials" => StaticRule::SecurityCorsWildcardCredentials,
+        "security/sql-execute-fstring" => StaticRule::SecuritySqlExecuteFstring,
+        "security/unvalidated-redirect" => StaticRule::SecurityUnvalidatedRedirect,
         "security/weak-hash-without-flag" => StaticRule::SecurityWeakHashWithoutFlag,
         "security/sql-fstring-interpolation" => StaticRule::SecuritySqlFstringInterpolation,
         "security/hardcoded-secret" => StaticRule::SecurityHardcodedSecret,

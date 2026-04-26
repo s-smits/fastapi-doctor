@@ -66,6 +66,8 @@ pub enum StaticRule {
     SecurityJwtInsecureDecode,
     SecurityDebugEnabled,
     SecurityCorsWildcardCredentials,
+    SecuritySqlExecuteFstring,
+    SecurityUnvalidatedRedirect,
     SecurityWeakHashWithoutFlag,
     SecuritySqlFstringInterpolation,
     SecurityHardcodedSecret,
@@ -150,6 +152,8 @@ impl StaticRule {
             SecurityJwtInsecureDecode,
             SecurityDebugEnabled,
             SecurityCorsWildcardCredentials,
+            SecuritySqlExecuteFstring,
+            SecurityUnvalidatedRedirect,
             SecurityWeakHashWithoutFlag,
             SecuritySqlFstringInterpolation,
             SecurityHardcodedSecret,
@@ -235,6 +239,8 @@ impl StaticRule {
             Self::SecurityJwtInsecureDecode => "security/jwt-insecure-decode",
             Self::SecurityDebugEnabled => "security/debug-enabled",
             Self::SecurityCorsWildcardCredentials => "security/cors-wildcard-credentials",
+            Self::SecuritySqlExecuteFstring => "security/sql-execute-fstring",
+            Self::SecurityUnvalidatedRedirect => "security/unvalidated-redirect",
             Self::SecurityWeakHashWithoutFlag => "security/weak-hash-without-flag",
             Self::SecuritySqlFstringInterpolation => "security/sql-fstring-interpolation",
             Self::SecurityHardcodedSecret => "security/hardcoded-secret",
@@ -266,6 +272,7 @@ impl StaticRule {
             | Self::SecurityJwtInsecureDecode
             | Self::SecurityDebugEnabled
             | Self::SecurityCorsWildcardCredentials
+            | Self::SecuritySqlExecuteFstring
             | Self::SecuritySqlFstringInterpolation
             | Self::SecurityHardcodedSecret
             | Self::SecurityPydanticSecretStr => "error",
@@ -307,6 +314,8 @@ impl StaticRule {
             | Self::SecurityJwtInsecureDecode
             | Self::SecurityDebugEnabled
             | Self::SecurityCorsWildcardCredentials
+            | Self::SecuritySqlExecuteFstring
+            | Self::SecurityUnvalidatedRedirect
             | Self::SecurityWeakHashWithoutFlag
             | Self::SecuritySqlFstringInterpolation
             | Self::SecurityHardcodedSecret

@@ -258,6 +258,37 @@ mod rule_tests {
     }
 
     #[test]
+    fn unvalidated_redirect_positive() {
+        let issues = issues_for(
+            "security/unvalidated-redirect",
+            "app/routes.py",
+            "from fastapi.responses import RedirectResponse\n\ndef done(redirect_uri: str):\n    return RedirectResponse(url=redirect_uri)\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].check, "security/unvalidated-redirect");
+    }
+
+    #[test]
+    fn unvalidated_redirect_positive_composed_location() {
+        let issues = issues_for(
+            "security/unvalidated-redirect",
+            "app/routes.py",
+            "from fastapi.responses import RedirectResponse\n\ndef done(redirect_uri: str):\n    location = f'{redirect_uri}?ok=1'\n    return RedirectResponse(url=location)\n",
+        );
+        assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn unvalidated_redirect_negative_static_path() {
+        let issues = issues_for(
+            "security/unvalidated-redirect",
+            "app/routes.py",
+            "from fastapi.responses import RedirectResponse\n\ndef done():\n    return RedirectResponse(url='/dashboard')\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
     fn subprocess_shell_true_positive() {
         let issues = issues_for(
             "security/subprocess-shell-true",
@@ -366,6 +397,27 @@ mod rule_tests {
             "security/sql-fstring-interpolation",
             "app/main.py",
             "from sqlalchemy import text\nq = text(\"SELECT * FROM users\")\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn sql_execute_fstring_positive() {
+        let issues = issues_for(
+            "security/sql-execute-fstring",
+            "app/db.py",
+            "async def load(session, user_id):\n    return await session.execute(f\"SELECT * FROM users WHERE id = {user_id}\")\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].severity, "error");
+    }
+
+    #[test]
+    fn sql_execute_fstring_negative_parameterized_text() {
+        let issues = issues_for(
+            "security/sql-execute-fstring",
+            "app/db.py",
+            "from sqlalchemy import text\nasync def load(session, user_id):\n    return await session.execute(text(\"SELECT * FROM users WHERE id = :id\"), {\"id\": user_id})\n",
         );
         assert!(issues.is_empty());
     }

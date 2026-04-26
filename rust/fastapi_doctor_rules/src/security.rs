@@ -101,6 +101,55 @@ pub(crate) fn collect_sql_fstring_issues(module: &ModuleIndex, suite: &ast::Suit
     issues
 }
 
+pub(crate) fn collect_sql_execute_fstring_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
+    if !module.source.contains("execute(") {
+        return Vec::new();
+    }
+
+    let mut issues = Vec::new();
+    walk_suite_exprs(suite, &mut |expr| {
+        let Expr::Call(call) = expr else { return };
+        let Some(name) = call_name(&call.func) else {
+            return;
+        };
+        if !name.ends_with(".execute") && name != "execute" {
+            return;
+        }
+        if !call
+            .args
+            .first()
+            .is_some_and(|arg| matches!(arg, Expr::JoinedStr(_)))
+        {
+            return;
+        }
+        let line = module.line_for_offset(call.range.start().to_usize());
+        if module.is_rule_suppressed(line, "security/sql-execute-fstring") {
+            return;
+        }
+        for check_line in line.saturating_sub(1)..=(line + 1).min(module.lines.len()) {
+            if check_line > 0 && check_line <= module.lines.len() {
+                let raw = &module.lines[check_line - 1].raw;
+                if raw.contains("noqa: sql-safe") || raw.contains("noqa: security") {
+                    return;
+                }
+            }
+        }
+        issues.push(Issue {
+            check: "security/sql-execute-fstring",
+            severity: "error",
+            category: "Security",
+            line,
+            path: module.rel_path.to_string(),
+            message: "SQL injection risk: f-string passed directly to execute()",
+            help: "Use SQLAlchemy text() with bind parameters, or pass a typed statement plus params.",
+        });
+    });
+    issues
+}
+
 pub(crate) fn collect_exception_detail_leak_issues(
     module: &ModuleIndex,
     suite: &ast::Suite,
@@ -647,6 +696,104 @@ pub(crate) fn collect_cors_wildcard_credentials_issues(
             path: module.rel_path.to_string(),
             message: "CORS allows credentials with a wildcard origin",
             help: "When credentials are allowed, use explicit trusted origins. Wildcards and credentialed browser requests do not belong together.",
+        });
+    });
+    issues
+}
+
+pub(crate) fn collect_unvalidated_redirect_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
+    if !module.source.contains("RedirectResponse") {
+        return Vec::new();
+    }
+
+    fn risky_redirect_name(name: &str) -> bool {
+        let lower = name.to_ascii_lowercase();
+        lower == "next"
+            || lower == "url"
+            || lower == "location"
+            || lower == "redirect"
+            || lower.contains("redirect_uri")
+            || lower.contains("redirect_url")
+            || lower.contains("return_to")
+            || lower.contains("next_url")
+            || lower.contains("callback_url")
+    }
+
+    fn expr_mentions_risky_name(expr: &Expr, risky_names: &HashSet<String>) -> bool {
+        let mut found = false;
+        walk_expr_tree(expr, &mut |node| {
+            if found {
+                return;
+            }
+            match node {
+                Expr::Name(name)
+                    if risky_names.contains(name.id.as_str())
+                        || risky_redirect_name(name.id.as_str()) =>
+                {
+                    found = true
+                }
+                Expr::Attribute(attr) if risky_redirect_name(attr.attr.as_str()) => found = true,
+                _ => {}
+            }
+        });
+        found
+    }
+
+    let mut issues = Vec::new();
+    walk_suite_stmts(suite, &mut |stmt| {
+        let (body, args) = match stmt {
+            Stmt::FunctionDef(node) => (&node.body, &node.args),
+            Stmt::AsyncFunctionDef(node) => (&node.body, &node.args),
+            _ => return,
+        };
+        let risky_names: HashSet<String> = args
+            .posonlyargs
+            .iter()
+            .chain(args.args.iter())
+            .chain(args.kwonlyargs.iter())
+            .map(|arg| arg.def.arg.to_string())
+            .filter(|name| risky_redirect_name(name))
+            .collect();
+        if risky_names.is_empty() {
+            return;
+        }
+
+        walk_suite_exprs(body, &mut |expr| {
+            let Expr::Call(call) = expr else { return };
+            let Some(name) = call_name(&call.func) else {
+                return;
+            };
+            if !name.ends_with("RedirectResponse") {
+                return;
+            }
+            let url_expr = call
+                .keywords
+                .iter()
+                .find(|kw| kw.arg.as_deref() == Some("url"))
+                .map(|kw| &kw.value)
+                .or_else(|| call.args.first());
+            let Some(url_expr) = url_expr else {
+                return;
+            };
+            if !expr_mentions_risky_name(url_expr, &risky_names) {
+                return;
+            }
+            let line = module.line_for_offset(call.range.start().to_usize());
+            if module.is_rule_suppressed(line, "security/unvalidated-redirect") {
+                return;
+            }
+            issues.push(Issue {
+                check: "security/unvalidated-redirect",
+                severity: "warning",
+                category: "Security",
+                line,
+                path: module.rel_path.to_string(),
+                message: "RedirectResponse uses a request-like redirect URL value",
+                help: "Validate redirect targets against an allowlist or convert them to safe relative paths before redirecting.",
+            });
         });
     });
     issues

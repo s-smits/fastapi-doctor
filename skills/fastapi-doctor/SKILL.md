@@ -158,6 +158,8 @@ uv run fastapi-doctor --profile strict --repo-root . --code-dir apps/service_api
 | `security/jwt-insecure-decode` | Security | JWT decode without pinned algorithms or with signature verification disabled |
 | `security/debug-enabled` | Security | Deployable app/server enables debug or reload mode |
 | `security/cors-wildcard-credentials` | Security | Credentialed CORS with wildcard origins |
+| `security/sql-execute-fstring` | Security | Raw f-string passed directly to `execute()` |
+| `security/unvalidated-redirect` | Security | Redirect uses request-like URL value without visible validation |
 | `correctness/duplicate-route` | Correctness | Same method+path registered twice |
 | `correctness/sync-io-in-async` | Correctness | Blocking file, lock, sleep, or HTTP calls inside async code |
 | `architecture/giant-route-handler` | Architecture | Oversized API route/request handler in strict mode |
