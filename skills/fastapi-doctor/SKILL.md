@@ -152,6 +152,12 @@ uv run fastapi-doctor --profile strict --repo-root . --code-dir apps/service_api
 | `security/forbidden-write-param` | Security | Write endpoint accepts configured forbidden ownership parameters |
 | `security/weak-hash-without-flag` | Security | SHA1/MD5 without `usedforsecurity=False` |
 | `security/unsafe-yaml-load` | Security | `yaml.load()` without SafeLoader/BaseLoader |
+| `security/unsafe-eval-exec` | Security | Dynamic code execution via `eval()` or `exec()` |
+| `security/unsafe-pickle-load` | Security | Code-executing pickle/dill/cloudpickle deserialisation |
+| `security/http-verify-false` | Security | HTTP client disables TLS verification |
+| `security/jwt-insecure-decode` | Security | JWT decode without pinned algorithms or with signature verification disabled |
+| `security/debug-enabled` | Security | Deployable app/server enables debug or reload mode |
+| `security/cors-wildcard-credentials` | Security | Credentialed CORS with wildcard origins |
 | `correctness/duplicate-route` | Correctness | Same method+path registered twice |
 | `correctness/sync-io-in-async` | Correctness | Blocking file, lock, sleep, or HTTP calls inside async code |
 | `architecture/giant-route-handler` | Architecture | Oversized API route/request handler in strict mode |
@@ -168,6 +174,7 @@ uv run fastapi-doctor --profile strict --repo-root . --code-dir apps/service_api
 | `correctness/missing-response-model` | Correctness | API route has no `response_model` |
 | `correctness/weak-response-model` | Correctness | API route uses `dict`/`Any`-style `response_model` |
 | `correctness/post-status-code` | Correctness | Resource-creation POST defaults to 200 |
+| `correctness/untracked-background-task` | Correctness | Bare `asyncio.create_task()` without retained task supervision |
 | `architecture/giant-function` | Architecture | Large non-route function; advisory architecture pressure in strict mode |
 | `architecture/large-function` | Architecture | Function body >threshold lines (configurable, default 200) |
 | `architecture/god-module` | Architecture | File >threshold lines (configurable, default 1500) |
@@ -178,6 +185,7 @@ uv run fastapi-doctor --profile strict --repo-root . --code-dir apps/service_api
 | `architecture/print-in-production` | Architecture | `print()` instead of logger |
 | `architecture/fat-route-handler` | Architecture | Route handler >threshold lines (configurable, default 100; mutating endpoints get modest write-path headroom) |
 | `architecture/avoid-sys-exit` | Architecture | Hard exit from internal library logic via `sys.exit()` |
+| `architecture/slop-comment` | Architecture | Strict cleanup marker: TODO/FIXME/legacy/fallback/workaround comments |
 | `api-surface/missing-tags` | API Surface | Route missing tags |
 | `api-surface/missing-pagination` | API Surface | Collection endpoint missing standard pagination parameters |
 | `api-surface/missing-docstring` | API Surface | Endpoint handler has no docstring |
@@ -196,6 +204,8 @@ Rule intent notes:
 | `config/env-mutation` | Config | Service/router mutates process env outside bootstrap entrypoints |
 | `resilience/exception-log-without-traceback` | Resilience | Exception is logged without traceback context |
 | `security/exception-detail-leak` | Security | Exposing unhandled internal `Exception` messages to users |
+| `security/exception-string-response` | Security | Exposing `str(exc)` through response/event payloads |
+| `security/insecure-cookie` | Security | Cookie missing `secure`, `httponly`, or `samesite` |
 | `correctness/naive-datetime` | Correctness | Usage of `datetime.utcnow()` or `now()` without timezones |
 | `correctness/avoid-os-path` | Correctness | Usage of `os.path` APIs instead of `pathlib.Path` |
 

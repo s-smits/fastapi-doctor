@@ -32,6 +32,7 @@ const MEDIUM_SELECTORS: &[&str] = &[
     "correctness/threading-lock-in-async",
     "correctness/unreachable-code",
     "correctness/get-with-side-effect",
+    "correctness/untracked-background-task",
     "correctness/serverless-filesystem-write",
     "correctness/missing-http-timeout",
     "resilience/*",
@@ -68,6 +69,7 @@ pub fn parse_static_rule(rule_id: &str) -> Option<StaticRule> {
             StaticRule::ArchitectureMissingStartupValidation
         }
         "architecture/fat-route-handler" => StaticRule::ArchitectureFatRouteHandler,
+        "architecture/slop-comment" => StaticRule::ArchitectureSlopComment,
         "security/missing-auth-dep" => StaticRule::SecurityMissingAuthDep,
         "security/forbidden-write-param" => StaticRule::SecurityForbiddenWriteParam,
         "correctness/duplicate-route" => StaticRule::CorrectnessDuplicateRoute,
@@ -99,6 +101,7 @@ pub fn parse_static_rule(rule_id: &str) -> Option<StaticRule> {
             StaticRule::CorrectnessServerlessFilesystemWrite
         }
         "correctness/missing-http-timeout" => StaticRule::CorrectnessMissingHttpTimeout,
+        "correctness/untracked-background-task" => StaticRule::CorrectnessUntrackedBackgroundTask,
         "performance/sequential-awaits" => StaticRule::PerformanceSequentialAwaits,
         "performance/regex-in-loop" => StaticRule::PerformanceRegexInLoop,
         "performance/n-plus-one-hint" => StaticRule::PerformanceNPlusOneHint,
@@ -113,6 +116,14 @@ pub fn parse_static_rule(rule_id: &str) -> Option<StaticRule> {
         "security/exception-detail-leak" => StaticRule::SecurityExceptionDetailLeak,
         "security/subprocess-shell-true" => StaticRule::SecuritySubprocessShellTrue,
         "security/unsafe-yaml-load" => StaticRule::SecurityUnsafeYamlLoad,
+        "security/unsafe-eval-exec" => StaticRule::SecurityUnsafeEvalExec,
+        "security/unsafe-pickle-load" => StaticRule::SecurityUnsafePickleLoad,
+        "security/http-verify-false" => StaticRule::SecurityHttpVerifyFalse,
+        "security/insecure-cookie" => StaticRule::SecurityInsecureCookie,
+        "security/exception-string-response" => StaticRule::SecurityExceptionStringResponse,
+        "security/jwt-insecure-decode" => StaticRule::SecurityJwtInsecureDecode,
+        "security/debug-enabled" => StaticRule::SecurityDebugEnabled,
+        "security/cors-wildcard-credentials" => StaticRule::SecurityCorsWildcardCredentials,
         "security/weak-hash-without-flag" => StaticRule::SecurityWeakHashWithoutFlag,
         "security/sql-fstring-interpolation" => StaticRule::SecuritySqlFstringInterpolation,
         "security/hardcoded-secret" => StaticRule::SecurityHardcodedSecret,

@@ -243,6 +243,14 @@ pub struct RuleSelection {
     pub exception_detail_leak: bool,
     pub subprocess_shell_true: bool,
     pub unsafe_yaml_load: bool,
+    pub unsafe_eval_exec: bool,
+    pub unsafe_pickle_load: bool,
+    pub http_verify_false: bool,
+    pub insecure_cookie: bool,
+    pub exception_string_response: bool,
+    pub jwt_insecure_decode: bool,
+    pub debug_enabled: bool,
+    pub cors_wildcard_credentials: bool,
     pub weak_hash_without_flag: bool,
     pub sqlalchemy_pool_pre_ping: bool,
     pub bare_except_pass: bool,
@@ -265,6 +273,7 @@ pub struct RuleSelection {
     pub exposed_mutable_state: bool,
     pub serverless_filesystem_write: bool,
     pub missing_http_timeout: bool,
+    pub untracked_background_task: bool,
     pub god_module: bool,
     pub passthrough_function: bool,
     pub hidden_dependency_instantiation: bool,
@@ -286,6 +295,7 @@ pub struct RuleSelection {
     pub config_sqlalchemy_naming_convention: bool,
     pub env_mutation: bool,
     pub exception_log_without_traceback: bool,
+    pub slop_comment: bool,
 }
 
 impl RuleSelection {
@@ -318,6 +328,7 @@ impl RuleSelection {
                 self.missing_startup_validation = true
             }
             StaticRule::ArchitectureFatRouteHandler => self.fat_route_handler = true,
+            StaticRule::ArchitectureSlopComment => self.slop_comment = true,
             StaticRule::SecurityMissingAuthDep => self.missing_auth_dep = true,
             StaticRule::SecurityForbiddenWriteParam => self.forbidden_write_param = true,
             StaticRule::CorrectnessDuplicateRoute => self.duplicate_route = true,
@@ -353,6 +364,7 @@ impl RuleSelection {
                 self.serverless_filesystem_write = true
             }
             StaticRule::CorrectnessMissingHttpTimeout => self.missing_http_timeout = true,
+            StaticRule::CorrectnessUntrackedBackgroundTask => self.untracked_background_task = true,
             StaticRule::PerformanceSequentialAwaits => self.sequential_awaits = true,
             StaticRule::PerformanceRegexInLoop => self.regex_in_loop = true,
             StaticRule::PerformanceNPlusOneHint => self.n_plus_one_hint = true,
@@ -367,6 +379,14 @@ impl RuleSelection {
             StaticRule::SecurityExceptionDetailLeak => self.exception_detail_leak = true,
             StaticRule::SecuritySubprocessShellTrue => self.subprocess_shell_true = true,
             StaticRule::SecurityUnsafeYamlLoad => self.unsafe_yaml_load = true,
+            StaticRule::SecurityUnsafeEvalExec => self.unsafe_eval_exec = true,
+            StaticRule::SecurityUnsafePickleLoad => self.unsafe_pickle_load = true,
+            StaticRule::SecurityHttpVerifyFalse => self.http_verify_false = true,
+            StaticRule::SecurityInsecureCookie => self.insecure_cookie = true,
+            StaticRule::SecurityExceptionStringResponse => self.exception_string_response = true,
+            StaticRule::SecurityJwtInsecureDecode => self.jwt_insecure_decode = true,
+            StaticRule::SecurityDebugEnabled => self.debug_enabled = true,
+            StaticRule::SecurityCorsWildcardCredentials => self.cors_wildcard_credentials = true,
             StaticRule::SecurityWeakHashWithoutFlag => self.weak_hash_without_flag = true,
             StaticRule::SecuritySqlFstringInterpolation => self.sql_fstring_interpolation = true,
             StaticRule::SecurityHardcodedSecret => self.hardcoded_secret = true,
@@ -404,6 +424,14 @@ impl RuleSelection {
             || self.broad_except_no_context
             || self.exception_log_without_traceback
             || self.sql_fstring_interpolation
+            || self.unsafe_eval_exec
+            || self.unsafe_pickle_load
+            || self.http_verify_false
+            || self.insecure_cookie
+            || self.exception_string_response
+            || self.jwt_insecure_decode
+            || self.debug_enabled
+            || self.cors_wildcard_credentials
             || self.hardcoded_secret
             || self.pydantic_secretstr
             || self.exception_detail_leak
@@ -418,6 +446,7 @@ impl RuleSelection {
             || self.exposed_mutable_state
             || self.serverless_filesystem_write
             || self.missing_http_timeout
+            || self.untracked_background_task
             || self.passthrough_function
             || self.hidden_dependency_instantiation
             || self.flag_argument_dispatch
@@ -437,6 +466,7 @@ impl RuleSelection {
             || self.cors_wildcard
             || self.subprocess_shell_true
             || self.unsafe_yaml_load
+            || self.slop_comment
             || self.weak_hash_without_flag
             || self.sqlalchemy_pool_pre_ping
             || self.deprecated_validator
@@ -540,6 +570,34 @@ pub fn analyze_suite(
     if rules.sql_fstring_interpolation {
         issues.extend(security::collect_sql_fstring_issues(module, suite));
     }
+    if rules.unsafe_eval_exec {
+        issues.extend(security::collect_unsafe_eval_exec_issues(module, suite));
+    }
+    if rules.unsafe_pickle_load {
+        issues.extend(security::collect_unsafe_pickle_load_issues(module, suite));
+    }
+    if rules.http_verify_false {
+        issues.extend(security::collect_http_verify_false_issues(module, suite));
+    }
+    if rules.insecure_cookie {
+        issues.extend(security::collect_insecure_cookie_issues(module, suite));
+    }
+    if rules.exception_string_response {
+        issues.extend(security::collect_exception_string_response_issues(
+            module, suite,
+        ));
+    }
+    if rules.jwt_insecure_decode {
+        issues.extend(security::collect_jwt_insecure_decode_issues(module, suite));
+    }
+    if rules.debug_enabled {
+        issues.extend(security::collect_debug_enabled_issues(module, suite));
+    }
+    if rules.cors_wildcard_credentials {
+        issues.extend(security::collect_cors_wildcard_credentials_issues(
+            module, suite,
+        ));
+    }
     if rules.hardcoded_secret {
         issues.extend(security::collect_hardcoded_secret_issues(module, suite));
     }
@@ -563,6 +621,11 @@ pub fn analyze_suite(
     }
     if rules.missing_http_timeout {
         issues.extend(correctness::collect_missing_http_timeout_issues(
+            module, suite,
+        ));
+    }
+    if rules.untracked_background_task {
+        issues.extend(correctness::collect_untracked_background_task_issues(
             module, suite,
         ));
     }
@@ -749,6 +812,40 @@ pub fn analyze_module_with_suite(
                 "assert statement outside tests — use explicit exception raises",
                 "Asserts are ignored when Python runs with -O. Raise ValueError or custom exceptions instead. Do not wrap in 'if condition:' without raising, as that silently skips the check.",
             ));
+        }
+
+        if rules.slop_comment
+            && !module.has_path_part(&["tests", "test", "vendor", "vendored", "third_party"])
+            && !module.is_rule_suppressed(line.number, "architecture/slop-comment")
+        {
+            let lower = line.raw.to_ascii_lowercase();
+            let comment = lower.split('#').nth(1).unwrap_or("");
+            let has_marker = comment.contains("todo")
+                || comment.contains("fixme")
+                || comment.contains("hack")
+                || comment.contains("xxx")
+                || comment.contains("temporary")
+                || comment.contains("workaround")
+                || comment.contains("legacy")
+                || comment.contains("backward compat")
+                || comment.contains("compatibility")
+                || comment.contains("fallback")
+                || comment.contains("placeholder")
+                || comment.contains("stub")
+                || comment.contains("remove this")
+                || comment.contains("remove these")
+                || comment.contains("defensive");
+            if has_marker && !line.raw.contains("# noqa") && !line.raw.contains("doctor:ignore") {
+                issues.push(issue(
+                    "architecture/slop-comment",
+                    "warning",
+                    "Architecture",
+                    line.number,
+                    module.rel_path,
+                    "Cleanup marker comment left in production code",
+                    "Resolve the TODO/legacy/fallback note or suppress it with a reason if it documents an intentional boundary.",
+                ));
+            }
         }
 
         if rules.cors_wildcard {

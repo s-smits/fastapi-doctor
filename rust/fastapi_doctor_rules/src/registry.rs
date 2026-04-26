@@ -58,11 +58,21 @@ pub enum StaticRule {
     SecurityExceptionDetailLeak,
     SecuritySubprocessShellTrue,
     SecurityUnsafeYamlLoad,
+    SecurityUnsafeEvalExec,
+    SecurityUnsafePickleLoad,
+    SecurityHttpVerifyFalse,
+    SecurityInsecureCookie,
+    SecurityExceptionStringResponse,
+    SecurityJwtInsecureDecode,
+    SecurityDebugEnabled,
+    SecurityCorsWildcardCredentials,
     SecurityWeakHashWithoutFlag,
     SecuritySqlFstringInterpolation,
     SecurityHardcodedSecret,
     SecurityPydanticSecretStr,
+    CorrectnessUntrackedBackgroundTask,
     ResilienceSqlalchemyPoolPrePing,
+    ArchitectureSlopComment,
     ResilienceBareExceptPass,
     ResilienceReraiseWithoutContext,
     ResilienceExceptionSwallowed,
@@ -132,11 +142,21 @@ impl StaticRule {
             SecurityExceptionDetailLeak,
             SecuritySubprocessShellTrue,
             SecurityUnsafeYamlLoad,
+            SecurityUnsafeEvalExec,
+            SecurityUnsafePickleLoad,
+            SecurityHttpVerifyFalse,
+            SecurityInsecureCookie,
+            SecurityExceptionStringResponse,
+            SecurityJwtInsecureDecode,
+            SecurityDebugEnabled,
+            SecurityCorsWildcardCredentials,
             SecurityWeakHashWithoutFlag,
             SecuritySqlFstringInterpolation,
             SecurityHardcodedSecret,
             SecurityPydanticSecretStr,
+            CorrectnessUntrackedBackgroundTask,
             ResilienceSqlalchemyPoolPrePing,
+            ArchitectureSlopComment,
             ResilienceBareExceptPass,
             ResilienceReraiseWithoutContext,
             ResilienceExceptionSwallowed,
@@ -207,11 +227,21 @@ impl StaticRule {
             Self::SecurityExceptionDetailLeak => "security/exception-detail-leak",
             Self::SecuritySubprocessShellTrue => "security/subprocess-shell-true",
             Self::SecurityUnsafeYamlLoad => "security/unsafe-yaml-load",
+            Self::SecurityUnsafeEvalExec => "security/unsafe-eval-exec",
+            Self::SecurityUnsafePickleLoad => "security/unsafe-pickle-load",
+            Self::SecurityHttpVerifyFalse => "security/http-verify-false",
+            Self::SecurityInsecureCookie => "security/insecure-cookie",
+            Self::SecurityExceptionStringResponse => "security/exception-string-response",
+            Self::SecurityJwtInsecureDecode => "security/jwt-insecure-decode",
+            Self::SecurityDebugEnabled => "security/debug-enabled",
+            Self::SecurityCorsWildcardCredentials => "security/cors-wildcard-credentials",
             Self::SecurityWeakHashWithoutFlag => "security/weak-hash-without-flag",
             Self::SecuritySqlFstringInterpolation => "security/sql-fstring-interpolation",
             Self::SecurityHardcodedSecret => "security/hardcoded-secret",
             Self::SecurityPydanticSecretStr => "security/pydantic-secretstr",
+            Self::CorrectnessUntrackedBackgroundTask => "correctness/untracked-background-task",
             Self::ResilienceSqlalchemyPoolPrePing => "resilience/sqlalchemy-pool-pre-ping",
+            Self::ArchitectureSlopComment => "architecture/slop-comment",
             Self::ResilienceBareExceptPass => "resilience/bare-except-pass",
             Self::ResilienceReraiseWithoutContext => "resilience/reraise-without-context",
             Self::ResilienceExceptionSwallowed => "resilience/exception-swallowed",
@@ -230,6 +260,12 @@ impl StaticRule {
             | Self::SecurityAssertInProduction
             | Self::SecuritySubprocessShellTrue
             | Self::SecurityUnsafeYamlLoad
+            | Self::SecurityUnsafeEvalExec
+            | Self::SecurityUnsafePickleLoad
+            | Self::SecurityHttpVerifyFalse
+            | Self::SecurityJwtInsecureDecode
+            | Self::SecurityDebugEnabled
+            | Self::SecurityCorsWildcardCredentials
             | Self::SecuritySqlFstringInterpolation
             | Self::SecurityHardcodedSecret
             | Self::SecurityPydanticSecretStr => "error",
@@ -251,6 +287,7 @@ impl StaticRule {
             | Self::ArchitecturePassthroughFunction
             | Self::ArchitectureHiddenDependencyInstantiation
             | Self::ArchitectureFlagArgumentDispatch
+            | Self::ArchitectureSlopComment
             | Self::ArchitectureAvoidSysExit
             | Self::ArchitectureMissingStartupValidation
             | Self::ArchitectureFatRouteHandler => "Architecture",
@@ -262,6 +299,14 @@ impl StaticRule {
             | Self::SecurityExceptionDetailLeak
             | Self::SecuritySubprocessShellTrue
             | Self::SecurityUnsafeYamlLoad
+            | Self::SecurityUnsafeEvalExec
+            | Self::SecurityUnsafePickleLoad
+            | Self::SecurityHttpVerifyFalse
+            | Self::SecurityInsecureCookie
+            | Self::SecurityExceptionStringResponse
+            | Self::SecurityJwtInsecureDecode
+            | Self::SecurityDebugEnabled
+            | Self::SecurityCorsWildcardCredentials
             | Self::SecurityWeakHashWithoutFlag
             | Self::SecuritySqlFstringInterpolation
             | Self::SecurityHardcodedSecret
@@ -285,6 +330,7 @@ impl StaticRule {
             | Self::CorrectnessGetWithSideEffect
             | Self::CorrectnessExposedMutableState
             | Self::CorrectnessServerlessFilesystemWrite
+            | Self::CorrectnessUntrackedBackgroundTask
             | Self::CorrectnessMissingHttpTimeout => "Correctness",
 
             Self::ApiSurfaceMissingTags

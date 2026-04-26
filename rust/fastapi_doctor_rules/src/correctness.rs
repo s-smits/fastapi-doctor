@@ -507,6 +507,53 @@ pub(crate) fn collect_unreachable_code_issues(
     issues
 }
 
+pub(crate) fn collect_untracked_background_task_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
+    if !module.source.contains("create_task") {
+        return Vec::new();
+    }
+
+    fn is_create_task_call(expr: &Expr) -> bool {
+        let Expr::Call(call) = expr else {
+            return false;
+        };
+        match &*call.func {
+            Expr::Attribute(attr) => {
+                matches!(&*attr.value, Expr::Name(base) if base.id.as_str() == "asyncio")
+                    && attr.attr.as_str() == "create_task"
+            }
+            Expr::Name(name) => name.id.as_str() == "create_task",
+            _ => false,
+        }
+    }
+
+    let mut issues = Vec::new();
+    walk_suite_stmts(suite, &mut |stmt| {
+        let Stmt::Expr(expr_stmt) = stmt else {
+            return;
+        };
+        if !is_create_task_call(&expr_stmt.value) {
+            return;
+        }
+        let line = module.line_for_offset(expr_stmt.range.start().to_usize());
+        if module.is_rule_suppressed(line, "correctness/untracked-background-task") {
+            return;
+        }
+        issues.push(Issue {
+            check: "correctness/untracked-background-task",
+            severity: "warning",
+            category: "Correctness",
+            line,
+            path: module.rel_path.to_string(),
+            message: "asyncio.create_task() result is not retained or supervised",
+            help: "Store the task, attach error handling, or run it through FastAPI/Starlette background task infrastructure so failures are visible.",
+        });
+    });
+    issues
+}
+
 fn find_blocking_call_in_sync_helper(
     helper_name: &str,
     function_index: &FunctionIndex,
@@ -587,6 +634,20 @@ fn blocking_call_details(call: &CallSite) -> Option<(&'static str, &'static str)
             Box::leak(format!("Sync HTTP call 'requests.{attr}()'").into_boxed_str()),
             "Use httpx.AsyncClient or aiohttp instead of the requests library.",
         )),
+        Callee::Attribute {
+            base: Some(base),
+            attr,
+        } if base == "subprocess"
+            && matches!(
+                attr.as_str(),
+                "run" | "Popen" | "call" | "check_call" | "check_output"
+            ) =>
+        {
+            Some((
+                Box::leak(format!("Blocking process call 'subprocess.{attr}()'").into_boxed_str()),
+                "Use asyncio.create_subprocess_exec() or run the process call in asyncio.to_thread().",
+            ))
+        }
         Callee::Attribute { attr, .. }
             if matches!(
                 attr.as_str(),

@@ -126,6 +126,138 @@ mod rule_tests {
     }
 
     #[test]
+    fn unsafe_eval_exec_positive() {
+        let issues = issues_for(
+            "security/unsafe-eval-exec",
+            "app/main.py",
+            "def parse(raw):\n    return eval(raw)\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].severity, "error");
+    }
+
+    #[test]
+    fn unsafe_pickle_load_positive() {
+        let issues = issues_for(
+            "security/unsafe-pickle-load",
+            "app/main.py",
+            "import pickle\nobj = pickle.loads(payload)\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].check, "security/unsafe-pickle-load");
+    }
+
+    #[test]
+    fn http_verify_false_positive() {
+        let issues = issues_for(
+            "security/http-verify-false",
+            "app/main.py",
+            "import requests\nrequests.get('https://example.com', verify=False)\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].severity, "error");
+    }
+
+    #[test]
+    fn insecure_cookie_positive() {
+        let issues = issues_for(
+            "security/insecure-cookie",
+            "app/main.py",
+            "def handler(response):\n    response.set_cookie('session', token)\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].check, "security/insecure-cookie");
+    }
+
+    #[test]
+    fn insecure_cookie_negative_hardened() {
+        let issues = issues_for(
+            "security/insecure-cookie",
+            "app/main.py",
+            "def handler(response):\n    response.set_cookie('session', token, secure=True, httponly=True, samesite='lax')\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn exception_string_response_positive() {
+        let issues = issues_for(
+            "security/exception-string-response",
+            "app/stream.py",
+            "class RunErrorEvent:\n    def __init__(self, message): self.message = message\n\ndef stream():\n    try:\n        work()\n    except Exception as exc:\n        return RunErrorEvent(message=str(exc))\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].check, "security/exception-string-response");
+    }
+
+    #[test]
+    fn jwt_insecure_decode_missing_algorithms_positive() {
+        let issues = issues_for(
+            "security/jwt-insecure-decode",
+            "app/auth.py",
+            "import jwt\nclaims = jwt.decode(token, key)\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].severity, "error");
+    }
+
+    #[test]
+    fn jwt_insecure_decode_verify_signature_false_positive() {
+        let issues = issues_for(
+            "security/jwt-insecure-decode",
+            "app/auth.py",
+            "import jwt\nclaims = jwt.decode(token, options={'verify_signature': False}, algorithms=['HS256'])\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(
+            issues[0].message,
+            "jwt.decode() disables signature verification"
+        );
+    }
+
+    #[test]
+    fn jwt_insecure_decode_negative_algorithms_pinned() {
+        let issues = issues_for(
+            "security/jwt-insecure-decode",
+            "app/auth.py",
+            "import jwt\nclaims = jwt.decode(token, key, algorithms=['HS256'])\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn debug_enabled_positive() {
+        let issues = issues_for(
+            "security/debug-enabled",
+            "app/main.py",
+            "from fastapi import FastAPI\napp = FastAPI(debug=True)\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].severity, "error");
+    }
+
+    #[test]
+    fn cors_wildcard_credentials_positive_multiline() {
+        let issues = issues_for(
+            "security/cors-wildcard-credentials",
+            "app/main.py",
+            "app.add_middleware(\n    CORSMiddleware,\n    allow_origins=['*'],\n    allow_credentials=True,\n)\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].check, "security/cors-wildcard-credentials");
+    }
+
+    #[test]
+    fn cors_wildcard_credentials_negative_without_credentials() {
+        let issues = issues_for(
+            "security/cors-wildcard-credentials",
+            "app/main.py",
+            "app.add_middleware(CORSMiddleware, allow_origins=['*'], allow_credentials=False)\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
     fn subprocess_shell_true_positive() {
         let issues = issues_for(
             "security/subprocess-shell-true",
@@ -456,6 +588,27 @@ mod rule_tests {
     }
 
     #[test]
+    fn untracked_background_task_positive() {
+        let issues = issues_for(
+            "correctness/untracked-background-task",
+            "app/main.py",
+            "import asyncio\n\nasync def boot():\n    asyncio.create_task(warm_cache())\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].check, "correctness/untracked-background-task");
+    }
+
+    #[test]
+    fn untracked_background_task_negative_retained() {
+        let issues = issues_for(
+            "correctness/untracked-background-task",
+            "app/main.py",
+            "import asyncio\n\nasync def boot():\n    task = asyncio.create_task(warm_cache())\n    return task\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
     fn sync_io_in_async_positive_direct() {
         let issues = issues_for(
             "correctness/sync-io-in-async",
@@ -464,6 +617,17 @@ mod rule_tests {
         );
         assert_eq!(issues.len(), 1);
         assert!(issues[0].message.contains("time.sleep"));
+    }
+
+    #[test]
+    fn sync_io_in_async_positive_subprocess() {
+        let issues = issues_for(
+            "correctness/sync-io-in-async",
+            "app/main.py",
+            "import subprocess\n\nasync def handler():\n    subprocess.run(['echo', 'x'])\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert!(issues[0].message.contains("subprocess.run"));
     }
 
     #[test]
@@ -630,6 +794,27 @@ mod rule_tests {
             "architecture/print-in-production",
             "scripts/run.py",
             "print('hello')\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
+    fn slop_comment_positive() {
+        let issues = issues_for(
+            "architecture/slop-comment",
+            "app/service.py",
+            "def run():\n    # TODO: remove legacy fallback\n    return 1\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].check, "architecture/slop-comment");
+    }
+
+    #[test]
+    fn slop_comment_suppressed_with_reason() {
+        let issues = issues_for(
+            "architecture/slop-comment",
+            "app/service.py",
+            "def run():\n    # TODO: remove legacy fallback  # doctor:ignore architecture/slop-comment reason=\"external migration still active\"\n    return 1\n",
         );
         assert!(issues.is_empty());
     }
@@ -1737,6 +1922,10 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
     fn select_rule_ids_security_profile() {
         let ids = select_rule_ids(Some("security"), &[], &[], &[], false, false);
         assert!(ids.contains(&"security/unsafe-yaml-load".to_string()));
+        assert!(ids.contains(&"security/unsafe-eval-exec".to_string()));
+        assert!(ids.contains(&"security/http-verify-false".to_string()));
+        assert!(ids.contains(&"security/debug-enabled".to_string()));
+        assert!(ids.contains(&"security/cors-wildcard-credentials".to_string()));
         assert!(ids.contains(&"security/cors-wildcard".to_string()));
         assert!(!ids.contains(&"architecture/giant-function".to_string()));
     }
@@ -1747,6 +1936,7 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
         assert!(ids.contains(&"security/unsafe-yaml-load".to_string()));
         assert!(ids.contains(&"correctness/mutable-default-arg".to_string()));
         assert!(ids.contains(&"correctness/import-time-default-call".to_string()));
+        assert!(ids.contains(&"correctness/untracked-background-task".to_string()));
         assert!(ids.contains(&"resilience/bare-except-pass".to_string()));
         assert!(ids.contains(&"pydantic/normalized-name-collision".to_string()));
         assert!(ids.contains(&"api-surface/missing-tags".to_string()));
@@ -1755,6 +1945,7 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
         assert!(!ids.contains(&"config/env-mutation".to_string()));
         assert!(!ids.contains(&"architecture/hidden-dependency-instantiation".to_string()));
         assert!(!ids.contains(&"architecture/flag-argument-dispatch".to_string()));
+        assert!(!ids.contains(&"architecture/slop-comment".to_string()));
         assert!(!ids.contains(&"correctness/exposed-mutable-state".to_string()));
         // Architecture rules not in balanced unless explicitly listed
         assert!(!ids.contains(&"architecture/giant-function".to_string()));

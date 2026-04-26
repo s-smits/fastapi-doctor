@@ -56,6 +56,38 @@ Without this flag, Bandit reports high-severity CWE-327 violations.
 `yaml.load()` without SafeLoader or BaseLoader enables arbitrary code execution.
 Use `yaml.safe_load()` or explicit `Loader=yaml.SafeLoader`.
 
+### `security/unsafe-eval-exec` (error)
+`eval()` and `exec()` execute dynamic Python strings. Use explicit parsers such as
+`json.loads()`, `ast.literal_eval()`, or a typed command registry.
+
+### `security/unsafe-pickle-load` (error)
+`pickle.load()`/`pickle.loads()` and similar deserializers can execute code while
+loading data. Never use them on untrusted input.
+
+### `security/http-verify-false` (error)
+HTTP calls with `verify=False` disable TLS certificate verification. Install the
+right CA bundle instead of bypassing TLS validation.
+
+### `security/jwt-insecure-decode` (error)
+`jwt.decode()` must pin `algorithms=[...]` and must not disable signature
+verification with `options={"verify_signature": False}`.
+
+### `security/debug-enabled` (error)
+Deployable app code must not create apps or servers with `debug=True` or
+`reload=True`. Keep those switches in local-only entrypoints.
+
+### `security/cors-wildcard-credentials` (error)
+Credentialed CORS must use explicit trusted origins. Wildcard origins with
+`allow_credentials=True` are unsafe.
+
+### `security/insecure-cookie` (warning)
+Cookies set from backend responses should carry `secure=True`, `httponly=True`,
+and an explicit `samesite` value unless they are deliberately non-session cookies.
+
+### `security/exception-string-response` (warning)
+Do not expose `str(exc)` or exception f-strings through response or event
+payloads. Log the traceback and return a generic public message.
+
 ### `security/hardcoded-secret` (error, kind: blocker)
 Detects hardcoded API keys, tokens, and passwords. Two detection paths:
 1. **Value-pattern match** — known prefixes (Stripe `sk_live_`, AWS `AKIA`, GitHub `ghp_`, etc.)
@@ -102,11 +134,21 @@ Only flagged for endpoints with clear creation semantics.
 Writes to local disk outside `/tmp` are risky in serverless environments because the filesystem is usually non-durable and often read-only outside temp storage.
 The rule keeps real writes as findings, but treats `/tmp`, `tempfile`, and recognized serverless temp helpers as safe.
 
+### `correctness/untracked-background-task` (warning)
+Bare `asyncio.create_task(...)` calls lose exception visibility and lifecycle
+control. Retain the task, attach error handling, or use framework background task
+infrastructure.
+
 ## Architecture Rules
 
 ### `architecture/giant-route-handler` (error)
 Strict-only blocker for oversized API route handlers. Large request-boundary functions hide
 auth, validation, and side-effect boundaries. Keep handlers narrow and move orchestration to services.
+
+### `architecture/slop-comment` (warning, strict)
+Strict cleanup signal for comments that mention unresolved TODO/FIXME/HACK,
+legacy, fallback, placeholder, temporary, workaround, or defensive code. Resolve
+the note or suppress it with a reason if it documents an intentional boundary.
 
 ### `architecture/giant-function` (warning)
 Strict-only advisory pressure for non-route functions >400 lines. This rule is intentionally

@@ -4,6 +4,59 @@ use std::collections::HashSet;
 use fastapi_doctor_core::ast_helpers::*;
 use fastapi_doctor_core::{Issue, ModuleIndex};
 
+fn call_name(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Name(name) => Some(name.id.to_string()),
+        Expr::Attribute(attr) => {
+            let base = call_name(&attr.value)?;
+            Some(format!("{base}.{}", attr.attr))
+        }
+        _ => None,
+    }
+}
+
+fn keyword_is_false(call: &ast::ExprCall, name: &str) -> bool {
+    call.keywords.iter().any(|kw| {
+        kw.arg.as_deref() == Some(name)
+            && matches!(&kw.value, Expr::Constant(value) if matches!(value.value, ast::Constant::Bool(false)))
+    })
+}
+
+fn keyword_is_true(call: &ast::ExprCall, name: &str) -> bool {
+    call.keywords.iter().any(|kw| {
+        kw.arg.as_deref() == Some(name)
+            && matches!(&kw.value, Expr::Constant(value) if matches!(value.value, ast::Constant::Bool(true)))
+    })
+}
+
+fn keyword_list_contains_str(call: &ast::ExprCall, name: &str, expected: &str) -> bool {
+    call.keywords.iter().any(|kw| {
+        kw.arg.as_deref() == Some(name)
+            && matches!(
+                &kw.value,
+                Expr::List(list)
+                    if list.elts.iter().any(|elt| {
+                        matches!(
+                            elt,
+                            Expr::Constant(value)
+                                if matches!(&value.value, ast::Constant::Str(raw) if raw == expected)
+                        )
+                    })
+            )
+    })
+}
+
+fn keyword_str_equals(call: &ast::ExprCall, name: &str, expected: &str) -> bool {
+    call.keywords.iter().any(|kw| {
+        kw.arg.as_deref() == Some(name)
+            && matches!(
+                &kw.value,
+                Expr::Constant(value)
+                    if matches!(&value.value, ast::Constant::Str(raw) if raw == expected)
+            )
+    })
+}
+
 pub(crate) fn collect_sql_fstring_issues(module: &ModuleIndex, suite: &ast::Suite) -> Vec<Issue> {
     if !module.source.contains("text(") {
         return Vec::new();
@@ -173,6 +226,427 @@ pub(crate) fn collect_exception_detail_leak_issues(
             path: module.rel_path.to_string(),
             message: "Potential internal error leak in HTTPException detail",
             help: "Use a generic error message. Log the real exception with logger.exception().",
+        });
+    });
+    issues
+}
+
+pub(crate) fn collect_unsafe_eval_exec_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
+    if !module.source.contains("eval(") && !module.source.contains("exec(") {
+        return Vec::new();
+    }
+
+    let mut issues = Vec::new();
+    walk_suite_exprs(suite, &mut |expr| {
+        let Expr::Call(call) = expr else { return };
+        let Some(name) = call_name(&call.func) else {
+            return;
+        };
+        if !matches!(
+            name.as_str(),
+            "eval" | "exec" | "builtins.eval" | "builtins.exec"
+        ) {
+            return;
+        }
+        let line = module.line_for_offset(call.range.start().to_usize());
+        if module.is_rule_suppressed(line, "security/unsafe-eval-exec") {
+            return;
+        }
+        issues.push(Issue {
+            check: "security/unsafe-eval-exec",
+            severity: "error",
+            category: "Security",
+            line,
+            path: module.rel_path.to_string(),
+            message: Box::leak(
+                format!("{name}() executes dynamic Python code").into_boxed_str(),
+            ),
+            help: "Do not execute dynamic strings. Use explicit parsers such as json.loads(), ast.literal_eval(), or a typed command registry.",
+        });
+    });
+    issues
+}
+
+pub(crate) fn collect_unsafe_pickle_load_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
+    if !module.source.contains("pickle") && !module.source.contains("dill") {
+        return Vec::new();
+    }
+
+    let mut issues = Vec::new();
+    walk_suite_exprs(suite, &mut |expr| {
+        let Expr::Call(call) = expr else { return };
+        let Some(name) = call_name(&call.func) else {
+            return;
+        };
+        if !matches!(
+            name.as_str(),
+            "pickle.load"
+                | "pickle.loads"
+                | "dill.load"
+                | "dill.loads"
+                | "cloudpickle.load"
+                | "cloudpickle.loads"
+        ) {
+            return;
+        }
+        let line = module.line_for_offset(call.range.start().to_usize());
+        if module.is_rule_suppressed(line, "security/unsafe-pickle-load") {
+            return;
+        }
+        issues.push(Issue {
+            check: "security/unsafe-pickle-load",
+            severity: "error",
+            category: "Security",
+            line,
+            path: module.rel_path.to_string(),
+            message: Box::leak(format!("{name}() can execute code during deserialisation").into_boxed_str()),
+            help: "Never unpickle untrusted data. Prefer JSON/Pydantic or a signed, typed serialization format.",
+        });
+    });
+    issues
+}
+
+pub(crate) fn collect_http_verify_false_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
+    if !module.source.contains("verify") {
+        return Vec::new();
+    }
+
+    let mut issues = Vec::new();
+    walk_suite_exprs(suite, &mut |expr| {
+        let Expr::Call(call) = expr else { return };
+        if !keyword_is_false(call, "verify") {
+            return;
+        }
+        let Some(name) = call_name(&call.func) else {
+            return;
+        };
+        let is_http_client = name.starts_with("requests.")
+            || name.starts_with("httpx.")
+            || name.ends_with(".request")
+            || name.ends_with(".get")
+            || name.ends_with(".post")
+            || name.ends_with(".put")
+            || name.ends_with(".patch")
+            || name.ends_with(".delete");
+        if !is_http_client {
+            return;
+        }
+        let line = module.line_for_offset(call.range.start().to_usize());
+        if module.is_rule_suppressed(line, "security/http-verify-false") {
+            return;
+        }
+        issues.push(Issue {
+            check: "security/http-verify-false",
+            severity: "error",
+            category: "Security",
+            line,
+            path: module.rel_path.to_string(),
+            message: "HTTP client disables TLS certificate verification with verify=False",
+            help: "Keep certificate verification enabled. Install the correct CA bundle instead of bypassing TLS validation.",
+        });
+    });
+    issues
+}
+
+pub(crate) fn collect_insecure_cookie_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
+    if !module.source.contains("set_cookie(") {
+        return Vec::new();
+    }
+
+    let mut issues = Vec::new();
+    walk_suite_exprs(suite, &mut |expr| {
+        let Expr::Call(call) = expr else { return };
+        let Some(name) = call_name(&call.func) else {
+            return;
+        };
+        if !name.ends_with("set_cookie") {
+            return;
+        }
+        let line = module.line_for_offset(call.range.start().to_usize());
+        if module.is_rule_suppressed(line, "security/insecure-cookie") {
+            return;
+        }
+
+        let has_secure = call.keywords.iter().any(|kw| {
+            kw.arg.as_deref() == Some("secure")
+                && matches!(&kw.value, Expr::Constant(value) if matches!(value.value, ast::Constant::Bool(true)))
+        });
+        let has_httponly = call.keywords.iter().any(|kw| {
+            kw.arg.as_deref() == Some("httponly")
+                && matches!(&kw.value, Expr::Constant(value) if matches!(value.value, ast::Constant::Bool(true)))
+        });
+        let has_samesite = call.keywords.iter().any(|kw| {
+            kw.arg.as_deref() == Some("samesite")
+                && matches!(&kw.value, Expr::Constant(value) if matches!(&value.value, ast::Constant::Str(raw) if !raw.trim().is_empty()))
+        });
+        if has_secure && has_httponly && has_samesite {
+            return;
+        }
+
+        issues.push(Issue {
+            check: "security/insecure-cookie",
+            severity: "warning",
+            category: "Security",
+            line,
+            path: module.rel_path.to_string(),
+            message: "Response cookie is missing secure, httponly, or samesite hardening",
+            help: "Set secure=True, httponly=True, and an explicit samesite value unless this is a deliberate non-session cookie.",
+        });
+    });
+    issues
+}
+
+pub(crate) fn collect_exception_string_response_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
+    if !module.source.contains("except") || !module.source.contains("str(") {
+        return Vec::new();
+    }
+
+    fn expr_leaks_exception(expr: &Expr, exc_name: &str) -> bool {
+        match expr {
+            Expr::Call(call) => {
+                matches!(&*call.func, Expr::Name(name) if name.id.as_str() == "str")
+                    && call
+                        .args
+                        .first()
+                        .is_some_and(|arg| matches!(arg, Expr::Name(name) if name.id.as_str() == exc_name))
+            }
+            Expr::JoinedStr(joined) => joined.values.iter().any(|value| {
+                matches!(
+                    value,
+                    Expr::FormattedValue(formatted)
+                        if matches!(&*formatted.value, Expr::Name(name) if name.id.as_str() == exc_name)
+                )
+            }),
+            _ => false,
+        }
+    }
+
+    let mut issues = Vec::new();
+    let mut seen_lines = HashSet::new();
+    walk_suite_stmts(suite, &mut |stmt| {
+        let handlers = match stmt {
+            Stmt::Try(node) => Some(&node.handlers),
+            Stmt::TryStar(node) => Some(&node.handlers),
+            _ => None,
+        };
+        let Some(handlers) = handlers else { return };
+
+        for handler in handlers {
+            let ast::ExceptHandler::ExceptHandler(handler) = handler;
+            let Some(exc_name) = handler.name.as_deref() else {
+                continue;
+            };
+            walk_suite_exprs(&handler.body, &mut |expr| {
+                let Expr::Call(call) = expr else { return };
+                let Some(name) = call_name(&call.func) else {
+                    return;
+                };
+                let response_like = name.ends_with("Response")
+                    || name.ends_with("Event")
+                    || name.ends_with("Error")
+                    || name.ends_with("HTTPException");
+                if !response_like {
+                    return;
+                }
+                let leaks = call
+                    .args
+                    .iter()
+                    .any(|arg| expr_leaks_exception(arg, exc_name))
+                    || call.keywords.iter().any(|kw| {
+                        matches!(
+                            kw.arg.as_deref(),
+                            Some("detail" | "message" | "error" | "content" | "text")
+                        ) && expr_leaks_exception(&kw.value, exc_name)
+                    });
+                if !leaks {
+                    return;
+                }
+                let line = module.line_for_offset(call.range.start().to_usize());
+                if seen_lines.contains(&line)
+                    || module.is_rule_suppressed(line, "security/exception-string-response")
+                {
+                    return;
+                }
+                seen_lines.insert(line);
+                issues.push(Issue {
+                    check: "security/exception-string-response",
+                    severity: "warning",
+                    category: "Security",
+                    line,
+                    path: module.rel_path.to_string(),
+                    message: "Exception string is exposed through a response or event payload",
+                    help: "Log the exception with traceback and return a generic public message.",
+                });
+            });
+        }
+    });
+    issues
+}
+
+pub(crate) fn collect_jwt_insecure_decode_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
+    if !module.source.contains("decode") || !module.source.contains("jwt") {
+        return Vec::new();
+    }
+
+    let mut issues = Vec::new();
+    walk_suite_exprs(suite, &mut |expr| {
+        let Expr::Call(call) = expr else { return };
+        let Some(name) = call_name(&call.func) else {
+            return;
+        };
+        if !name.ends_with("jwt.decode") && name != "decode" {
+            return;
+        }
+
+        let has_algorithms = call
+            .keywords
+            .iter()
+            .any(|kw| kw.arg.as_deref() == Some("algorithms"));
+        let disables_signature = call.keywords.iter().any(|kw| {
+            kw.arg.as_deref() == Some("options")
+                && matches!(
+                    &kw.value,
+                    Expr::Dict(dict)
+                        if dict.keys.iter().zip(dict.values.iter()).any(|(key, value)| {
+                            matches!(
+                                (key, value),
+                                (
+                                    Some(Expr::Constant(key_const)),
+                                    Expr::Constant(value_const)
+                                ) if matches!(&key_const.value, ast::Constant::Str(raw) if raw == "verify_signature")
+                                    && matches!(value_const.value, ast::Constant::Bool(false))
+                            )
+                        })
+                )
+        });
+        if has_algorithms && !disables_signature {
+            return;
+        }
+
+        let line = module.line_for_offset(call.range.start().to_usize());
+        if module.is_rule_suppressed(line, "security/jwt-insecure-decode") {
+            return;
+        }
+        let (message, help) = if disables_signature {
+            (
+                "jwt.decode() disables signature verification",
+                "Do not use options={'verify_signature': False} outside tightly isolated tooling.",
+            )
+        } else {
+            (
+                "jwt.decode() does not pin allowed algorithms",
+                "Pass algorithms=[...] explicitly so tokens cannot choose or confuse the verification algorithm.",
+            )
+        };
+        issues.push(Issue {
+            check: "security/jwt-insecure-decode",
+            severity: "error",
+            category: "Security",
+            line,
+            path: module.rel_path.to_string(),
+            message,
+            help,
+        });
+    });
+    issues
+}
+
+pub(crate) fn collect_debug_enabled_issues(module: &ModuleIndex, suite: &ast::Suite) -> Vec<Issue> {
+    if module.rel_path.contains("tests/")
+        || module.rel_path.contains("scripts/")
+        || (!module.source.contains("debug=True") && !module.source.contains("reload=True"))
+    {
+        return Vec::new();
+    }
+
+    let mut issues = Vec::new();
+    walk_suite_exprs(suite, &mut |expr| {
+        let Expr::Call(call) = expr else { return };
+        let Some(name) = call_name(&call.func) else {
+            return;
+        };
+        let is_debug_app = keyword_is_true(call, "debug")
+            && (name == "FastAPI" || name.ends_with(".FastAPI") || name.ends_with(".run"));
+        let is_reload_server =
+            keyword_is_true(call, "reload") && (name == "uvicorn.run" || name.ends_with(".run"));
+        if !is_debug_app && !is_reload_server {
+            return;
+        }
+        let line = module.line_for_offset(call.range.start().to_usize());
+        if module.is_rule_suppressed(line, "security/debug-enabled") {
+            return;
+        }
+        issues.push(Issue {
+            check: "security/debug-enabled",
+            severity: "error",
+            category: "Security",
+            line,
+            path: module.rel_path.to_string(),
+            message: "Debug or reload mode is enabled in application code",
+            help: "Keep debug=True and reload=True in local entrypoints only, never in importable production modules.",
+        });
+    });
+    issues
+}
+
+pub(crate) fn collect_cors_wildcard_credentials_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
+    if !module.source.contains("allow_credentials") || !module.source.contains("allow_origins") {
+        return Vec::new();
+    }
+
+    let mut issues = Vec::new();
+    walk_suite_exprs(suite, &mut |expr| {
+        let Expr::Call(call) = expr else { return };
+        let Some(name) = call_name(&call.func) else {
+            return;
+        };
+        let is_cors_call = name.ends_with("CORSMiddleware")
+            || (name.ends_with("add_middleware")
+                && call.args.first().is_some_and(|arg| {
+                    matches!(arg, Expr::Name(name) if name.id.as_str() == "CORSMiddleware")
+                        || matches!(arg, Expr::Attribute(attr) if attr.attr.as_str() == "CORSMiddleware")
+                }));
+        if !is_cors_call || !keyword_is_true(call, "allow_credentials") {
+            return;
+        }
+        let wildcard_origin = keyword_list_contains_str(call, "allow_origins", "*")
+            || keyword_str_equals(call, "allow_origin_regex", ".*");
+        if !wildcard_origin {
+            return;
+        }
+        let line = module.line_for_offset(call.range.start().to_usize());
+        if module.is_rule_suppressed(line, "security/cors-wildcard-credentials") {
+            return;
+        }
+        issues.push(Issue {
+            check: "security/cors-wildcard-credentials",
+            severity: "error",
+            category: "Security",
+            line,
+            path: module.rel_path.to_string(),
+            message: "CORS allows credentials with a wildcard origin",
+            help: "When credentials are allowed, use explicit trusted origins. Wildcards and credentialed browser requests do not belong together.",
         });
     });
     issues
