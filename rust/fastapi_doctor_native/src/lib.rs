@@ -34,6 +34,8 @@ use std::collections::HashMap;
     active_rules,
     modules
 ))]
+// Kept positional for compatibility with the published Python extension API.
+#[allow(clippy::too_many_arguments)]
 fn analyze_modules(
     py: Python<'_>,
     import_bloat_threshold: usize,
@@ -107,6 +109,8 @@ fn analyze_modules(
     tag_required_prefixes,
     active_rules,
 ))]
+// Kept positional for compatibility with the published Python extension API.
+#[allow(clippy::too_many_arguments)]
 fn analyze_project(
     py: Python<'_>,
     repo_root: String,
@@ -172,6 +176,8 @@ fn analyze_project(
     active_rules,
     include_routes=true,
 ))]
+// Kept positional for compatibility with the published Python extension API.
+#[allow(clippy::too_many_arguments)]
 fn analyze_project_v2(
     py: Python<'_>,
     repo_root: String,
@@ -283,13 +289,15 @@ fn score_current_project_v2(
 ) -> PyResult<usize> {
     let (result, _) = analyze_selected_current_project_impl(
         py,
-        profile,
-        only_rules,
-        ignore_rules,
-        skip_structure,
-        skip_openapi,
-        static_only,
-        false,
+        SelectedProjectOptions {
+            profile,
+            only_rules,
+            ignore_rules,
+            skip_structure,
+            skip_openapi,
+            static_only,
+            include_routes: false,
+        },
     )?;
     Ok(result.score)
 }
@@ -382,6 +390,8 @@ fn source_may_have_suppressions(source: &str) -> bool {
     source.contains("noqa") || source.contains("doctor:ignore")
 }
 
+// Adapter mirrors the legacy Python ABI while centralising request construction.
+#[allow(clippy::too_many_arguments)]
 fn analyze_project_bundle(
     py: Python<'_>,
     repo_root: String,
@@ -540,8 +550,7 @@ fn analyze_loaded_project_bundle_core(
     })
 }
 
-fn analyze_selected_current_project_impl(
-    py: Python<'_>,
+struct SelectedProjectOptions {
     profile: Option<String>,
     only_rules: Option<Vec<String>>,
     ignore_rules: Option<Vec<String>>,
@@ -549,15 +558,21 @@ fn analyze_selected_current_project_impl(
     skip_openapi: bool,
     static_only: bool,
     include_routes: bool,
+}
+
+fn analyze_selected_current_project_impl(
+    py: Python<'_>,
+    options: SelectedProjectOptions,
 ) -> PyResult<(ProjectBundleResult, fastapi_doctor_project::ProjectContext)> {
-    let bundle = load_current_project_bundle(static_only).map_err(PyRuntimeError::new_err)?;
+    let bundle =
+        load_current_project_bundle(options.static_only).map_err(PyRuntimeError::new_err)?;
     let active_rules = select_rule_ids(
-        profile.as_deref(),
-        only_rules.as_deref().unwrap_or(&[]),
-        ignore_rules.as_deref().unwrap_or(&[]),
+        options.profile.as_deref(),
+        options.only_rules.as_deref().unwrap_or(&[]),
+        options.ignore_rules.as_deref().unwrap_or(&[]),
         &bundle.context.effective_config.scan.exclude_rules,
-        skip_structure,
-        skip_openapi,
+        options.skip_structure,
+        options.skip_openapi,
     );
     if active_rules.is_empty() {
         return Ok((
@@ -575,7 +590,7 @@ fn analyze_selected_current_project_impl(
         "using Rust-native auto project module v2",
     )?;
     Ok((
-        analysis.into_bundle(include_routes, bundle.project.modules.len()),
+        analysis.into_bundle(options.include_routes, bundle.project.modules.len()),
         bundle.context,
     ))
 }
@@ -647,6 +662,8 @@ impl ScanSession {
         skip_openapi=false,
         include_routes=true,
     ))]
+    // Kept positional for compatibility with the published Python extension API.
+    #[allow(clippy::too_many_arguments)]
     fn analyze_selected_v2(
         &self,
         py: Python<'_>,
@@ -695,6 +712,8 @@ impl ScanSession {
     static_only=true,
     include_routes=true,
 ))]
+// Kept positional for compatibility with the published Python extension API.
+#[allow(clippy::too_many_arguments)]
 fn analyze_selected_current_project_v2(
     py: Python<'_>,
     profile: Option<String>,
@@ -707,13 +726,15 @@ fn analyze_selected_current_project_v2(
 ) -> PyResult<Py<PyDict>> {
     let (result, context) = analyze_selected_current_project_impl(
         py,
-        profile,
-        only_rules,
-        ignore_rules,
-        skip_structure,
-        skip_openapi,
-        static_only,
-        include_routes,
+        SelectedProjectOptions {
+            profile,
+            only_rules,
+            ignore_rules,
+            skip_structure,
+            skip_openapi,
+            static_only,
+            include_routes,
+        },
     )?;
     let payload = project_bundle_payload(py, result)?;
     let project_context = project_context_payload(py, &context)?;

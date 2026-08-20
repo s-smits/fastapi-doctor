@@ -40,6 +40,7 @@ const MEDIUM_SELECTORS: &[&str] = &[
     "pydantic/deprecated-validator",
     "architecture/async-without-await",
     "architecture/avoid-sys-exit",
+    "architecture/httpexception-in-service",
     "architecture/missing-startup-validation",
     "architecture/passthrough-function",
     "architecture/print-in-production",
@@ -49,124 +50,10 @@ const MEDIUM_SELECTORS: &[&str] = &[
 ];
 
 pub fn parse_static_rule(rule_id: &str) -> Option<StaticRule> {
-    Some(match rule_id {
-        "architecture/giant-function" => StaticRule::ArchitectureGiantFunction,
-        "architecture/giant-route-handler" => StaticRule::ArchitectureGiantRouteHandler,
-        "architecture/large-function" => StaticRule::ArchitectureLargeFunction,
-        "architecture/deep-nesting" => StaticRule::ArchitectureDeepNesting,
-        "architecture/async-without-await" => StaticRule::ArchitectureAsyncWithoutAwait,
-        "architecture/import-bloat" => StaticRule::ArchitectureImportBloat,
-        "architecture/print-in-production" => StaticRule::ArchitecturePrintInProduction,
-        "architecture/star-import" => StaticRule::ArchitectureStarImport,
-        "architecture/god-module" => StaticRule::ArchitectureGodModule,
-        "architecture/passthrough-function" => StaticRule::ArchitecturePassthroughFunction,
-        "architecture/hidden-dependency-instantiation" => {
-            StaticRule::ArchitectureHiddenDependencyInstantiation
-        }
-        "architecture/flag-argument-dispatch" => StaticRule::ArchitectureFlagArgumentDispatch,
-        "architecture/avoid-sys-exit" => StaticRule::ArchitectureAvoidSysExit,
-        "architecture/missing-startup-validation" => {
-            StaticRule::ArchitectureMissingStartupValidation
-        }
-        "architecture/fat-route-handler" => StaticRule::ArchitectureFatRouteHandler,
-        "architecture/slop-comment" => StaticRule::ArchitectureSlopComment,
-        "security/missing-auth-dep" => StaticRule::SecurityMissingAuthDep,
-        "security/forbidden-write-param" => StaticRule::SecurityForbiddenWriteParam,
-        "correctness/duplicate-route" => StaticRule::CorrectnessDuplicateRoute,
-        "correctness/missing-response-model" => StaticRule::CorrectnessMissingResponseModel,
-        "correctness/weak-response-model" => StaticRule::CorrectnessWeakResponseModel,
-        "correctness/post-status-code" => StaticRule::CorrectnessPostStatusCode,
-        "api-surface/missing-tags" => StaticRule::ApiSurfaceMissingTags,
-        "api-surface/missing-docstring" => StaticRule::ApiSurfaceMissingDocstring,
-        "api-surface/missing-pagination" => StaticRule::ApiSurfaceMissingPagination,
-        "config/direct-env-access" => StaticRule::ConfigDirectEnvAccess,
-        "config/env-mutation" => StaticRule::ConfigEnvMutation,
-        "config/alembic-target-metadata" => StaticRule::ConfigAlembicTargetMetadata,
-        "config/alembic-empty-autogen-revision" => StaticRule::ConfigAlembicEmptyAutogenRevision,
-        "config/sqlalchemy-naming-convention" => StaticRule::ConfigSqlalchemyNamingConvention,
-        "correctness/asyncio-run-in-async" => StaticRule::CorrectnessAsyncioRunInAsync,
-        "correctness/sync-io-in-async" => StaticRule::CorrectnessSyncIoInAsync,
-        "correctness/misused-async-constructs" => StaticRule::CorrectnessMisusedAsyncConstructs,
-        "correctness/avoid-os-path" => StaticRule::CorrectnessAvoidOsPath,
-        "correctness/deprecated-typing-imports" => StaticRule::CorrectnessDeprecatedTypingImports,
-        "correctness/mutable-default-arg" => StaticRule::CorrectnessMutableDefaultArg,
-        "correctness/import-time-default-call" => StaticRule::CorrectnessImportTimeDefaultCall,
-        "correctness/naive-datetime" => StaticRule::CorrectnessNaiveDatetime,
-        "correctness/return-in-finally" => StaticRule::CorrectnessReturnInFinally,
-        "correctness/threading-lock-in-async" => StaticRule::CorrectnessThreadingLockInAsync,
-        "correctness/unreachable-code" => StaticRule::CorrectnessUnreachableCode,
-        "correctness/get-with-side-effect" => StaticRule::CorrectnessGetWithSideEffect,
-        "correctness/exposed-mutable-state" => StaticRule::CorrectnessExposedMutableState,
-        "correctness/serverless-filesystem-write" => {
-            StaticRule::CorrectnessServerlessFilesystemWrite
-        }
-        "correctness/missing-http-timeout" => StaticRule::CorrectnessMissingHttpTimeout,
-        "correctness/untracked-background-task" => StaticRule::CorrectnessUntrackedBackgroundTask,
-        "performance/sequential-awaits" => StaticRule::PerformanceSequentialAwaits,
-        "performance/regex-in-loop" => StaticRule::PerformanceRegexInLoop,
-        "performance/n-plus-one-hint" => StaticRule::PerformanceNPlusOneHint,
-        "pydantic/deprecated-validator" => StaticRule::PydanticDeprecatedValidator,
-        "pydantic/mutable-default" => StaticRule::PydanticMutableDefault,
-        "pydantic/extra-allow-on-request" => StaticRule::PydanticExtraAllowOnRequest,
-        "pydantic/should-be-model" => StaticRule::PydanticShouldBeModel,
-        "pydantic/sensitive-field-type" => StaticRule::PydanticSensitiveFieldType,
-        "pydantic/normalized-name-collision" => StaticRule::PydanticNormalizedNameCollision,
-        "security/assert-in-production" => StaticRule::SecurityAssertInProduction,
-        "security/cors-wildcard" => StaticRule::SecurityCorsWildcard,
-        "security/exception-detail-leak" => StaticRule::SecurityExceptionDetailLeak,
-        "security/subprocess-shell-true" => StaticRule::SecuritySubprocessShellTrue,
-        "security/unsafe-yaml-load" => StaticRule::SecurityUnsafeYamlLoad,
-        "security/unsafe-eval-exec" => StaticRule::SecurityUnsafeEvalExec,
-        "security/unsafe-pickle-load" => StaticRule::SecurityUnsafePickleLoad,
-        "security/http-verify-false" => StaticRule::SecurityHttpVerifyFalse,
-        "security/insecure-cookie" => StaticRule::SecurityInsecureCookie,
-        "security/exception-string-response" => StaticRule::SecurityExceptionStringResponse,
-        "security/jwt-insecure-decode" => StaticRule::SecurityJwtInsecureDecode,
-        "security/debug-enabled" => StaticRule::SecurityDebugEnabled,
-        "security/cors-wildcard-credentials" => StaticRule::SecurityCorsWildcardCredentials,
-        "security/sql-execute-fstring" => StaticRule::SecuritySqlExecuteFstring,
-        "security/unvalidated-redirect" => StaticRule::SecurityUnvalidatedRedirect,
-        "security/weak-hash-without-flag" => StaticRule::SecurityWeakHashWithoutFlag,
-        "security/sql-fstring-interpolation" => StaticRule::SecuritySqlFstringInterpolation,
-        "security/hardcoded-secret" => StaticRule::SecurityHardcodedSecret,
-        "security/pydantic-secretstr" => StaticRule::SecurityPydanticSecretStr,
-        "resilience/sqlalchemy-pool-pre-ping" => StaticRule::ResilienceSqlalchemyPoolPrePing,
-        "resilience/bare-except-pass" => StaticRule::ResilienceBareExceptPass,
-        "resilience/reraise-without-context" => StaticRule::ResilienceReraiseWithoutContext,
-        "resilience/exception-swallowed" => StaticRule::ResilienceExceptionSwallowed,
-        "resilience/broad-except-no-context" => StaticRule::ResilienceBroadExceptNoContext,
-        "resilience/exception-log-without-traceback" => {
-            StaticRule::ResilienceExceptionLogWithoutTraceback
-        }
-        _ => return None,
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{parse_static_rule, MEDIUM_SELECTORS, SECURITY_SELECTORS};
-
-    fn assert_exact_selectors_resolve(selectors: &[&str]) {
-        for selector in selectors {
-            if selector.ends_with('*') {
-                continue;
-            }
-            assert!(
-                parse_static_rule(selector).is_some(),
-                "selector '{selector}' must resolve to a registered static rule"
-            );
-        }
-    }
-
-    #[test]
-    fn security_profile_exact_selectors_resolve() {
-        assert_exact_selectors_resolve(SECURITY_SELECTORS);
-    }
-
-    #[test]
-    fn balanced_profile_exact_selectors_resolve() {
-        assert_exact_selectors_resolve(MEDIUM_SELECTORS);
-    }
+    StaticRule::all()
+        .iter()
+        .copied()
+        .find(|rule| rule.rule_id() == rule_id)
 }
 
 pub fn select_rule_ids(
@@ -200,6 +87,14 @@ fn selector_matches(rule_id: &str, selector: &str) -> bool {
     rule_id == selector || rule_id.starts_with(selector)
 }
 
+fn selectors_for_profile(profile: Option<&str>) -> Option<&'static [&'static str]> {
+    match profile {
+        Some("security") => Some(SECURITY_SELECTORS),
+        Some("medium" | "balanced") => Some(MEDIUM_SELECTORS),
+        _ => None,
+    }
+}
+
 fn should_run(
     rule_id: &str,
     profile: Option<&str>,
@@ -215,26 +110,12 @@ fn should_run(
             .any(|selector| selector_matches(rule_id, selector));
     }
 
-    if let Some(profile) = profile {
-        match profile {
-            "security" => {
-                if !SECURITY_SELECTORS
-                    .iter()
-                    .any(|selector| selector_matches(rule_id, selector))
-                {
-                    return false;
-                }
-            }
-            "medium" | "balanced" => {
-                if !MEDIUM_SELECTORS
-                    .iter()
-                    .any(|selector| selector_matches(rule_id, selector))
-                {
-                    return false;
-                }
-            }
-            _ => {}
-        }
+    if selectors_for_profile(profile).is_some_and(|selectors| {
+        !selectors
+            .iter()
+            .any(|selector| selector_matches(rule_id, selector))
+    }) {
+        return false;
     }
 
     if skip_structure
@@ -271,4 +152,53 @@ fn should_run(
     }
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::{parse_static_rule, MEDIUM_SELECTORS, SECURITY_SELECTORS};
+    use crate::registry::StaticRule;
+
+    fn assert_exact_selectors_resolve(selectors: &[&str]) {
+        for selector in selectors {
+            if selector.ends_with('*') {
+                continue;
+            }
+            assert!(
+                parse_static_rule(selector).is_some(),
+                "selector '{selector}' must resolve to a registered static rule"
+            );
+        }
+    }
+
+    #[test]
+    fn security_profile_exact_selectors_resolve() {
+        assert_exact_selectors_resolve(SECURITY_SELECTORS);
+    }
+
+    #[test]
+    fn balanced_profile_exact_selectors_resolve() {
+        assert_exact_selectors_resolve(MEDIUM_SELECTORS);
+    }
+
+    #[test]
+    fn every_registered_rule_round_trips_through_its_id() {
+        for rule in StaticRule::all() {
+            assert_eq!(parse_static_rule(rule.rule_id()), Some(*rule));
+        }
+    }
+
+    #[test]
+    fn registered_rule_ids_are_unique() {
+        let mut seen = HashSet::new();
+        for rule in StaticRule::all() {
+            assert!(
+                seen.insert(rule.rule_id()),
+                "duplicate rule id: {}",
+                rule.rule_id()
+            );
+        }
+    }
 }

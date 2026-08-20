@@ -156,29 +156,40 @@ pub(crate) fn collect_regex_in_loop_issues(module: &ModuleIndex, suite: &ast::Su
                 // Check expressions in this statement for re.* calls
                 walk_stmt_exprs(stmt, &mut |expr| {
                     let Expr::Call(call) = expr else { return };
-                    if let Expr::Attribute(func) = &*call.func {
-                        if let Expr::Name(base) = &*func.value {
-                            if base.id.as_str() == "re" && re_funcs.contains(func.attr.as_str()) {
-                                if call.args.first().is_some_and(|a| matches!(a, Expr::Constant(c) if matches!(c.value, ast::Constant::Str(_)))) {
-                                    let line = module.line_for_offset(call.range.start().to_usize());
-                                    if !seen_lines.contains(&line) && !module.is_rule_suppressed(line, "performance/regex-in-loop") {
-                                        seen_lines.insert(line);
-                                        issues.push(Issue {
-                                            check: "performance/regex-in-loop",
-                                            severity: "warning",
-                                            category: "Performance",
-                                            line,
-                                            path: module.rel_path.to_string(),
-                                            message: Box::leak(
-                                                format!("re.{}() with literal pattern inside loop — hoist to module level", func.attr).into_boxed_str(),
-                                            ),
-                                            help: "Compile regex patterns outside loops: PATTERN = re.compile('...') at module level.",
-                                        });
-                                    }
-                                }
-                            }
-                        }
+                    let Expr::Attribute(func) = &*call.func else {
+                        return;
+                    };
+                    let Expr::Name(base) = &*func.value else {
+                        return;
+                    };
+                    if base.id.as_str() != "re" || !re_funcs.contains(func.attr.as_str()) {
+                        return;
                     }
+                    let has_literal_pattern = call.args.first().is_some_and(
+                        |arg| matches!(arg, Expr::Constant(c) if matches!(c.value, ast::Constant::Str(_))),
+                    );
+                    if !has_literal_pattern {
+                        return;
+                    }
+                    let line = module.line_for_offset(call.range.start().to_usize());
+                    if module.is_rule_suppressed(line, "performance/regex-in-loop")
+                        || !seen_lines.insert(line)
+                    {
+                        return;
+                    }
+                    issues.push(Issue {
+                        check: "performance/regex-in-loop".into(),
+                        severity: "warning",
+                        category: "Performance",
+                        line,
+                        path: module.rel_path.to_string(),
+                        message: format!(
+                            "re.{}() with literal pattern inside loop — hoist to module level",
+                            func.attr
+                        )
+                        .into(),
+                        help: "Compile regex patterns outside loops: PATTERN = re.compile('...') at module level.".into(),
+                    });
                 });
             }
         }
@@ -222,6 +233,11 @@ pub(crate) fn collect_n_plus_one_hint_issues(
     let mut issues = Vec::new();
     let mut seen_lines: HashSet<usize> = HashSet::new();
 
+    struct DbLoopOutput<'a> {
+        issues: &'a mut Vec<Issue>,
+        seen_lines: &'a mut HashSet<usize>,
+    }
+
     fn walk_for_db_in_loop(
         stmts: &[Stmt],
         loop_names: &HashSet<String>,
@@ -229,8 +245,7 @@ pub(crate) fn collect_n_plus_one_hint_issues(
         module: &ModuleIndex,
         db_attrs: &HashSet<&str>,
         session_hints: &HashSet<&str>,
-        issues: &mut Vec<Issue>,
-        seen_lines: &mut HashSet<usize>,
+        output: &mut DbLoopOutput<'_>,
     ) {
         for stmt in stmts {
             match stmt {
@@ -248,8 +263,7 @@ pub(crate) fn collect_n_plus_one_hint_issues(
                         module,
                         db_attrs,
                         session_hints,
-                        issues,
-                        seen_lines,
+                        output,
                     );
                     walk_for_db_in_loop(
                         &node.orelse,
@@ -258,8 +272,7 @@ pub(crate) fn collect_n_plus_one_hint_issues(
                         module,
                         db_attrs,
                         session_hints,
-                        issues,
-                        seen_lines,
+                        output,
                     );
                 }
                 Stmt::While(node) => {
@@ -276,8 +289,7 @@ pub(crate) fn collect_n_plus_one_hint_issues(
                         module,
                         db_attrs,
                         session_hints,
-                        issues,
-                        seen_lines,
+                        output,
                     );
                     walk_for_db_in_loop(
                         &node.orelse,
@@ -286,8 +298,7 @@ pub(crate) fn collect_n_plus_one_hint_issues(
                         module,
                         db_attrs,
                         session_hints,
-                        issues,
-                        seen_lines,
+                        output,
                     );
                 }
                 Stmt::FunctionDef(node) => {
@@ -298,8 +309,7 @@ pub(crate) fn collect_n_plus_one_hint_issues(
                         module,
                         db_attrs,
                         session_hints,
-                        issues,
-                        seen_lines,
+                        output,
                     );
                 }
                 Stmt::AsyncFunctionDef(node) => {
@@ -310,8 +320,7 @@ pub(crate) fn collect_n_plus_one_hint_issues(
                         module,
                         db_attrs,
                         session_hints,
-                        issues,
-                        seen_lines,
+                        output,
                     );
                 }
                 Stmt::ClassDef(node) => {
@@ -322,8 +331,7 @@ pub(crate) fn collect_n_plus_one_hint_issues(
                         module,
                         db_attrs,
                         session_hints,
-                        issues,
-                        seen_lines,
+                        output,
                     );
                 }
                 Stmt::If(node) => {
@@ -334,8 +342,7 @@ pub(crate) fn collect_n_plus_one_hint_issues(
                         module,
                         db_attrs,
                         session_hints,
-                        issues,
-                        seen_lines,
+                        output,
                     );
                     walk_for_db_in_loop(
                         &node.orelse,
@@ -344,8 +351,7 @@ pub(crate) fn collect_n_plus_one_hint_issues(
                         module,
                         db_attrs,
                         session_hints,
-                        issues,
-                        seen_lines,
+                        output,
                     );
                 }
                 Stmt::With(node) => {
@@ -356,8 +362,7 @@ pub(crate) fn collect_n_plus_one_hint_issues(
                         module,
                         db_attrs,
                         session_hints,
-                        issues,
-                        seen_lines,
+                        output,
                     );
                 }
                 Stmt::Try(node) => {
@@ -368,8 +373,7 @@ pub(crate) fn collect_n_plus_one_hint_issues(
                         module,
                         db_attrs,
                         session_hints,
-                        issues,
-                        seen_lines,
+                        output,
                     );
                     for handler in &node.handlers {
                         let ast::ExceptHandler::ExceptHandler(handler) = handler;
@@ -380,8 +384,7 @@ pub(crate) fn collect_n_plus_one_hint_issues(
                             module,
                             db_attrs,
                             session_hints,
-                            issues,
-                            seen_lines,
+                            output,
                         );
                     }
                 }
@@ -390,60 +393,67 @@ pub(crate) fn collect_n_plus_one_hint_issues(
             if in_loop && !loop_names.is_empty() {
                 walk_stmt_exprs(stmt, &mut |expr| {
                     let Expr::Call(call) = expr else { return };
-                    if let Expr::Attribute(func) = &*call.func {
-                        if !db_attrs.contains(func.attr.as_str()) {
-                            return;
-                        }
-                        if let Expr::Name(obj) = &*func.value {
-                            if !session_hints.contains(obj.id.to_ascii_lowercase().as_str()) {
-                                return;
-                            }
-                            // Check if loop variable is referenced in the call
-                            let mut refs_loop = false;
-                            walk_expr_tree(expr, &mut |inner| {
-                                if let Expr::Name(n) = inner {
-                                    if loop_names.contains(n.id.as_str()) {
-                                        refs_loop = true;
-                                    }
-                                }
-                            });
-                            if refs_loop {
-                                let line = module.line_for_offset(call.range.start().to_usize());
-                                if !seen_lines.contains(&line)
-                                    && !module
-                                        .is_rule_suppressed(line, "performance/n-plus-one-hint")
-                                {
-                                    seen_lines.insert(line);
-                                    issues.push(Issue {
-                                        check: "performance/n-plus-one-hint",
-                                        severity: "warning",
-                                        category: "Performance",
-                                        line,
-                                        path: module.rel_path.to_string(),
-                                        message: Box::leak(
-                                            format!("Potential N+1: {}.{}() inside loop — batch with IN clause or join", obj.id, func.attr).into_boxed_str(),
-                                        ),
-                                        help: "Collect IDs first, then query in batch: session.query(M).filter(M.id.in_(ids))",
-                                    });
-                                }
-                            }
-                        }
+                    let Expr::Attribute(func) = &*call.func else {
+                        return;
+                    };
+                    if !db_attrs.contains(func.attr.as_str()) {
+                        return;
                     }
+                    let Expr::Name(obj) = &*func.value else {
+                        return;
+                    };
+                    if !session_hints.contains(obj.id.to_ascii_lowercase().as_str()) {
+                        return;
+                    }
+                    let mut references_loop_variable = false;
+                    walk_expr_tree(expr, &mut |inner| {
+                        if matches!(inner, Expr::Name(name) if loop_names.contains(name.id.as_str()))
+                        {
+                            references_loop_variable = true;
+                        }
+                    });
+                    if !references_loop_variable {
+                        return;
+                    }
+                    let line = module.line_for_offset(call.range.start().to_usize());
+                    if module.is_rule_suppressed(line, "performance/n-plus-one-hint")
+                        || !output.seen_lines.insert(line)
+                    {
+                        return;
+                    }
+                    output.issues.push(Issue {
+                        check: "performance/n-plus-one-hint".into(),
+                        severity: "warning",
+                        category: "Performance",
+                        line,
+                        path: module.rel_path.to_string(),
+                        message: format!(
+                            "Potential N+1: {}.{}() inside loop — batch with IN clause or join",
+                            obj.id, func.attr
+                        )
+                        .into(),
+                        help: "Collect IDs first, then query in batch: session.query(M).filter(M.id.in_(ids))".into(),
+                    });
                 });
             }
         }
     }
 
-    walk_for_db_in_loop(
-        suite,
-        &HashSet::new(),
-        false,
-        module,
-        &db_attrs,
-        &session_hints,
-        &mut issues,
-        &mut seen_lines,
-    );
+    {
+        let mut output = DbLoopOutput {
+            issues: &mut issues,
+            seen_lines: &mut seen_lines,
+        };
+        walk_for_db_in_loop(
+            suite,
+            &HashSet::new(),
+            false,
+            module,
+            &db_attrs,
+            &session_hints,
+            &mut output,
+        );
+    }
     issues
 }
 
@@ -605,19 +615,18 @@ pub(crate) fn collect_sequential_awaits_issues(
                     let line = module.line_for_offset(body[run_start].range().start().to_usize());
                     if !module.is_rule_suppressed(line, "performance/sequential-awaits") {
                         issues.push(Issue {
-                            check: "performance/sequential-awaits",
+                            check: "performance/sequential-awaits".into(),
                             severity: "warning",
                             category: "Performance",
                             line,
                             path: module.rel_path.to_string(),
-                            message: Box::leak(
+                            message:
                                 format!(
                                     "{} sequential awaits in {}() could use asyncio.gather()",
                                     run_count, function.name
                                 )
-                                .into_boxed_str(),
-                            ),
-                            help: "Independent awaits can run concurrently: results = await asyncio.gather(coro1(), coro2())",
+                                .into(),
+                            help: "Independent awaits can run concurrently: results = await asyncio.gather(coro1(), coro2())".into(),
                         });
                     }
                 }

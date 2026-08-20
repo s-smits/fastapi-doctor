@@ -1,8 +1,10 @@
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
 use fastapi_doctor_core::{Config, Issue, RouteRecord};
 
 use crate::engine::RuleSelection;
+use crate::registry::StaticRule;
 
 pub(crate) fn analyze_routes(
     routes: &[RouteRecord],
@@ -11,31 +13,35 @@ pub(crate) fn analyze_routes(
 ) -> Vec<Issue> {
     let mut issues = Vec::new();
 
-    if rules.missing_auth_dep && auth_rule_configured(config) {
+    if rules.contains(StaticRule::SecurityMissingAuthDep) && auth_rule_configured(config) {
         issues.extend(collect_missing_auth_dep_issues(routes, config));
     }
-    if rules.forbidden_write_param && !config.forbidden_write_params.is_empty() {
+    if rules.contains(StaticRule::SecurityForbiddenWriteParam)
+        && !config.forbidden_write_params.is_empty()
+    {
         issues.extend(collect_forbidden_write_param_issues(routes, config));
     }
-    if rules.duplicate_route {
+    if rules.contains(StaticRule::CorrectnessDuplicateRoute) {
         issues.extend(collect_duplicate_route_issues(routes));
     }
-    if rules.missing_response_model {
+    if rules.contains(StaticRule::CorrectnessMissingResponseModel) {
         issues.extend(collect_missing_response_model_issues(routes));
     }
-    if rules.weak_response_model {
+    if rules.contains(StaticRule::CorrectnessWeakResponseModel) {
         issues.extend(collect_weak_response_model_issues(routes));
     }
-    if rules.post_status_code && !config.create_post_prefixes.is_empty() {
+    if rules.contains(StaticRule::CorrectnessPostStatusCode)
+        && !config.create_post_prefixes.is_empty()
+    {
         issues.extend(collect_post_status_code_issues(routes, config));
     }
-    if rules.missing_tags {
+    if rules.contains(StaticRule::ApiSurfaceMissingTags) {
         issues.extend(collect_missing_tag_issues(routes, config));
     }
-    if rules.missing_docstring {
+    if rules.contains(StaticRule::ApiSurfaceMissingDocstring) {
         issues.extend(collect_missing_docstring_issues(routes));
     }
-    if rules.missing_pagination {
+    if rules.contains(StaticRule::ApiSurfaceMissingPagination) {
         issues.extend(collect_missing_pagination_issues(routes));
     }
 
@@ -44,7 +50,7 @@ pub(crate) fn analyze_routes(
 
 pub(crate) fn route_checks_not_evaluated(rules: &RuleSelection, config: &Config) -> Vec<String> {
     let mut checks = Vec::new();
-    if rules.missing_auth_dep && !auth_rule_configured(config) {
+    if rules.contains(StaticRule::SecurityMissingAuthDep) && !auth_rule_configured(config) {
         checks.push("security/missing-auth-dep".to_string());
     }
     checks
@@ -100,13 +106,13 @@ fn collect_missing_auth_dep_issues(routes: &[RouteRecord], config: &Config) -> V
             continue;
         }
         issues.push(Issue {
-            check: "security/missing-auth-dep",
+            check: "security/missing-auth-dep".into(),
             severity: "error",
             category: "Security",
             line: 0,
             path: route.path.clone(),
-            message: "Protected route is missing required auth Depends()",
-            help: "Add a configured auth dependency at the router or handler level so identity comes from request context.",
+            message: "Protected route is missing required auth Depends()".into(),
+            help: "Add a configured auth dependency at the router or handler level so identity comes from request context.".into(),
         });
     }
 
@@ -142,19 +148,17 @@ fn collect_forbidden_write_param_issues(routes: &[RouteRecord], config: &Config)
         found.sort();
         found.dedup();
         issues.push(Issue {
-            check: "security/forbidden-write-param",
+            check: "security/forbidden-write-param".into(),
             severity: "error",
             category: "Security",
             line: 0,
             path: route.path.clone(),
-            message: Box::leak(
-                format!(
-                    "Write endpoint accepts forbidden ownership parameters: {}",
-                    found.join(", ")
-                )
-                .into_boxed_str(),
-            ),
-            help: "Derive identity from auth or request context dependencies instead.",
+            message: format!(
+                "Write endpoint accepts forbidden ownership parameters: {}",
+                found.join(", ")
+            )
+            .into(),
+            help: "Derive identity from auth or request context dependencies instead.".into(),
         });
     }
 
@@ -168,21 +172,20 @@ fn collect_duplicate_route_issues(routes: &[RouteRecord]) -> Vec<Issue> {
     for route in routes {
         for method in &route.methods {
             let key = (method.as_str(), route.path.as_str());
-            if seen.contains_key(&key) {
-                issues.push(Issue {
-                    check: "correctness/duplicate-route",
+            match seen.entry(key) {
+                Entry::Occupied(_) => issues.push(Issue {
+                    check: "correctness/duplicate-route".into(),
                     severity: "error",
                     category: "Correctness",
                     line: 0,
                     path: route.path.clone(),
-                    message: Box::leak(
-                        format!("Duplicate route registration for {} {}", method, route.path)
-                            .into_boxed_str(),
-                    ),
-                    help: "Remove the duplicate or use distinct paths.",
-                });
-            } else {
-                seen.insert(key, route);
+                    message: format!("Duplicate route registration for {} {}", method, route.path)
+                        .into(),
+                    help: "Remove the duplicate or use distinct paths.".into(),
+                }),
+                Entry::Vacant(entry) => {
+                    entry.insert(route);
+                }
             }
         }
     }
@@ -216,13 +219,14 @@ fn collect_post_status_code_issues(routes: &[RouteRecord], config: &Config) -> V
             .any(|prefix| route.path.starts_with(prefix))
         {
             issues.push(Issue {
-                check: "correctness/post-status-code",
+                check: "correctness/post-status-code".into(),
                 severity: "warning",
                 category: "Correctness",
                 line: 0,
                 path: route.path.clone(),
-                message: "POST endpoint defaults to 200 — consider 201 for resource creation",
-                help: "Add status_code=201 to the route decorator.",
+                message: "POST endpoint defaults to 200 — consider 201 for resource creation"
+                    .into(),
+                help: "Add status_code=201 to the route decorator.".into(),
             });
         }
     }
@@ -242,14 +246,15 @@ fn collect_missing_response_model_issues(routes: &[RouteRecord]) -> Vec<Issue> {
         }
         if !route.has_response_model {
             issues.push(Issue {
-                check: "correctness/missing-response-model",
+                check: "correctness/missing-response-model".into(),
                 severity: "warning",
                 category: "Correctness",
                 line: 0,
                 path: route.path.clone(),
                 message:
-                    "API endpoint has no response_model — weakens type safety and OpenAPI docs",
-                help: "Add response_model=YourPydanticModel to the route decorator.",
+                    "API endpoint has no response_model — weakens type safety and OpenAPI docs"
+                        .into(),
+                help: "Add response_model=YourPydanticModel to the route decorator.".into(),
             });
         }
     }
@@ -281,19 +286,18 @@ fn collect_weak_response_model_issues(routes: &[RouteRecord]) -> Vec<Issue> {
             continue;
         }
         issues.push(Issue {
-            check: "correctness/weak-response-model",
+            check: "correctness/weak-response-model".into(),
             severity: "warning",
             category: "Correctness",
             line: 0,
             path: route.path.clone(),
-            message: Box::leak(
+            message:
                 format!(
                     "API endpoint uses weak response_model={} — prefer a Pydantic model",
                     response_model
                 )
-                .into_boxed_str(),
-            ),
-            help: "Use a concrete BaseModel or typed collection of BaseModels so your API contract stays explicit.",
+                .into(),
+            help: "Use a concrete BaseModel or typed collection of BaseModels so your API contract stays explicit.".into(),
         });
     }
 
@@ -316,13 +320,13 @@ fn collect_missing_tag_issues(routes: &[RouteRecord], config: &Config) -> Vec<Is
         }
         if route.tags.is_empty() {
             issues.push(Issue {
-                check: "api-surface/missing-tags",
+                check: "api-surface/missing-tags".into(),
                 severity: "warning",
                 category: "API Surface",
                 line: 0,
                 path: route.path.clone(),
-                message: "API route is missing tags",
-                help: "Add tags=['your-domain'] to the route decorator.",
+                message: "API route is missing tags".into(),
+                help: "Add tags=['your-domain'] to the route decorator.".into(),
             });
         }
     }
@@ -338,19 +342,19 @@ fn collect_missing_docstring_issues(routes: &[RouteRecord]) -> Vec<Issue> {
             continue;
         }
         issues.push(Issue {
-            check: "api-surface/missing-docstring",
+            check: "api-surface/missing-docstring".into(),
             severity: "warning",
             category: "API Surface",
             line: 0,
             path: route.path.clone(),
-            message: Box::leak(
-                format!(
-                    "Endpoint '{}' has no docstring — weakens API docs",
-                    route.endpoint_name
-                )
-                .into_boxed_str(),
-            ),
-            help: "Add a docstring to the handler function. FastAPI uses it for OpenAPI descriptions.",
+            message: format!(
+                "Endpoint '{}' has no docstring — weakens API docs",
+                route.endpoint_name
+            )
+            .into(),
+            help:
+                "Add a docstring to the handler function. FastAPI uses it for OpenAPI descriptions."
+                    .into(),
         });
     }
 
@@ -388,19 +392,17 @@ fn collect_missing_pagination_issues(routes: &[RouteRecord]) -> Vec<Issue> {
             continue;
         }
         issues.push(Issue {
-            check: "api-surface/missing-pagination",
+            check: "api-surface/missing-pagination".into(),
             severity: "warning",
             category: "API Surface",
             line: 0,
             path: route.path.clone(),
-            message: Box::leak(
-                format!(
-                    "List endpoint '{}' has no pagination — risks memory exhaustion",
-                    route.path
-                )
-                .into_boxed_str(),
-            ),
-            help: "Add limit and offset Query parameters to support pagination.",
+            message: format!(
+                "List endpoint '{}' has no pagination — risks memory exhaustion",
+                route.path
+            )
+            .into(),
+            help: "Add limit and offset Query parameters to support pagination.".into(),
         });
     }
 

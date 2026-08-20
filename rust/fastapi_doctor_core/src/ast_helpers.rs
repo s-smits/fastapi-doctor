@@ -154,13 +154,15 @@ pub fn build_function_context(
 ) -> FunctionContext {
     build_context_common(
         module,
-        &node.name.to_string(),
+        node.name.as_ref(),
         node.range(),
         &node.body,
         &node.decorator_list,
-        owner_class,
-        false,
-        owner_is_protocol,
+        FunctionContextOptions {
+            owner_class,
+            is_async: false,
+            owner_is_protocol,
+        },
     )
 }
 
@@ -172,26 +174,37 @@ pub fn build_async_function_context(
 ) -> FunctionContext {
     build_context_common(
         module,
-        &node.name.to_string(),
+        node.name.as_ref(),
         node.range(),
         &node.body,
         &node.decorator_list,
-        owner_class,
-        true,
-        owner_is_protocol,
+        FunctionContextOptions {
+            owner_class,
+            is_async: true,
+            owner_is_protocol,
+        },
     )
 }
 
-pub fn build_context_common(
+struct FunctionContextOptions {
+    owner_class: Option<String>,
+    is_async: bool,
+    owner_is_protocol: bool,
+}
+
+fn build_context_common(
     module: &ModuleIndex,
     name: &str,
     range: rustpython_parser::ast::text_size::TextRange,
     body: &[Stmt],
     decorators: &[Expr],
-    owner_class: Option<String>,
-    is_async: bool,
-    owner_is_protocol: bool,
+    options: FunctionContextOptions,
 ) -> FunctionContext {
+    let FunctionContextOptions {
+        owner_class,
+        is_async,
+        owner_is_protocol,
+    } = options;
     let mut collector = FunctionBodyCollector::default();
     for stmt in body {
         walk_stmt(module, stmt, owner_class.as_deref(), &mut collector);
@@ -543,10 +556,8 @@ pub fn walk_expr(
             walk_expr(module, &node.orelse, owner_class, collector);
         }
         Expr::Dict(node) => {
-            for key in &node.keys {
-                if let Some(key) = key {
-                    walk_expr(module, key, owner_class, collector);
-                }
+            for key in node.keys.iter().flatten() {
+                walk_expr(module, key, owner_class, collector);
             }
             for value in &node.values {
                 walk_expr(module, value, owner_class, collector);
@@ -1201,10 +1212,8 @@ pub fn walk_expr_tree<'a>(expr: &'a Expr, visit: &mut impl FnMut(&'a Expr)) {
             walk_expr_tree(&node.orelse, visit);
         }
         Expr::Dict(node) => {
-            for key in &node.keys {
-                if let Some(key) = key {
-                    walk_expr_tree(key, visit);
-                }
+            for key in node.keys.iter().flatten() {
+                walk_expr_tree(key, visit);
             }
             for value in &node.values {
                 walk_expr_tree(value, visit);
@@ -1320,7 +1329,7 @@ pub fn walk_expr_tree<'a>(expr: &'a Expr, visit: &mut impl FnMut(&'a Expr)) {
     }
 }
 
-pub fn function_default_exprs<'a>(args: &'a ast::Arguments) -> Vec<&'a Expr> {
+pub fn function_default_exprs(args: &ast::Arguments) -> Vec<&Expr> {
     args.defaults()
         .chain(
             args.kwonlyargs

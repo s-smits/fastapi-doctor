@@ -5,6 +5,7 @@ use fastapi_doctor_core::ast_helpers::*;
 use fastapi_doctor_core::{Config, ImportSurfaceSummary, Issue, ModuleIndex};
 
 use crate::engine::RuleSelection;
+use crate::registry::StaticRule;
 
 pub(crate) fn collect_async_without_await_issues(
     module: &ModuleIndex,
@@ -75,13 +76,13 @@ pub(crate) fn collect_async_without_await_issues(
         };
 
         issues.push(Issue {
-            check: "architecture/async-without-await",
+            check: "architecture/async-without-await".into(),
             severity: "warning",
             category: "Architecture",
             line: function.line,
             path: module.rel_path.to_string(),
-            message: Box::leak(message.into_boxed_str()),
-            help: Box::leak(help.into_boxed_str()),
+            message: message.into(),
+            help: help.into(),
         });
     }
 
@@ -111,63 +112,58 @@ pub(crate) fn collect_giant_function_issues(
             .find(|candidate| candidate.name == function.name && candidate.line == line)
             .is_some_and(|candidate| candidate.is_route_handler);
 
-        if rules.giant_route_handler
+        if rules.contains(StaticRule::ArchitectureGiantRouteHandler)
             && is_route_handler
             && config.giant_function_threshold > 0
             && size > config.giant_function_threshold
         {
             issues.push(Issue {
-                check: "architecture/giant-route-handler",
+                check: "architecture/giant-route-handler".into(),
                 severity: "error",
                 category: "Architecture",
                 line,
                 path: module.rel_path.to_string(),
-                message: Box::leak(
+                message:
                     format!(
                         "Route handler '{}' is {} lines (>{}) — split request handling from business logic",
                         function.name, size, config.giant_function_threshold
                     )
-                    .into_boxed_str(),
-                ),
-                help: "Large API handlers hide validation, auth, and side-effect boundaries. Move orchestration to services and keep request handlers narrow.",
+                    .into(),
+                help: "Large API handlers hide validation, auth, and side-effect boundaries. Move orchestration to services and keep request handlers narrow.".into(),
             });
-        } else if rules.giant_function
+        } else if rules.contains(StaticRule::ArchitectureGiantFunction)
             && config.giant_function_threshold > 0
             && size > config.giant_function_threshold
         {
             issues.push(Issue {
-                check: "architecture/giant-function",
+                check: "architecture/giant-function".into(),
                 severity: "warning",
                 category: "Architecture",
                 line,
                 path: module.rel_path.to_string(),
-                message: Box::leak(
-                    format!(
-                        "Function '{}' is {} lines (>{}) — extract sub-functions",
-                        function.name, size, config.giant_function_threshold
-                    )
-                    .into_boxed_str(),
-                ),
-                help: "Break into smaller, testable functions. Each should do one thing.",
+                message: format!(
+                    "Function '{}' is {} lines (>{}) — extract sub-functions",
+                    function.name, size, config.giant_function_threshold
+                )
+                .into(),
+                help: "Break into smaller, testable functions. Each should do one thing.".into(),
             });
-        } else if rules.large_function
+        } else if rules.contains(StaticRule::ArchitectureLargeFunction)
             && config.large_function_threshold > 0
             && size > config.large_function_threshold
         {
             issues.push(Issue {
-                check: "architecture/large-function",
+                check: "architecture/large-function".into(),
                 severity: "warning",
                 category: "Architecture",
                 line,
                 path: module.rel_path.to_string(),
-                message: Box::leak(
-                    format!(
-                        "Function '{}' is {} lines (>{}) — consider splitting",
-                        function.name, size, config.large_function_threshold
-                    )
-                    .into_boxed_str(),
-                ),
-                help: "Functions over 200 lines are harder to maintain and test.",
+                message: format!(
+                    "Function '{}' is {} lines (>{}) — consider splitting",
+                    function.name, size, config.large_function_threshold
+                )
+                .into(),
+                help: "Functions over 200 lines are harder to maintain and test.".into(),
             });
         }
     }
@@ -189,19 +185,18 @@ pub(crate) fn collect_deep_nesting_issues(
         let depth = max_nesting_depth(function.body);
         if depth > threshold {
             issues.push(Issue {
-                check: "architecture/deep-nesting",
+                check: "architecture/deep-nesting".into(),
                 severity: "warning",
                 category: "Architecture",
                 line: module.line_for_offset(function.range.start().to_usize()),
                 path: module.rel_path.to_string(),
-                message: Box::leak(
+                message:
                     format!(
                         "Function '{}' has {} levels of nesting (>{}) — extract inner logic",
                         function.name, depth, threshold
                     )
-                    .into_boxed_str(),
-                ),
-                help: "Use early returns or helper functions to flatten control flow and improve readability.",
+                    .into(),
+                help: "Use early returns or helper functions to flatten control flow and improve readability.".into(),
             });
         }
     }
@@ -265,13 +260,13 @@ pub(crate) fn collect_import_bloat_issue(
     }
 
     Some(Issue {
-        check: "architecture/import-bloat",
+        check: "architecture/import-bloat".into(),
         severity: "warning",
         category: "Architecture",
         line: 0,
         path: module.rel_path.to_string(),
-        message: Box::leak(message.into_boxed_str()),
-        help: Box::leak(help.into_boxed_str()),
+        message: message.into(),
+        help: help.into(),
     })
 }
 
@@ -311,13 +306,15 @@ pub(crate) fn collect_avoid_sys_exit_issues(
         if is_exit {
             let line = module.line_for_offset(call.range.start().to_usize());
             issues.push(Issue {
-                check: "architecture/avoid-sys-exit",
+                check: "architecture/avoid-sys-exit".into(),
                 severity: "warning",
                 category: "Architecture",
                 line,
                 path: module.rel_path.to_string(),
-                message: "sys.exit() or quit() in library code — raise an Exception instead",
-                help: "Deep application logic should raise exceptions, not abruptly kill the process.",
+                message: "sys.exit() or quit() in library code — raise an Exception instead".into(),
+                help:
+                    "Deep application logic should raise exceptions, not abruptly kill the process."
+                        .into(),
             });
         }
     });
@@ -348,13 +345,13 @@ pub(crate) fn collect_print_in_production_issues(
             return;
         }
         issues.push(Issue {
-            check: "architecture/print-in-production",
+            check: "architecture/print-in-production".into(),
             severity: "warning",
             category: "Architecture",
             line,
             path: module.rel_path.to_string(),
-            message: "print() in production code — use logger instead",
-            help: "Replace with logger.info/debug/warning as appropriate.",
+            message: "print() in production code — use logger instead".into(),
+            help: "Replace with logger.info/debug/warning as appropriate.".into(),
         });
     });
     issues
@@ -387,7 +384,7 @@ pub(crate) fn collect_fat_route_handler_issues(
                     if trimmed.starts_with("@")
                         && (trimmed.contains("router") || trimmed.contains("app"))
                     {
-                        Some(trimmed.as_ref())
+                        Some(*trimmed)
                     } else {
                         None
                     }
@@ -410,26 +407,24 @@ pub(crate) fn collect_fat_route_handler_issues(
         };
         if func_len > effective_threshold {
             issues.push(Issue {
-                check: "architecture/fat-route-handler",
+                check: "architecture/fat-route-handler".into(),
                 severity: "warning",
                 category: "Architecture",
                 line: func_line,
                 path: module.rel_path.to_string(),
-                message: Box::leak(
+                message:
                     format!(
                         "Route handler '{}' is {} lines — extract business logic to services/",
                         function.name, func_len
                     )
-                    .into_boxed_str(),
-                ),
-                help: Box::leak(
+                    .into(),
+                help:
                     format!(
                         "Keep handlers under {} lines ({} for mutating endpoints). Move logic to a service function.",
                         config.fat_route_handler_threshold,
                         config.fat_route_handler_threshold.saturating_mul(3) / 2
                     )
-                    .into_boxed_str(),
-                ),
+                    .into(),
             });
         }
     }
@@ -514,16 +509,15 @@ pub(crate) fn collect_passthrough_function_issues(
         if param_names.is_subset(&call_arg_names) || call_arg_names == param_names {
             let line = module.line_for_offset(range.start().to_usize());
             issues.push(Issue {
-                check: "architecture/passthrough-function",
+                check: "architecture/passthrough-function".into(),
                 severity: "warning",
                 category: "Architecture",
                 line,
                 path: module.rel_path.to_string(),
-                message: Box::leak(
+                message:
                     format!("Function '{}' is a pure passthrough — consider inlining", name)
-                        .into_boxed_str(),
-                ),
-                help: "This function just delegates to another. Inline it or add a docstring explaining why the wrapper exists.",
+                        .into(),
+                help: "This function just delegates to another. Inline it or add a docstring explaining why the wrapper exists.".into(),
             });
         }
     }
@@ -642,19 +636,18 @@ fn analyze_hidden_dependency_function(
         return;
     };
     issues.push(Issue {
-        check: "architecture/hidden-dependency-instantiation",
+        check: "architecture/hidden-dependency-instantiation".into(),
         severity: "warning",
         category: "Architecture",
         line,
         path: module.rel_path.to_string(),
-        message: Box::leak(
+        message:
             format!(
                 "Function '{}' resolves dependency '{}' inside its body",
                 name, dep_name
             )
-            .into_boxed_str(),
-        ),
-        help: "Inject dependencies via function arguments, Depends(...), or class __init__ instead of wiring them inside application logic. Lazy imports for performance are fine; hidden dependency resolution is not.",
+            .into(),
+        help: "Inject dependencies via function arguments, Depends(...), or class __init__ instead of wiring them inside application logic. Lazy imports for performance are fine; hidden dependency resolution is not.".into(),
     });
 }
 
@@ -759,19 +752,18 @@ pub(crate) fn collect_flag_argument_dispatch_issues(
         }
 
         issues.push(Issue {
-            check: "architecture/flag-argument-dispatch",
+            check: "architecture/flag-argument-dispatch".into(),
             severity: "warning",
             category: "Architecture",
             line,
             path: module.rel_path.to_string(),
-            message: Box::leak(
+            message:
                 format!(
                     "Function '{}' dispatches behavior by branching on parameter '{}'",
                     name, discriminant
                 )
-                .into_boxed_str(),
-            ),
-            help: "Split target-specific behavior into explicit functions or strategies instead of branching on a mode/target flag.",
+                .into(),
+            help: "Split target-specific behavior into explicit functions or strategies instead of branching on a mode/target flag.".into(),
         });
     }
 
@@ -862,4 +854,140 @@ fn branch_body_has_material_behavior(body: &[Stmt]) -> bool {
         Stmt::Raise(_) => true,
         _ => false,
     })
+}
+
+// ── Architecture: httpexception-in-service ──────────────────────────────
+//
+// `HTTPException` is router vocabulary. Service-layer modules raising it couple
+// business logic to FastAPI's transport layer, blocking reuse from background
+// workers, CLI entrypoints, and tests. The router should catch typed domain
+// errors and translate them.
+
+const SERVICE_LAYER_DIRS: &[&str] = &["services", "domain", "core"];
+const NON_SERVICE_LAYER_DIRS: &[&str] = &[
+    "routers",
+    "api",
+    "endpoints",
+    "interfaces",
+    "tests",
+    "scripts",
+];
+
+fn is_service_layer_module(module: &ModuleIndex) -> bool {
+    module.has_path_part(SERVICE_LAYER_DIRS) && !module.has_path_part(NON_SERVICE_LAYER_DIRS)
+}
+
+fn call_targets_http_exception(call: &ast::ExprCall) -> bool {
+    matches!(
+        &*call.func,
+        Expr::Name(name) if name.id.as_str() == "HTTPException"
+    ) || matches!(
+        &*call.func,
+        Expr::Attribute(attr) if attr.attr.as_str() == "HTTPException"
+    )
+}
+
+pub(crate) fn collect_httpexception_in_service_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
+    if !is_service_layer_module(module) || !module.source.contains("HTTPException") {
+        return Vec::new();
+    }
+
+    let mut issues = Vec::new();
+    let mut seen_lines = HashSet::new();
+    walk_suite_stmts(suite, &mut |stmt| {
+        let Stmt::Raise(raise) = stmt else { return };
+        let Some(exc) = raise.exc.as_ref() else {
+            return;
+        };
+        let Expr::Call(call) = exc.as_ref() else {
+            return;
+        };
+        if !call_targets_http_exception(call) {
+            return;
+        }
+        let line = module.line_for_offset(raise.range.start().to_usize());
+        if !seen_lines.insert(line)
+            || module.is_rule_suppressed(line, "architecture/httpexception-in-service")
+        {
+            return;
+        }
+        issues.push(Issue {
+            check: "architecture/httpexception-in-service".into(),
+            severity: "warning",
+            category: "Architecture",
+            line,
+            path: module.rel_path.to_string(),
+            message: "HTTPException raised inside service layer — translate at the router boundary".into(),
+            help: "Define a typed domain error (e.g. ItemNotFound) in the service and raise that instead. Let the router catch the domain error and map it to HTTPException at the HTTP boundary so the service stays usable from workers, CLI, and tests.".into(),
+        });
+    });
+    issues
+}
+
+// ── Architecture: service-positional-args ───────────────────────────────
+//
+// Service entrypoints that take a session-like first arg followed by
+// positional-or-keyword parameters silently break callers when the signature
+// grows. Force everything after the session to be keyword-only.
+
+const SESSION_LIKE_ARGS: &[&str] = &[
+    "session",
+    "db",
+    "db_session",
+    "async_session",
+    "conn",
+    "connection",
+    "tx",
+    "cursor",
+];
+
+fn is_session_like_arg(name: &str) -> bool {
+    SESSION_LIKE_ARGS.contains(&name)
+}
+
+pub(crate) fn collect_service_positional_args_issues(
+    module: &ModuleIndex,
+    suite: &ast::Suite,
+) -> Vec<Issue> {
+    if !is_service_layer_module(module) {
+        return Vec::new();
+    }
+
+    let mut issues = Vec::new();
+    for stmt in suite {
+        let Stmt::AsyncFunctionDef(node) = stmt else {
+            continue;
+        };
+        if node.name.as_str().starts_with('_') {
+            continue;
+        }
+        let mut positional_args = node.args.posonlyargs.iter().chain(node.args.args.iter());
+        let Some(first_arg) = positional_args.next() else {
+            continue;
+        };
+        if positional_args.next().is_none() {
+            continue;
+        }
+        let first_name = first_arg.def.arg.as_str();
+        if !is_session_like_arg(first_name) {
+            continue;
+        }
+        let line = module.line_for_offset(node.range.start().to_usize());
+        if module.is_rule_suppressed(line, "architecture/service-positional-args") {
+            continue;
+        }
+        issues.push(Issue {
+            check: "architecture/service-positional-args".into(),
+            severity: "warning",
+            category: "Architecture",
+            line,
+            path: module.rel_path.to_string(),
+            message: "Service entrypoint has positional arguments after its session — make them keyword-only with `*,`".into(),
+            help: "Service signatures grow over time; positional optionals silently break callers when a new field is inserted. Use `async def fn(session, *, name, ...)` so every later field is keyword-only.".into(),
+        });
+    }
+    issues
 }
