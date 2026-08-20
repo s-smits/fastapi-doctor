@@ -2,6 +2,7 @@ use rustpython_parser::ast::{self, Expr, Stmt};
 use std::collections::{HashMap, HashSet};
 
 use crate::engine::RuleSelection;
+use crate::registry::StaticRule;
 use fastapi_doctor_core::ast_helpers::*;
 use fastapi_doctor_core::{Config, Issue, ModuleIndex};
 
@@ -226,7 +227,10 @@ pub(crate) fn collect_pydantic_issues(
         let is_model = is_base_model_class(node);
 
         // pydantic/sensitive-field-type and pydantic/secretstr
-        if is_model && (rules.sensitive_field_type || rules.pydantic_secretstr) {
+        if is_model
+            && (rules.contains(StaticRule::PydanticSensitiveFieldType)
+                || rules.contains(StaticRule::SecurityPydanticSecretStr))
+        {
             for body_stmt in &node.body {
                 if let Stmt::AnnAssign(ann) = body_stmt {
                     if let Expr::Name(target) = &*ann.target {
@@ -234,37 +238,35 @@ pub(crate) fn collect_pydantic_issues(
                             && !annotation_contains_secret_str(&ann.annotation)
                         {
                             let line = module.line_for_offset(ann.range.start().to_usize());
-                            if rules.sensitive_field_type {
+                            if rules.contains(StaticRule::PydanticSensitiveFieldType) {
                                 issues.push(Issue {
-                                    check: "pydantic/sensitive-field-type",
+                                    check: "pydantic/sensitive-field-type".into(),
                                     severity: "warning",
                                     category: "Pydantic",
                                     line,
                                     path: module.rel_path.to_string(),
-                                    message: Box::leak(
+                                    message:
                                         format!(
                                             "Sensitive field '{}' in model '{}' should use SecretStr",
                                             target.id, class_name
                                         )
-                                        .into_boxed_str(),
-                                    ),
-                                    help: "Use pydantic.SecretStr to prevent accidental leakage in logs or JSON.",
+                                        .into(),
+                                    help: "Use pydantic.SecretStr to prevent accidental leakage in logs or JSON.".into(),
                                 });
                             } else {
                                 issues.push(Issue {
-                                    check: "security/pydantic-secretstr",
+                                    check: "security/pydantic-secretstr".into(),
                                     severity: "warning",
                                     category: "Security",
                                     line,
                                     path: module.rel_path.to_string(),
-                                    message: Box::leak(
+                                    message:
                                         format!(
                                             "Field '{}' in model '{}' should use SecretStr",
                                             target.id, class_name
                                         )
-                                        .into_boxed_str(),
-                                    ),
-                                    help: "Use pydantic.SecretStr for sensitive fields to prevent leakage. Access the value via .get_secret_value().",
+                                        .into(),
+                                    help: "Use pydantic.SecretStr for sensitive fields to prevent leakage. Access the value via .get_secret_value().".into(),
                                 });
                             }
                         }
@@ -274,7 +276,7 @@ pub(crate) fn collect_pydantic_issues(
         }
 
         // pydantic/mutable-default
-        if is_model && rules.mutable_model_default {
+        if is_model && rules.contains(StaticRule::PydanticMutableDefault) {
             for body_stmt in &node.body {
                 if let Stmt::AnnAssign(ann) = body_stmt {
                     if ann.value.is_none() {
@@ -288,26 +290,25 @@ pub(crate) fn collect_pydantic_issues(
                     if is_mutable {
                         let line = module.line_for_offset(ann.range.start().to_usize());
                         issues.push(Issue {
-                            check: "pydantic/mutable-default",
+                            check: "pydantic/mutable-default".into(),
                             severity: "error",
                             category: "Pydantic",
                             line,
                             path: module.rel_path.to_string(),
-                            message: Box::leak(
+                            message:
                                 format!(
                                     "Mutable default in model '{}' — use Field(default_factory=...)",
                                     class_name
                                 )
-                                .into_boxed_str(),
-                            ),
-                            help: "Replace `field: list[X] = []` with `field: list[X] = Field(default_factory=list)`.",
+                                .into(),
+                            help: "Replace `field: list[X] = []` with `field: list[X] = Field(default_factory=list)`.".into(),
                         });
                     }
                 }
             }
         }
 
-        if is_model && rules.normalized_name_collision {
+        if is_model && rules.contains(StaticRule::PydanticNormalizedNameCollision) {
             let class_line = module.line_for_offset(node.range.start().to_usize());
             let mut seen: HashMap<String, Vec<(String, String, usize)>> = HashMap::new();
 
@@ -362,26 +363,25 @@ pub(crate) fn collect_pydantic_issues(
                     .min()
                     .unwrap_or(class_line);
                 issues.push(Issue {
-                    check: "pydantic/normalized-name-collision",
+                    check: "pydantic/normalized-name-collision".into(),
                     severity: "warning",
                     category: "Pydantic",
                     line,
                     path: module.rel_path.to_string(),
-                    message: Box::leak(
+                    message:
                         format!(
                             "Model '{}' defines near-duplicate normalized names: {}",
                             class_name,
                             rendered.join(", ")
                         )
-                        .into_boxed_str(),
-                    ),
-                    help: "Keep one canonical field name and express external spelling differences through a single alias on that field.",
+                        .into(),
+                    help: "Keep one canonical field name and express external spelling differences through a single alias on that field.".into(),
                 });
             }
         }
 
         // pydantic/should-be-model
-        if rules.should_be_model && !is_model {
+        if rules.contains(StaticRule::PydanticShouldBeModel) && !is_model {
             let class_line = module.line_for_offset(node.range.start().to_usize());
 
             // TypedDict
@@ -407,15 +407,14 @@ pub(crate) fn collect_pydantic_issues(
                     || class_name.ends_with("Payload");
                 if should_flag {
                     issues.push(Issue {
-                        check: "pydantic/should-be-model",
+                        check: "pydantic/should-be-model".into(),
                         severity: "warning",
                         category: "Pydantic",
                         line: class_line,
                         path: module.rel_path.to_string(),
-                        message: Box::leak(
-                            format!("TypedDict '{}' should be a Pydantic BaseModel", class_name).into_boxed_str(),
-                        ),
-                        help: "TypedDicts provide no runtime validation. BaseModel gives you validation, serialization, and OpenAPI schema.",
+                        message:
+                            format!("TypedDict '{}' should be a Pydantic BaseModel", class_name).into(),
+                        help: "TypedDicts provide no runtime validation. BaseModel gives you validation, serialization, and OpenAPI schema.".into(),
                     });
                 }
                 return;
@@ -443,15 +442,14 @@ pub(crate) fn collect_pydantic_issues(
                 let should_flag = everywhere || is_at_boundary || has_api_name;
                 if should_flag {
                     issues.push(Issue {
-                        check: "pydantic/should-be-model",
+                        check: "pydantic/should-be-model".into(),
                         severity: "warning",
                         category: "Pydantic",
                         line: class_line,
                         path: module.rel_path.to_string(),
-                        message: Box::leak(
-                            format!("NamedTuple '{}' should be a Pydantic BaseModel with frozen=True", class_name).into_boxed_str(),
-                        ),
-                        help: "BaseModel(frozen=True) provides the same immutability plus validation and OpenAPI support.",
+                        message:
+                            format!("NamedTuple '{}' should be a Pydantic BaseModel with frozen=True", class_name).into(),
+                        help: "BaseModel(frozen=True) provides the same immutability plus validation and OpenAPI support.".into(),
                     });
                 }
                 return;
@@ -493,22 +491,21 @@ pub(crate) fn collect_pydantic_issues(
                 let should_flag = everywhere || is_at_boundary || has_api_name;
                 if should_flag {
                     issues.push(Issue {
-                        check: "pydantic/should-be-model",
+                        check: "pydantic/should-be-model".into(),
                         severity: "warning",
                         category: "Pydantic",
                         line: class_line,
                         path: module.rel_path.to_string(),
-                        message: Box::leak(
-                            format!("@dataclass '{}' should be a Pydantic BaseModel", class_name).into_boxed_str(),
-                        ),
-                        help: "Pydantic provides validation, serialization, and OpenAPI schema generation. Use @dataclass(slots=True) or @dataclass(frozen=True) to exempt.",
+                        message:
+                            format!("@dataclass '{}' should be a Pydantic BaseModel", class_name).into(),
+                        help: "Pydantic provides validation, serialization, and OpenAPI schema generation. Use @dataclass(slots=True) or @dataclass(frozen=True) to exempt.".into(),
                     });
                 }
             }
         }
     });
 
-    if rules.normalized_name_collision {
+    if rules.contains(StaticRule::PydanticNormalizedNameCollision) {
         walk_suite_exprs(suite, &mut |expr| {
             let Expr::Call(call) = expr else { return };
             let Some(callee_name) = looks_like_constructor_name(&call.func) else {
@@ -546,20 +543,19 @@ pub(crate) fn collect_pydantic_issues(
                 rendered.dedup();
                 let line = module.line_for_offset(call.range.start().to_usize());
                 issues.push(Issue {
-                    check: "pydantic/normalized-name-collision",
+                    check: "pydantic/normalized-name-collision".into(),
                     severity: "warning",
                     category: "Pydantic",
                     line,
                     path: module.rel_path.to_string(),
-                    message: Box::leak(
+                    message:
                         format!(
                             "Constructor call '{}(...)' passes near-duplicate keyword names: {}",
                             callee_name,
                             rendered.join(", ")
                         )
-                        .into_boxed_str(),
-                    ),
-                    help: "Normalize on one keyword spelling such as snake_case and map external variants through aliases before object construction.",
+                        .into(),
+                    help: "Normalize on one keyword spelling such as snake_case and map external variants through aliases before object construction.".into(),
                 });
             }
         });

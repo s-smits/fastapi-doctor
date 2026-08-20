@@ -292,6 +292,50 @@ skipped. The report lists skipped checks in `checks_not_evaluated`. The score
 may appear clean, but route-level verification did not run. Fix the startup
 error before trusting the report.
 
+## Router/Service Error Boundary
+
+The `architecture/fat-route-handler` rule fires on the *symptom* of business
+logic in route handlers. The rules below catch the *underlying boundary violation*
+that causes handlers to grow fat in the first place.
+
+### `architecture/httpexception-in-service` (warning)
+`HTTPException` should be raised at the HTTP boundary (routers/) only. Service
+modules under `services/`, `domain/`, or `core/` raising `HTTPException` couple
+business logic to FastAPI's transport layer, blocking reuse from background
+workers, CLI entrypoints, and tests. Define typed domain error classes and let
+the router translate them to HTTP status codes.
+
+**Detection:** AST match on `raise HTTPException(...)` whose enclosing file
+path contains a service segment (`services/`, `domain/`, or `core/`). Ignore
+files under `routers/`, `api/`, `interfaces/`, `endpoints/`, `tests/`, or
+`scripts/`.
+
+**Fix shape:**
+```python
+# services/items/ops.py
+raise ItemNotFound(item_id)               # domain error
+
+# routers/items.py
+try:
+    result = await delete_item_service(session, item_id=item_id)
+except ItemNotFound as exc:
+    raise HTTPException(404, detail=f"Item {exc.item_id} not found") from exc
+```
+
+### `architecture/service-positional-args` (warning, strict profile)
+Public async service entrypoints with a session-like first argument accumulate
+optional kwargs over time. Require keyword-only parameters after the session:
+`async def create_item(session, *, name, ...)`. Positional optionals silently
+break callers when the signature grows. The rule is enabled by the strict
+profile.
+
+### Suppression-removal as success signal (process note)
+When a refactor genuinely fixes a fat-route-handler or large-function finding,
+remove the `# doctor:ignore architecture/fat-route-handler reason="deferred refactor"`
+suppression. A lingering suppression after the symptom is gone is dead annotation
+and misleads the next reader. The doctor's `suppressions` JSON field is the
+audit trail — review it after each refactor and prune.
+
 ## Extension Guidance
 
 If you add a new rule, update:

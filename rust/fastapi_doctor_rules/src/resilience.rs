@@ -1,6 +1,7 @@
 use rustpython_parser::ast::{self, Expr, Ranged, Stmt};
 
 use crate::engine::RuleSelection;
+use crate::registry::StaticRule;
 use fastapi_doctor_core::ast_helpers::*;
 use fastapi_doctor_core::{Issue, ModuleIndex};
 
@@ -25,7 +26,7 @@ pub(crate) fn collect_resilience_issues(
             let handler_line = module.line_for_offset(handler.range.start().to_usize());
 
             // bare-except-pass: except handler body is just `pass` with no comment
-            if rules.bare_except_pass
+            if rules.contains(StaticRule::ResilienceBareExceptPass)
                 && handler.body.len() == 1
                 && matches!(handler.body[0], Stmt::Pass(_))
             {
@@ -42,19 +43,21 @@ pub(crate) fn collect_resilience_issues(
                 }
                 if !has_comment {
                     issues.push(Issue {
-                        check: "resilience/bare-except-pass",
+                        check: "resilience/bare-except-pass".into(),
                         severity: "warning",
                         category: "Resilience",
                         line: handler_line,
                         path: module.rel_path.to_string(),
-                        message: "except: pass silently swallows errors without logging or comment",
-                        help: "Add logger.debug/warning or a # comment explaining why it's safe to ignore.",
+                        message: "except: pass silently swallows errors without logging or comment".into(),
+                        help: "Add logger.debug/warning or a # comment explaining why it's safe to ignore.".into(),
                     });
                 }
             }
 
             // reraise-without-context
-            if rules.reraise_without_context && !handler.body.is_empty() {
+            if rules.contains(StaticRule::ResilienceReraiseWithoutContext)
+                && !handler.body.is_empty()
+            {
                 let last_stmt = &handler.body[handler.body.len() - 1];
                 let is_bare_raise = matches!(last_stmt, Stmt::Raise(r) if r.exc.is_none());
                 let is_identity_raise = if let Stmt::Raise(r) = last_stmt {
@@ -90,13 +93,13 @@ pub(crate) fn collect_resilience_issues(
                             .is_rule_suppressed(handler_line, "resilience/reraise-without-context")
                     {
                         issues.push(Issue {
-                            check: "resilience/reraise-without-context",
+                            check: "resilience/reraise-without-context".into(),
                             severity: "warning",
                             category: "Resilience",
                             line: handler_line,
                             path: module.rel_path.to_string(),
-                            message: "except handler re-raises without adding context — remove the try/except or add info",
-                            help: "Either remove the try/except (it's noise) or use `raise NewError(...) from exc`.",
+                            message: "except handler re-raises without adding context — remove the try/except or add info".into(),
+                            help: "Either remove the try/except (it's noise) or use `raise NewError(...) from exc`.".into(),
                         });
                     }
                 }
@@ -171,12 +174,11 @@ pub(crate) fn collect_resilience_issues(
                                         "warning" | "warn" | "info" | "debug"
                                     )
                                     && log_call_without_context.is_none()
+                                    && !call_refs_exc
                                 {
-                                    if !call_refs_exc {
-                                        let line =
-                                            module.line_for_offset(call.range.start().to_usize());
-                                        log_call_without_context = Some((line, func.attr.as_str()));
-                                    }
+                                    let line =
+                                        module.line_for_offset(call.range.start().to_usize());
+                                    log_call_without_context = Some((line, func.attr.as_str()));
                                 }
                                 if !has_exc_info
                                     && !is_logger_exception
@@ -225,7 +227,7 @@ pub(crate) fn collect_resilience_issues(
 
             // exception-swallowed: no logging, no raise, and exc unused or just pass/return
             if is_except_exception
-                && rules.exception_swallowed
+                && rules.contains(StaticRule::ResilienceExceptionSwallowed)
                 && !has_logging
                 && !has_raise
                 && !module.is_rule_suppressed(handler_line, "resilience/exception-swallowed")
@@ -235,62 +237,60 @@ pub(crate) fn collect_resilience_issues(
                 let exc_unused = exc_name.is_some() && !refs_exc;
                 if is_just_pass || is_just_return || exc_unused {
                     issues.push(Issue {
-                        check: "resilience/exception-swallowed",
+                        check: "resilience/exception-swallowed".into(),
                         severity: "warning",
                         category: "Resilience",
                         line: handler_line,
                         path: module.rel_path.to_string(),
-                        message: "except Exception block swallows error without logging or re-raising",
-                        help: "Add logger.exception() or logger.warning(..., exc_info=True) to preserve debugging context.",
+                        message: "except Exception block swallows error without logging or re-raising".into(),
+                        help: "Add logger.exception() or logger.warning(..., exc_info=True) to preserve debugging context.".into(),
                     });
                 }
             }
 
             // broad-except-no-context: logging without exc_info
             if is_except_exception
-                && rules.broad_except_no_context
+                && rules.contains(StaticRule::ResilienceBroadExceptNoContext)
                 && !has_raise
                 && !module.is_rule_suppressed(handler_line, "resilience/broad-except-no-context")
             {
                 if let Some((log_line, log_attr)) = log_call_without_context {
                     issues.push(Issue {
-                        check: "resilience/broad-except-no-context",
+                        check: "resilience/broad-except-no-context".into(),
                         severity: "warning",
                         category: "Resilience",
                         line: log_line,
                         path: module.rel_path.to_string(),
-                        message: Box::leak(
+                        message:
                             format!(
                                 "except Exception logs via logger.{}() but discards traceback",
                                 log_attr
                             )
-                            .into_boxed_str(),
-                        ),
-                        help: "Add exc_info=True to the logging call or include the exception variable in the message.",
+                            .into(),
+                        help: "Add exc_info=True to the logging call or include the exception variable in the message.".into(),
                     });
                 }
             }
 
-            if rules.exception_log_without_traceback
+            if rules.contains(StaticRule::ResilienceExceptionLogWithoutTraceback)
                 && !has_identity_raise
                 && !module
                     .is_rule_suppressed(handler_line, "resilience/exception-log-without-traceback")
             {
                 if let Some((log_line, log_attr)) = exception_log_without_traceback {
                     issues.push(Issue {
-                        check: "resilience/exception-log-without-traceback",
+                        check: "resilience/exception-log-without-traceback".into(),
                         severity: "warning",
                         category: "Resilience",
                         line: log_line,
                         path: module.rel_path.to_string(),
-                        message: Box::leak(
+                        message:
                             format!(
                                 "except handler logs exception via logger.{}() but omits traceback",
                                 log_attr
                             )
-                            .into_boxed_str(),
-                        ),
-                        help: "Use logger.exception(...) or pass exc_info=True so the traceback is preserved.",
+                            .into(),
+                        help: "Use logger.exception(...) or pass exc_info=True so the traceback is preserved.".into(),
                     });
                 }
             }

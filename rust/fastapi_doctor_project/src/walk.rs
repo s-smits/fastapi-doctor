@@ -205,6 +205,48 @@ fn collect_python_files(root: &Path, filter: &ProjectFilesFilter, out: &mut Vec<
     }
 }
 
+fn collect_alembic_env_files(repo_root: &Path, out: &mut Vec<PathBuf>) {
+    for root in [
+        repo_root.to_path_buf(),
+        repo_root.join("backend"),
+        repo_root.join("src"),
+    ] {
+        if !root.is_dir() {
+            continue;
+        }
+
+        for dirname in ["alembic", "migrations"] {
+            let direct = root.join(dirname).join("env.py");
+            if direct.is_file() {
+                out.push(direct);
+            }
+        }
+
+        let Ok(entries) = fs::read_dir(&root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if !file_type.is_dir() {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !matches!(name, "alembic" | "migrations") {
+                continue;
+            }
+            let candidate = path.join("env.py");
+            if candidate.is_file() {
+                out.push(candidate);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -487,47 +529,5 @@ mod tests {
         assert_eq!(loaded.modules.len(), 1);
         // rel_path should be relative to repo_root, using forward slashes
         assert_eq!(loaded.modules[0].rel_path, "myapp/core.py");
-    }
-}
-
-fn collect_alembic_env_files(repo_root: &Path, out: &mut Vec<PathBuf>) {
-    for root in [
-        repo_root.to_path_buf(),
-        repo_root.join("backend"),
-        repo_root.join("src"),
-    ] {
-        if !root.is_dir() {
-            continue;
-        }
-
-        for dirname in ["alembic", "migrations"] {
-            let direct = root.join(dirname).join("env.py");
-            if direct.is_file() {
-                out.push(direct);
-            }
-        }
-
-        let Ok(entries) = fs::read_dir(&root) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if !file_type.is_dir() {
-                continue;
-            }
-            let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                continue;
-            };
-            if !matches!(name, "alembic" | "migrations") {
-                continue;
-            }
-            let candidate = path.join("env.py");
-            if candidate.is_file() {
-                out.push(candidate);
-            }
-        }
     }
 }

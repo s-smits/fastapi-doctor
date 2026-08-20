@@ -89,13 +89,13 @@ pub(crate) fn collect_sql_fstring_issues(module: &ModuleIndex, suite: &ast::Suit
             }
         }
         issues.push(Issue {
-            check: "security/sql-fstring-interpolation",
+            check: "security/sql-fstring-interpolation".into(),
             severity: "error",
             category: "Security",
             line,
             path: module.rel_path.to_string(),
-            message: "SQL injection risk: f-string used inside text() call",
-            help: "Keep SQL parameterized instead of interpolating values into text(). Suppress with '# noqa: sql-safe' if trusted.",
+            message: "SQL injection risk: f-string used inside text() call".into(),
+            help: "Keep SQL parameterized instead of interpolating values into text(). Suppress with '# noqa: sql-safe' if trusted.".into(),
         });
     });
     issues
@@ -138,13 +138,15 @@ pub(crate) fn collect_sql_execute_fstring_issues(
             }
         }
         issues.push(Issue {
-            check: "security/sql-execute-fstring",
+            check: "security/sql-execute-fstring".into(),
             severity: "error",
             category: "Security",
             line,
             path: module.rel_path.to_string(),
-            message: "SQL injection risk: f-string passed directly to execute()",
-            help: "Use SQLAlchemy text() with bind parameters, or pass a typed statement plus params.",
+            message: "SQL injection risk: f-string passed directly to execute()".into(),
+            help:
+                "Use SQLAlchemy text() with bind parameters, or pass a typed statement plus params."
+                    .into(),
         });
     });
     issues
@@ -224,13 +226,13 @@ pub(crate) fn collect_exception_detail_leak_issues(
                 }
                 seen_lines.insert(line);
                 issues.push(Issue {
-                    check: "security/exception-detail-leak",
+                    check: "security/exception-detail-leak".into(),
                     severity: "warning",
                     category: "Security",
                     line,
                     path: module.rel_path.to_string(),
-                    message: "Potential internal error leak in HTTPException detail",
-                    help: "Use a generic error message. Log the real exception with logger.exception().",
+                    message: "Potential internal error leak in HTTPException detail".into(),
+                    help: "Use a generic error message. Log the real exception with logger.exception().".into(),
                 });
             });
         }
@@ -268,13 +270,14 @@ pub(crate) fn collect_exception_detail_leak_issues(
         }
         seen_lines.insert(line);
         issues.push(Issue {
-            check: "security/exception-detail-leak",
+            check: "security/exception-detail-leak".into(),
             severity: "warning",
             category: "Security",
             line,
             path: module.rel_path.to_string(),
-            message: "Potential internal error leak in HTTPException detail",
-            help: "Use a generic error message. Log the real exception with logger.exception().",
+            message: "Potential internal error leak in HTTPException detail".into(),
+            help: "Use a generic error message. Log the real exception with logger.exception()."
+                .into(),
         });
     });
     issues
@@ -305,15 +308,14 @@ pub(crate) fn collect_unsafe_eval_exec_issues(
             return;
         }
         issues.push(Issue {
-            check: "security/unsafe-eval-exec",
+            check: "security/unsafe-eval-exec".into(),
             severity: "error",
             category: "Security",
             line,
             path: module.rel_path.to_string(),
-            message: Box::leak(
-                format!("{name}() executes dynamic Python code").into_boxed_str(),
-            ),
-            help: "Do not execute dynamic strings. Use explicit parsers such as json.loads(), ast.literal_eval(), or a typed command registry.",
+            message:
+                format!("{name}() executes dynamic Python code").into(),
+            help: "Do not execute dynamic strings. Use explicit parsers such as json.loads(), ast.literal_eval(), or a typed command registry.".into(),
         });
     });
     issues
@@ -349,13 +351,13 @@ pub(crate) fn collect_unsafe_pickle_load_issues(
             return;
         }
         issues.push(Issue {
-            check: "security/unsafe-pickle-load",
+            check: "security/unsafe-pickle-load".into(),
             severity: "error",
             category: "Security",
             line,
             path: module.rel_path.to_string(),
-            message: Box::leak(format!("{name}() can execute code during deserialisation").into_boxed_str()),
-            help: "Never unpickle untrusted data. Prefer JSON/Pydantic or a signed, typed serialization format.",
+            message: format!("{name}() can execute code during deserialisation").into(),
+            help: "Never unpickle untrusted data. Prefer JSON/Pydantic or a signed, typed serialization format.".into(),
         });
     });
     issues
@@ -394,13 +396,13 @@ pub(crate) fn collect_http_verify_false_issues(
             return;
         }
         issues.push(Issue {
-            check: "security/http-verify-false",
+            check: "security/http-verify-false".into(),
             severity: "error",
             category: "Security",
             line,
             path: module.rel_path.to_string(),
-            message: "HTTP client disables TLS certificate verification with verify=False",
-            help: "Keep certificate verification enabled. Install the correct CA bundle instead of bypassing TLS validation.",
+            message: "HTTP client disables TLS certificate verification with verify=False".into(),
+            help: "Keep certificate verification enabled. Install the correct CA bundle instead of bypassing TLS validation.".into(),
         });
     });
     issues
@@ -445,13 +447,13 @@ pub(crate) fn collect_insecure_cookie_issues(
         }
 
         issues.push(Issue {
-            check: "security/insecure-cookie",
+            check: "security/insecure-cookie".into(),
             severity: "warning",
             category: "Security",
             line,
             path: module.rel_path.to_string(),
-            message: "Response cookie is missing secure, httponly, or samesite hardening",
-            help: "Set secure=True, httponly=True, and an explicit samesite value unless this is a deliberate non-session cookie.",
+            message: "Response cookie is missing secure, httponly, or samesite hardening".into(),
+            help: "Set secure=True, httponly=True, and an explicit samesite value unless this is a deliberate non-session cookie.".into(),
         });
     });
     issues
@@ -533,13 +535,15 @@ pub(crate) fn collect_exception_string_response_issues(
                 }
                 seen_lines.insert(line);
                 issues.push(Issue {
-                    check: "security/exception-string-response",
+                    check: "security/exception-string-response".into(),
                     severity: "warning",
                     category: "Security",
                     line,
                     path: module.rel_path.to_string(),
-                    message: "Exception string is exposed through a response or event payload",
-                    help: "Log the exception with traceback and return a generic public message.",
+                    message: "Exception string is exposed through a response or event payload"
+                        .into(),
+                    help: "Log the exception with traceback and return a generic public message."
+                        .into(),
                 });
             });
         }
@@ -606,13 +610,13 @@ pub(crate) fn collect_jwt_insecure_decode_issues(
             )
         };
         issues.push(Issue {
-            check: "security/jwt-insecure-decode",
+            check: "security/jwt-insecure-decode".into(),
             severity: "error",
             category: "Security",
             line,
             path: module.rel_path.to_string(),
-            message,
-            help,
+            message: message.into(),
+            help: help.into(),
         });
     });
     issues
@@ -644,13 +648,13 @@ pub(crate) fn collect_debug_enabled_issues(module: &ModuleIndex, suite: &ast::Su
             return;
         }
         issues.push(Issue {
-            check: "security/debug-enabled",
+            check: "security/debug-enabled".into(),
             severity: "error",
             category: "Security",
             line,
             path: module.rel_path.to_string(),
-            message: "Debug or reload mode is enabled in application code",
-            help: "Keep debug=True and reload=True in local entrypoints only, never in importable production modules.",
+            message: "Debug or reload mode is enabled in application code".into(),
+            help: "Keep debug=True and reload=True in local entrypoints only, never in importable production modules.".into(),
         });
     });
     issues
@@ -689,13 +693,13 @@ pub(crate) fn collect_cors_wildcard_credentials_issues(
             return;
         }
         issues.push(Issue {
-            check: "security/cors-wildcard-credentials",
+            check: "security/cors-wildcard-credentials".into(),
             severity: "error",
             category: "Security",
             line,
             path: module.rel_path.to_string(),
-            message: "CORS allows credentials with a wildcard origin",
-            help: "When credentials are allowed, use explicit trusted origins. Wildcards and credentialed browser requests do not belong together.",
+            message: "CORS allows credentials with a wildcard origin".into(),
+            help: "When credentials are allowed, use explicit trusted origins. Wildcards and credentialed browser requests do not belong together.".into(),
         });
     });
     issues
@@ -786,13 +790,13 @@ pub(crate) fn collect_unvalidated_redirect_issues(
                 return;
             }
             issues.push(Issue {
-                check: "security/unvalidated-redirect",
+                check: "security/unvalidated-redirect".into(),
                 severity: "warning",
                 category: "Security",
                 line,
                 path: module.rel_path.to_string(),
-                message: "RedirectResponse uses a request-like redirect URL value",
-                help: "Validate redirect targets against an allowlist or convert them to safe relative paths before redirecting.",
+                message: "RedirectResponse uses a request-like redirect URL value".into(),
+                help: "Validate redirect targets against an allowlist or convert them to safe relative paths before redirecting.".into(),
             });
         });
     });
@@ -929,13 +933,13 @@ pub(crate) fn collect_hardcoded_secret_issues(
             .any(|prefix| val_str.starts_with(prefix));
         if value_match {
             issues.push(Issue {
-                check: "security/hardcoded-secret",
+                check: "security/hardcoded-secret".into(),
                 severity: "error",
                 category: "Security",
                 line,
                 path: module.rel_path.to_string(),
-                message: "Hardcoded secret detected — use environment variables or a secrets manager",
-                help: "Move secrets to environment variables: os.environ['KEY'] or a secrets manager like AWS SM / Vault.",
+                message: "Hardcoded secret detected — use environment variables or a secrets manager".into(),
+                help: "Move secrets to environment variables: os.environ['KEY'] or a secrets manager like AWS SM / Vault.".into(),
             });
             return;
         }
@@ -948,16 +952,15 @@ pub(crate) fn collect_hardcoded_secret_issues(
             };
             if is_secret_var_name(name) && value_looks_like_real_secret(val_str) {
                 issues.push(Issue {
-                    check: "security/hardcoded-secret",
+                    check: "security/hardcoded-secret".into(),
                     severity: "error",
                     category: "Security",
                     line,
                     path: module.rel_path.to_string(),
-                    message: Box::leak(
+                    message:
                         format!("Variable '{}' looks like a secret with a hardcoded string value", name)
-                            .into_boxed_str(),
-                    ),
-                    help: "Move secrets to environment variables or a secrets manager. Never commit real credentials.",
+                            .into(),
+                    help: "Move secrets to environment variables or a secrets manager. Never commit real credentials.".into(),
                 });
                 break;
             }

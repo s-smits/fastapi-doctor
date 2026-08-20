@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
@@ -30,13 +31,13 @@ pub struct Config {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Issue {
-    pub check: &'static str,
+    pub check: Cow<'static, str>,
     pub severity: &'static str,
     pub category: &'static str,
     pub line: usize,
     pub path: String,
-    pub message: &'static str,
-    pub help: &'static str,
+    pub message: Cow<'static, str>,
+    pub help: Cow<'static, str>,
 }
 
 #[derive(Clone, Default)]
@@ -221,7 +222,7 @@ impl<'a> ModuleIndex<'a> {
         if line_number == 0 || line_number > self.lines.len() {
             return false;
         }
-        line_suppresses_rule(&self.lines[line_number - 1].raw, rule_id)
+        line_suppresses_rule(self.lines[line_number - 1].raw, rule_id)
     }
 
     pub fn is_rule_suppressed_near(
@@ -582,7 +583,7 @@ fn function_dependency_names(args: &ast::Arguments) -> Vec<String> {
     ast_helpers::function_default_exprs(args)
         .into_iter()
         .filter_map(|expr| match expr {
-            Expr::Call(call) if is_depends_call(&expr) => depends_name(&call),
+            Expr::Call(call) if is_depends_call(expr) => depends_name(call),
             _ => None,
         })
         .collect()
@@ -808,7 +809,7 @@ fn collect_route_draft(
         let path = call
             .args
             .first()
-            .and_then(|expr| parse_string_expr(expr))
+            .and_then(parse_string_expr)
             .unwrap_or_default();
         let include_in_schema = keyword_value(&call.keywords, "include_in_schema")
             .and_then(parse_bool_expr)
@@ -819,10 +820,7 @@ fn collect_route_draft(
         let decorator_tags = keyword_value(&call.keywords, "tags")
             .map(parse_string_list)
             .unwrap_or_default();
-        let local_router = router_name
-            .as_ref()
-            .and_then(|router| Some(router.clone()))
-            .unwrap_or_default();
+        let local_router = router_name.clone().unwrap_or_default();
         drafts.push(RouteDraft {
             router_name,
             path,
@@ -997,22 +995,22 @@ pub fn collect_suppressions(source: &str, path: &str) -> Vec<SuppressionRecord> 
 }
 
 pub fn issue(
-    check: &'static str,
+    check: impl Into<Cow<'static, str>>,
     severity: &'static str,
     category: &'static str,
     line: usize,
     path: &str,
-    message: &'static str,
-    help: &'static str,
+    message: impl Into<Cow<'static, str>>,
+    help: impl Into<Cow<'static, str>>,
 ) -> Issue {
     Issue {
-        check,
+        check: check.into(),
         severity,
         category,
         line,
         path: path.to_string(),
-        message,
-        help,
+        message: message.into(),
+        help: help.into(),
     }
 }
 
@@ -1096,9 +1094,9 @@ pub fn score_summary(issues: &[Issue]) -> ScoreSummary {
 
     for issue in issues {
         if issue.severity == "error" {
-            error_rules.insert(issue.check);
+            error_rules.insert(issue.check.as_ref());
         } else {
-            warning_rules.insert(issue.check);
+            warning_rules.insert(issue.check.as_ref());
         }
         *categories.entry(issue.category.to_string()).or_insert(0) += 1;
     }
@@ -1136,22 +1134,22 @@ mod tests {
     fn score_summary_deducts_per_unique_rule() {
         let issues = vec![
             Issue {
-                check: "security/unsafe-yaml-load",
+                check: "security/unsafe-yaml-load".into(),
                 severity: "error",
                 category: "Security",
                 line: 1,
                 path: "a.py".to_string(),
-                message: "msg",
-                help: "help",
+                message: "msg".into(),
+                help: "help".into(),
             },
             Issue {
-                check: "security/unsafe-yaml-load",
+                check: "security/unsafe-yaml-load".into(),
                 severity: "error",
                 category: "Security",
                 line: 5,
                 path: "b.py".to_string(),
-                message: "msg",
-                help: "help",
+                message: "msg".into(),
+                help: "help".into(),
             },
         ];
         let summary = score_summary(&issues);
@@ -1165,22 +1163,22 @@ mod tests {
     fn score_summary_different_severity_weights() {
         let issues = vec![
             Issue {
-                check: "security/unsafe-yaml-load",
+                check: "security/unsafe-yaml-load".into(),
                 severity: "error",
                 category: "Security",
                 line: 1,
                 path: "a.py".to_string(),
-                message: "msg",
-                help: "help",
+                message: "msg".into(),
+                help: "help".into(),
             },
             Issue {
-                check: "architecture/print-in-production",
+                check: "architecture/print-in-production".into(),
                 severity: "warning",
                 category: "Architecture",
                 line: 1,
                 path: "a.py".to_string(),
-                message: "msg",
-                help: "help",
+                message: "msg".into(),
+                help: "help".into(),
             },
         ];
         let summary = score_summary(&issues);
@@ -1193,13 +1191,13 @@ mod tests {
         let mut issues = Vec::new();
         for i in 0..60 {
             issues.push(Issue {
-                check: Box::leak(format!("fake/rule-{}", i).into_boxed_str()),
+                check: format!("fake/rule-{}", i).into(),
                 severity: "error",
                 category: "Fake",
                 line: 1,
                 path: "a.py".to_string(),
-                message: "msg",
-                help: "help",
+                message: "msg".into(),
+                help: "help".into(),
             });
         }
         let summary = score_summary(&issues);
@@ -1211,13 +1209,13 @@ mod tests {
     fn score_summary_labels() {
         // Great: >= 80
         let issues = vec![Issue {
-            check: "a/b",
+            check: "a/b".into(),
             severity: "error",
             category: "X",
             line: 1,
             path: "a.py".to_string(),
-            message: "m",
-            help: "h",
+            message: "m".into(),
+            help: "h".into(),
         }];
         assert_eq!(score_summary(&issues).label, "Great"); // 98
 
@@ -1225,13 +1223,13 @@ mod tests {
         let mut issues = Vec::new();
         for i in 0..12 {
             issues.push(Issue {
-                check: Box::leak(format!("fake/rule-{}", i).into_boxed_str()),
+                check: format!("fake/rule-{}", i).into(),
                 severity: "error",
                 category: "X",
                 line: 1,
                 path: "a.py".to_string(),
-                message: "m",
-                help: "h",
+                message: "m".into(),
+                help: "h".into(),
             });
         }
         let summary = score_summary(&issues);

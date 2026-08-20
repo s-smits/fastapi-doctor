@@ -14,6 +14,8 @@ pub enum StaticRule {
     ArchitectureAvoidSysExit,
     ArchitectureMissingStartupValidation,
     ArchitectureFatRouteHandler,
+    ArchitectureHttpExceptionInService,
+    ArchitectureServicePositionalArgs,
     SecurityMissingAuthDep,
     SecurityForbiddenWriteParam,
     CorrectnessDuplicateRoute,
@@ -100,6 +102,8 @@ impl StaticRule {
             ArchitectureAvoidSysExit,
             ArchitectureMissingStartupValidation,
             ArchitectureFatRouteHandler,
+            ArchitectureHttpExceptionInService,
+            ArchitectureServicePositionalArgs,
             SecurityMissingAuthDep,
             SecurityForbiddenWriteParam,
             CorrectnessDuplicateRoute,
@@ -187,6 +191,8 @@ impl StaticRule {
             Self::ArchitectureAvoidSysExit => "architecture/avoid-sys-exit",
             Self::ArchitectureMissingStartupValidation => "architecture/missing-startup-validation",
             Self::ArchitectureFatRouteHandler => "architecture/fat-route-handler",
+            Self::ArchitectureHttpExceptionInService => "architecture/httpexception-in-service",
+            Self::ArchitectureServicePositionalArgs => "architecture/service-positional-args",
             Self::SecurityMissingAuthDep => "security/missing-auth-dep",
             Self::SecurityForbiddenWriteParam => "security/forbidden-write-param",
             Self::CorrectnessDuplicateRoute => "correctness/duplicate-route",
@@ -297,7 +303,9 @@ impl StaticRule {
             | Self::ArchitectureSlopComment
             | Self::ArchitectureAvoidSysExit
             | Self::ArchitectureMissingStartupValidation
-            | Self::ArchitectureFatRouteHandler => "Architecture",
+            | Self::ArchitectureFatRouteHandler
+            | Self::ArchitectureHttpExceptionInService
+            | Self::ArchitectureServicePositionalArgs => "Architecture",
 
             Self::SecurityMissingAuthDep
             | Self::SecurityForbiddenWriteParam
@@ -370,5 +378,102 @@ impl StaticRule {
             | Self::ResilienceBroadExceptNoContext
             | Self::ResilienceExceptionLogWithoutTraceback => "Resilience",
         }
+    }
+
+    pub const fn requires_ast(self) -> bool {
+        matches!(
+            self,
+            Self::ArchitectureGiantFunction
+                | Self::ArchitectureGiantRouteHandler
+                | Self::ArchitectureLargeFunction
+                | Self::ArchitectureDeepNesting
+                | Self::ArchitectureAsyncWithoutAwait
+                | Self::ArchitectureImportBloat
+                | Self::ArchitecturePrintInProduction
+                | Self::ArchitecturePassthroughFunction
+                | Self::ArchitectureHiddenDependencyInstantiation
+                | Self::ArchitectureFlagArgumentDispatch
+                | Self::ArchitectureAvoidSysExit
+                | Self::ArchitectureMissingStartupValidation
+                | Self::ArchitectureFatRouteHandler
+                | Self::ArchitectureHttpExceptionInService
+                | Self::ArchitectureServicePositionalArgs
+                | Self::CorrectnessAsyncioRunInAsync
+                | Self::CorrectnessSyncIoInAsync
+                | Self::CorrectnessMisusedAsyncConstructs
+                | Self::CorrectnessMutableDefaultArg
+                | Self::CorrectnessImportTimeDefaultCall
+                | Self::CorrectnessReturnInFinally
+                | Self::CorrectnessThreadingLockInAsync
+                | Self::CorrectnessUnreachableCode
+                | Self::CorrectnessGetWithSideEffect
+                | Self::CorrectnessExposedMutableState
+                | Self::CorrectnessServerlessFilesystemWrite
+                | Self::CorrectnessMissingHttpTimeout
+                | Self::CorrectnessUntrackedBackgroundTask
+                | Self::PerformanceSequentialAwaits
+                | Self::PerformanceRegexInLoop
+                | Self::PerformanceNPlusOneHint
+                | Self::PydanticMutableDefault
+                | Self::PydanticShouldBeModel
+                | Self::PydanticSensitiveFieldType
+                | Self::PydanticNormalizedNameCollision
+                | Self::SecurityExceptionDetailLeak
+                | Self::SecurityUnsafeEvalExec
+                | Self::SecurityUnsafePickleLoad
+                | Self::SecurityHttpVerifyFalse
+                | Self::SecurityInsecureCookie
+                | Self::SecurityExceptionStringResponse
+                | Self::SecurityJwtInsecureDecode
+                | Self::SecurityDebugEnabled
+                | Self::SecurityCorsWildcardCredentials
+                | Self::SecuritySqlExecuteFstring
+                | Self::SecurityUnvalidatedRedirect
+                | Self::SecuritySqlFstringInterpolation
+                | Self::SecurityHardcodedSecret
+                | Self::SecurityPydanticSecretStr
+                | Self::ResilienceBareExceptPass
+                | Self::ResilienceReraiseWithoutContext
+                | Self::ResilienceExceptionSwallowed
+                | Self::ResilienceBroadExceptNoContext
+                | Self::ResilienceExceptionLogWithoutTraceback
+        )
+    }
+
+    pub const fn uses_line_scan(self) -> bool {
+        matches!(
+            self,
+            Self::ArchitectureStarImport
+                | Self::ArchitectureSlopComment
+                | Self::ArchitectureMissingStartupValidation
+                | Self::ConfigDirectEnvAccess
+                | Self::ConfigEnvMutation
+                | Self::CorrectnessAvoidOsPath
+                | Self::CorrectnessDeprecatedTypingImports
+                | Self::CorrectnessNaiveDatetime
+                | Self::PydanticDeprecatedValidator
+                | Self::PydanticExtraAllowOnRequest
+                | Self::SecurityAssertInProduction
+                | Self::SecurityCorsWildcard
+                | Self::SecuritySubprocessShellTrue
+                | Self::SecurityUnsafeYamlLoad
+                | Self::SecurityWeakHashWithoutFlag
+                | Self::ResilienceSqlalchemyPoolPrePing
+        )
+    }
+
+    pub const fn is_route_rule(self) -> bool {
+        matches!(
+            self,
+            Self::SecurityMissingAuthDep
+                | Self::SecurityForbiddenWriteParam
+                | Self::CorrectnessDuplicateRoute
+                | Self::CorrectnessMissingResponseModel
+                | Self::CorrectnessWeakResponseModel
+                | Self::CorrectnessPostStatusCode
+                | Self::ApiSurfaceMissingTags
+                | Self::ApiSurfaceMissingDocstring
+                | Self::ApiSurfaceMissingPagination
+        )
     }
 }

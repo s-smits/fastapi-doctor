@@ -848,6 +848,42 @@ fn shallow_python_density_score(directory: &Path, cap: usize) -> usize {
     score.min(cap)
 }
 
+fn discover_libraries(layout: &ProjectLayout) -> LibraryInfo {
+    let mut info = LibraryInfo::default();
+    let mut dep_text = String::new();
+    for path in [
+        layout.repo_root.join("pyproject.toml"),
+        layout.repo_root.join("backend").join("pyproject.toml"),
+        layout.repo_root.join("requirements.txt"),
+        layout.repo_root.join("backend").join("requirements.txt"),
+        layout.repo_root.join("uv.lock"),
+        layout.repo_root.join("poetry.lock"),
+    ] {
+        if !path.exists() {
+            continue;
+        }
+        if let Ok(content) = fs::read_to_string(path) {
+            dep_text.push_str(&content);
+            dep_text.push('\n');
+        }
+    }
+
+    let lower_dep_text = dep_text.to_lowercase();
+    info.fastapi = lower_dep_text.contains("fastapi");
+    info.pydantic = lower_dep_text.contains("pydantic");
+    info.sqlalchemy = lower_dep_text.contains("sqlalchemy");
+    info.sqlmodel = lower_dep_text.contains("sqlmodel");
+    info.django = lower_dep_text.contains("django");
+    info.flask = lower_dep_text.contains("flask");
+    info.httpx = lower_dep_text.contains("httpx");
+    info.requests = lower_dep_text.contains("requests");
+    info.alembic = lower_dep_text.contains("alembic");
+    info.pytest = lower_dep_text.contains("pytest");
+    info.ruff = lower_dep_text.contains("ruff");
+    info.mypy = lower_dep_text.contains("mypy");
+    info
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1599,40 +1635,4 @@ testpaths = ["tests"]
         let result = infer_layout_from_app_module(tmp.path(), "nonexistent.module:app");
         assert!(result.is_none());
     }
-}
-
-fn discover_libraries(layout: &ProjectLayout) -> LibraryInfo {
-    let mut info = LibraryInfo::default();
-    let mut dep_text = String::new();
-    for path in [
-        layout.repo_root.join("pyproject.toml"),
-        layout.repo_root.join("backend").join("pyproject.toml"),
-        layout.repo_root.join("requirements.txt"),
-        layout.repo_root.join("backend").join("requirements.txt"),
-        layout.repo_root.join("uv.lock"),
-        layout.repo_root.join("poetry.lock"),
-    ] {
-        if !path.exists() {
-            continue;
-        }
-        if let Ok(content) = fs::read_to_string(path) {
-            dep_text.push_str(&content);
-            dep_text.push('\n');
-        }
-    }
-
-    let lower_dep_text = dep_text.to_lowercase();
-    info.fastapi = lower_dep_text.contains("fastapi");
-    info.pydantic = lower_dep_text.contains("pydantic");
-    info.sqlalchemy = lower_dep_text.contains("sqlalchemy");
-    info.sqlmodel = lower_dep_text.contains("sqlmodel");
-    info.django = lower_dep_text.contains("django");
-    info.flask = lower_dep_text.contains("flask");
-    info.httpx = lower_dep_text.contains("httpx");
-    info.requests = lower_dep_text.contains("requests");
-    info.alembic = lower_dep_text.contains("alembic");
-    info.pytest = lower_dep_text.contains("pytest");
-    info.ruff = lower_dep_text.contains("ruff");
-    info.mypy = lower_dep_text.contains("mypy");
-    info
 }

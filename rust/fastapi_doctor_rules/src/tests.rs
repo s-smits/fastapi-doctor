@@ -46,28 +46,47 @@ mod rule_tests {
         analyze_module(&m, &selection, &cfg).unwrap()
     }
 
-    fn route(
-        path: &str,
-        methods: &[&str],
+    const DEFAULT_ROUTE_TAGS: &[&str] = &["users"];
+
+    struct RouteOptions<'a> {
         has_response_model: bool,
         status_code: Option<usize>,
-        tags: &[&str],
+        tags: &'a [&'a str],
         has_docstring: bool,
-        param_names: &[&str],
-        response_model_str: Option<&str>,
-    ) -> RouteRecord {
+        param_names: &'a [&'a str],
+        response_model_str: Option<&'a str>,
+    }
+
+    impl Default for RouteOptions<'_> {
+        fn default() -> Self {
+            Self {
+                has_response_model: true,
+                status_code: None,
+                tags: DEFAULT_ROUTE_TAGS,
+                has_docstring: true,
+                param_names: &[],
+                response_model_str: None,
+            }
+        }
+    }
+
+    fn route(path: &str, methods: &[&str], options: RouteOptions<'_>) -> RouteRecord {
         RouteRecord {
             path: path.to_string(),
             methods: methods.iter().map(|m| m.to_string()).collect(),
             dependency_names: vec![],
-            param_names: param_names.iter().map(|p| p.to_string()).collect(),
+            param_names: options
+                .param_names
+                .iter()
+                .map(|param| param.to_string())
+                .collect(),
             include_in_schema: true,
-            has_response_model,
-            response_model_str: response_model_str.map(|s| s.to_string()),
-            status_code,
-            tags: tags.iter().map(|t| t.to_string()).collect(),
+            has_response_model: options.has_response_model,
+            response_model_str: options.response_model_str.map(str::to_string),
+            status_code: options.status_code,
+            tags: options.tags.iter().map(|tag| tag.to_string()).collect(),
             endpoint_name: "handler".to_string(),
-            has_docstring,
+            has_docstring: options.has_docstring,
             source_file: "app/routes.py".to_string(),
             line: 1,
         }
@@ -83,12 +102,11 @@ mod rule_tests {
         let mut route = route(
             path,
             methods,
-            has_response_model,
-            None,
-            &["users"],
-            true,
-            &[],
-            response_model_str,
+            RouteOptions {
+                has_response_model,
+                response_model_str,
+                ..Default::default()
+            },
         );
         route.dependency_names = dependency_names.iter().map(|d| d.to_string()).collect();
         route
@@ -640,6 +658,16 @@ mod rule_tests {
     }
 
     #[test]
+    fn missing_http_timeout_suppressed() {
+        let issues = issues_for(
+            "correctness/missing-http-timeout",
+            "app/main.py",
+            "import requests\nresponse = requests.get('https://example.com')  # doctor:ignore correctness/missing-http-timeout reason=\"inherited timeout\"\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
     fn untracked_background_task_positive() {
         let issues = issues_for(
             "correctness/untracked-background-task",
@@ -790,6 +818,122 @@ mod rule_tests {
             cfg,
         );
         assert_eq!(issues.len(), 1);
+    }
+
+    #[test]
+    fn httpexception_in_service_detects_direct_and_qualified_raises() {
+        let cases = [
+            (
+                "direct import",
+                "app/services/items.py",
+                "from fastapi import HTTPException\n\nasync def get_item(item_id: str):\n    raise HTTPException(status_code=404, detail='not found')\n",
+            ),
+            (
+                "qualified import",
+                "app/domain/orders.py",
+                "import fastapi\n\ndef cancel(order_id: str):\n    raise fastapi.HTTPException(status_code=404)\n",
+            ),
+        ];
+
+        for (case, path, source) in cases {
+            let issues = issues_for("architecture/httpexception-in-service", path, source);
+            assert_eq!(issues.len(), 1, "{case}");
+            assert_eq!(issues[0].check, "architecture/httpexception-in-service");
+            assert_eq!(issues[0].severity, "warning");
+        }
+    }
+
+    #[test]
+    fn httpexception_in_service_ignores_non_service_and_suppressed_raises() {
+        let cases = [
+            (
+                "router layer",
+                "app/routers/items.py",
+                "from fastapi import HTTPException\n\nasync def get_item(item_id: str):\n    raise HTTPException(status_code=404)\n",
+            ),
+            (
+                "interface layer",
+                "app/interfaces/agui.py",
+                "from fastapi import HTTPException\n\ndef bind():\n    raise HTTPException(status_code=400)\n",
+            ),
+            (
+                "outside service layer",
+                "app/utils/helpers.py",
+                "from fastapi import HTTPException\n\ndef die():\n    raise HTTPException(status_code=500)\n",
+            ),
+            (
+                "test module",
+                "tests/services/test_items.py",
+                "from fastapi import HTTPException\n\ndef test_x():\n    raise HTTPException(status_code=404)\n",
+            ),
+            (
+                "caught but not raised",
+                "app/services/items.py",
+                "from fastapi import HTTPException\n\ndef wrap():\n    try:\n        do()\n    except HTTPException:\n        pass\n",
+            ),
+            (
+                "suppressed raise",
+                "app/services/items.py",
+                "from fastapi import HTTPException\n\nasync def get_item(item_id: str):\n    raise HTTPException(status_code=404)  # doctor:ignore architecture/httpexception-in-service reason=\"legacy\"\n",
+            ),
+        ];
+
+        for (case, path, source) in cases {
+            let issues = issues_for("architecture/httpexception-in-service", path, source);
+            assert!(issues.is_empty(), "{case}: {issues:?}");
+        }
+    }
+
+    #[test]
+    fn service_positional_args_positive() {
+        let issues = issues_for(
+            "architecture/service-positional-args",
+            "app/services/items.py",
+            "async def create_item(session, name: str, title: str):\n    return None\n",
+        );
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].check, "architecture/service-positional-args");
+    }
+
+    #[test]
+    fn service_positional_args_ignores_safe_or_out_of_scope_signatures() {
+        let cases = [
+            (
+                "keyword-only arguments",
+                "app/services/items.py",
+                "async def create_item(session, *, name: str, title: str):\n    return None\n",
+            ),
+            (
+                "session only",
+                "app/services/items.py",
+                "async def fetch(session):\n    return None\n",
+            ),
+            (
+                "non-session first argument",
+                "app/services/items.py",
+                "async def transform(item, name: str, title: str):\n    return None\n",
+            ),
+            (
+                "sync function",
+                "app/services/items.py",
+                "def helper(session, name: str):\n    return None\n",
+            ),
+            (
+                "outside service layer",
+                "app/utils/helpers.py",
+                "async def helper(session, name: str, title: str):\n    return None\n",
+            ),
+            (
+                "private helper",
+                "app/services/items.py",
+                "async def _internal(session, name: str, title: str):\n    return None\n",
+            ),
+        ];
+
+        for (case, path, source) in cases {
+            let issues = issues_for("architecture/service-positional-args", path, source);
+            assert!(issues.is_empty(), "{case}: {issues:?}");
+        }
     }
 
     #[test]
@@ -1496,26 +1640,8 @@ mod rule_tests {
     #[test]
     fn duplicate_route_positive() {
         let routes = vec![
-            route(
-                "/api/users",
-                &["GET"],
-                true,
-                None,
-                &["users"],
-                true,
-                &[],
-                None,
-            ),
-            route(
-                "/api/users",
-                &["GET"],
-                true,
-                None,
-                &["users"],
-                true,
-                &[],
-                None,
-            ),
+            route("/api/users", &["GET"], RouteOptions::default()),
+            route("/api/users", &["GET"], RouteOptions::default()),
         ];
         let issues = route_issues(&routes, &["correctness/duplicate-route"]);
         assert_eq!(issues.len(), 1);
@@ -1524,25 +1650,14 @@ mod rule_tests {
     #[test]
     fn duplicate_route_negative_different_methods() {
         let routes = vec![
-            route(
-                "/api/users",
-                &["GET"],
-                true,
-                None,
-                &["users"],
-                true,
-                &[],
-                None,
-            ),
+            route("/api/users", &["GET"], RouteOptions::default()),
             route(
                 "/api/users",
                 &["POST"],
-                true,
-                Some(201),
-                &["users"],
-                true,
-                &[],
-                None,
+                RouteOptions {
+                    status_code: Some(201),
+                    ..Default::default()
+                },
             ),
         ];
         let issues = route_issues(&routes, &["correctness/duplicate-route"]);
@@ -1554,12 +1669,10 @@ mod rule_tests {
         let routes = vec![route(
             "/api/users",
             &["GET"],
-            false,
-            None,
-            &["users"],
-            true,
-            &[],
-            None,
+            RouteOptions {
+                has_response_model: false,
+                ..Default::default()
+            },
         )];
         let issues = route_issues(&routes, &["correctness/missing-response-model"]);
         assert_eq!(issues.len(), 1);
@@ -1570,12 +1683,10 @@ mod rule_tests {
         let routes = vec![route(
             "/api/users",
             &["GET"],
-            true,
-            None,
-            &["users"],
-            true,
-            &[],
-            Some("list[user]"),
+            RouteOptions {
+                response_model_str: Some("list[user]"),
+                ..Default::default()
+            },
         )];
         let issues = route_issues(&routes, &["correctness/missing-response-model"]);
         assert!(issues.is_empty());
@@ -1586,12 +1697,10 @@ mod rule_tests {
         let routes = vec![route(
             "/api/users",
             &["GET"],
-            true,
-            None,
-            &["users"],
-            true,
-            &[],
-            Some("dict"),
+            RouteOptions {
+                response_model_str: Some("dict"),
+                ..Default::default()
+            },
         )];
         let issues = route_issues(&routes, &["correctness/weak-response-model"]);
         assert_eq!(issues.len(), 1);
@@ -1602,12 +1711,10 @@ mod rule_tests {
         let routes = vec![route(
             "/api/users",
             &["GET"],
-            true,
-            None,
-            &["users"],
-            true,
-            &[],
-            Some("userresponse"),
+            RouteOptions {
+                response_model_str: Some("userresponse"),
+                ..Default::default()
+            },
         )];
         let issues = route_issues(&routes, &["correctness/weak-response-model"]);
         assert!(issues.is_empty());
@@ -1809,18 +1916,26 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
     }
 
     #[test]
+    fn serverless_filesystem_write_suppressed() {
+        let issues = issues_for(
+            "correctness/serverless-filesystem-write",
+            "app/prompts.py",
+            "from pathlib import Path\nPROMPTS = Path(__file__).resolve().parent / 'prompts'\nPROMPTS.mkdir(parents=True, exist_ok=True)  # doctor:ignore correctness/serverless-filesystem-write reason=\"mounted volume\"\n",
+        );
+        assert!(issues.is_empty());
+    }
+
+    #[test]
     fn missing_tags_positive() {
         let mut cfg = config();
         cfg.tag_required_prefixes = vec!["/api/".to_string()];
         let routes = vec![route(
             "/api/users",
             &["GET"],
-            true,
-            None,
-            &[],
-            true,
-            &[],
-            None,
+            RouteOptions {
+                tags: &[],
+                ..Default::default()
+            },
         )];
         let rules: Vec<String> = vec!["api-surface/missing-tags".to_string()];
         let selection = RuleSelection::from_rules(&rules);
@@ -1832,16 +1947,7 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
     fn missing_tags_negative_has_tags() {
         let mut cfg = config();
         cfg.tag_required_prefixes = vec!["/api/".to_string()];
-        let routes = vec![route(
-            "/api/users",
-            &["GET"],
-            true,
-            None,
-            &["users"],
-            true,
-            &[],
-            None,
-        )];
+        let routes = vec![route("/api/users", &["GET"], RouteOptions::default())];
         let rules: Vec<String> = vec!["api-surface/missing-tags".to_string()];
         let selection = RuleSelection::from_rules(&rules);
         let issues = analyze_routes(&routes, &selection, &cfg);
@@ -1853,12 +1959,10 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
         let routes = vec![route(
             "/api/users",
             &["GET"],
-            true,
-            None,
-            &["users"],
-            false,
-            &[],
-            None,
+            RouteOptions {
+                has_docstring: false,
+                ..Default::default()
+            },
         )];
         let issues = route_issues(&routes, &["api-surface/missing-docstring"]);
         assert_eq!(issues.len(), 1);
@@ -1869,12 +1973,10 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
         let routes = vec![route(
             "/api/users",
             &["GET"],
-            true,
-            None,
-            &["users"],
-            true,
-            &[],
-            Some("list[user]"),
+            RouteOptions {
+                response_model_str: Some("list[user]"),
+                ..Default::default()
+            },
         )];
         let issues = route_issues(&routes, &["api-surface/missing-pagination"]);
         assert_eq!(issues.len(), 1);
@@ -1885,12 +1987,11 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
         let routes = vec![route(
             "/api/users",
             &["GET"],
-            true,
-            None,
-            &["users"],
-            true,
-            &["limit", "offset"],
-            Some("list[user]"),
+            RouteOptions {
+                param_names: &["limit", "offset"],
+                response_model_str: Some("list[user]"),
+                ..Default::default()
+            },
         )];
         let issues = route_issues(&routes, &["api-surface/missing-pagination"]);
         assert!(issues.is_empty());
@@ -1900,16 +2001,7 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
     fn post_status_code_positive() {
         let mut cfg = config();
         cfg.create_post_prefixes = vec!["/api/".to_string()];
-        let routes = vec![route(
-            "/api/users",
-            &["POST"],
-            true,
-            None,
-            &["users"],
-            true,
-            &[],
-            None,
-        )];
+        let routes = vec![route("/api/users", &["POST"], RouteOptions::default())];
         let rules: Vec<String> = vec!["correctness/post-status-code".to_string()];
         let selection = RuleSelection::from_rules(&rules);
         let issues = analyze_routes(&routes, &selection, &cfg);
@@ -1923,12 +2015,10 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
         let routes = vec![route(
             "/api/users",
             &["POST"],
-            true,
-            Some(201),
-            &["users"],
-            true,
-            &[],
-            None,
+            RouteOptions {
+                status_code: Some(201),
+                ..Default::default()
+            },
         )];
         let rules: Vec<String> = vec!["correctness/post-status-code".to_string()];
         let selection = RuleSelection::from_rules(&rules);
@@ -1943,12 +2033,11 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
         let routes = vec![route(
             "/api/users",
             &["POST"],
-            true,
-            Some(201),
-            &["users"],
-            true,
-            &["user_id", "name"],
-            None,
+            RouteOptions {
+                status_code: Some(201),
+                param_names: &["user_id", "name"],
+                ..Default::default()
+            },
         )];
         let rules: Vec<String> = vec!["security/forbidden-write-param".to_string()];
         let selection = RuleSelection::from_rules(&rules);
@@ -2111,7 +2200,7 @@ atomic_write_text(PROMPTS / 'base.md', 'hello')\n",
             "import yaml\nimport subprocess\nyaml.load(data)\nsubprocess.run(['echo'], shell=True)\n",
         );
         assert_eq!(issues.len(), 2);
-        let checks: Vec<&str> = issues.iter().map(|i| i.check).collect();
+        let checks: Vec<&str> = issues.iter().map(|issue| issue.check.as_ref()).collect();
         assert!(checks.contains(&"security/unsafe-yaml-load"));
         assert!(checks.contains(&"security/subprocess-shell-true"));
     }

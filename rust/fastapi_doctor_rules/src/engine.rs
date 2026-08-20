@@ -140,15 +140,13 @@ fn has_startup_validation_signal(suite: &ast::Suite) -> bool {
                 }
             }
         }
-        Stmt::FunctionDef(node) => {
-            if node.decorator_list.iter().any(decorator_is_startup_event) {
-                has_startup_hook = true;
-            }
+        Stmt::FunctionDef(node) if node.decorator_list.iter().any(decorator_is_startup_event) => {
+            has_startup_hook = true;
         }
-        Stmt::AsyncFunctionDef(node) => {
-            if node.decorator_list.iter().any(decorator_is_startup_event) {
-                has_startup_hook = true;
-            }
+        Stmt::AsyncFunctionDef(node)
+            if node.decorator_list.iter().any(decorator_is_startup_event) =>
+        {
+            has_startup_hook = true;
         }
         _ => {}
     });
@@ -185,30 +183,27 @@ fn has_startup_validation_signal(suite: &ast::Suite) -> bool {
 
         if let Some(callee_name) = call_callee_name(&call.func) {
             let lower = callee_name.to_ascii_lowercase();
-            let is_validationish = (lower.contains("validate")
+            let has_validation_name = lower.contains("validate")
                 || lower.contains("verify")
-                || lower.starts_with("check"))
+                || lower.starts_with("check");
+            let is_validationish = has_validation_name
                 && (lower.contains("config")
                     || lower.contains("setting")
                     || lower.contains("env")
                     || lower.contains("startup"));
 
-            if is_validationish
-                || call
-                    .args
-                    .iter()
-                    .any(|arg| expr_mentions_config(arg, &config_names))
-                || call
-                    .keywords
-                    .iter()
-                    .any(|kw| expr_mentions_config(&kw.value, &config_names))
+            if has_validation_name
+                && (is_validationish
+                    || call
+                        .args
+                        .iter()
+                        .any(|arg| expr_mentions_config(arg, &config_names))
+                    || call
+                        .keywords
+                        .iter()
+                        .any(|kw| expr_mentions_config(&kw.value, &config_names)))
             {
-                if lower.contains("validate")
-                    || lower.contains("verify")
-                    || lower.starts_with("check")
-                {
-                    has_validation_call = true;
-                }
+                has_validation_call = true;
             }
         }
     });
@@ -218,278 +213,33 @@ fn has_startup_validation_signal(suite: &ast::Suite) -> bool {
 
 #[derive(Clone, Default)]
 pub struct RuleSelection {
-    pub giant_function: bool,
-    pub giant_route_handler: bool,
-    pub large_function: bool,
-    pub deep_nesting: bool,
-    pub async_without_await: bool,
-    pub import_bloat: bool,
-    pub print_in_production: bool,
-    pub star_import: bool,
-    pub direct_env_access: bool,
-    pub asyncio_run_in_async: bool,
-    pub sync_io_in_async: bool,
-    pub misused_async_constructs: bool,
-    pub avoid_os_path: bool,
-    pub deprecated_typing_imports: bool,
-    pub mutable_default_arg: bool,
-    pub import_time_default_call: bool,
-    pub naive_datetime: bool,
-    pub return_in_finally: bool,
-    pub threading_lock_in_async: bool,
-    pub unreachable_code: bool,
-    pub assert_in_production: bool,
-    pub cors_wildcard: bool,
-    pub exception_detail_leak: bool,
-    pub subprocess_shell_true: bool,
-    pub unsafe_yaml_load: bool,
-    pub unsafe_eval_exec: bool,
-    pub unsafe_pickle_load: bool,
-    pub http_verify_false: bool,
-    pub insecure_cookie: bool,
-    pub exception_string_response: bool,
-    pub jwt_insecure_decode: bool,
-    pub debug_enabled: bool,
-    pub cors_wildcard_credentials: bool,
-    pub sql_execute_fstring: bool,
-    pub unvalidated_redirect: bool,
-    pub weak_hash_without_flag: bool,
-    pub sqlalchemy_pool_pre_ping: bool,
-    pub bare_except_pass: bool,
-    pub reraise_without_context: bool,
-    pub exception_swallowed: bool,
-    pub broad_except_no_context: bool,
-    pub sql_fstring_interpolation: bool,
-    pub hardcoded_secret: bool,
-    pub pydantic_secretstr: bool,
-    pub sequential_awaits: bool,
-    pub regex_in_loop: bool,
-    pub n_plus_one_hint: bool,
-    pub deprecated_validator: bool,
-    pub mutable_model_default: bool,
-    pub extra_allow_on_request: bool,
-    pub should_be_model: bool,
-    pub sensitive_field_type: bool,
-    pub normalized_name_collision: bool,
-    pub get_with_side_effect: bool,
-    pub exposed_mutable_state: bool,
-    pub serverless_filesystem_write: bool,
-    pub missing_http_timeout: bool,
-    pub untracked_background_task: bool,
-    pub god_module: bool,
-    pub passthrough_function: bool,
-    pub hidden_dependency_instantiation: bool,
-    pub flag_argument_dispatch: bool,
-    pub avoid_sys_exit: bool,
-    pub missing_startup_validation: bool,
-    pub fat_route_handler: bool,
-    pub missing_auth_dep: bool,
-    pub forbidden_write_param: bool,
-    pub duplicate_route: bool,
-    pub missing_response_model: bool,
-    pub weak_response_model: bool,
-    pub post_status_code: bool,
-    pub missing_tags: bool,
-    pub missing_docstring: bool,
-    pub missing_pagination: bool,
-    pub config_alembic_target_metadata: bool,
-    pub config_alembic_empty_autogen_revision: bool,
-    pub config_sqlalchemy_naming_convention: bool,
-    pub env_mutation: bool,
-    pub exception_log_without_traceback: bool,
-    pub slop_comment: bool,
+    enabled: HashSet<StaticRule>,
 }
 
 impl RuleSelection {
     pub fn from_rules(rules: &[String]) -> Self {
-        let mut selection = Self::default();
-        for rule in rules.iter().filter_map(|rule| parse_static_rule(rule)) {
-            selection.enable(rule);
+        Self {
+            enabled: rules
+                .iter()
+                .filter_map(|rule_id| parse_static_rule(rule_id))
+                .collect(),
         }
-        selection
     }
 
-    fn enable(&mut self, rule: StaticRule) {
-        match rule {
-            StaticRule::ArchitectureGiantFunction => self.giant_function = true,
-            StaticRule::ArchitectureGiantRouteHandler => self.giant_route_handler = true,
-            StaticRule::ArchitectureLargeFunction => self.large_function = true,
-            StaticRule::ArchitectureDeepNesting => self.deep_nesting = true,
-            StaticRule::ArchitectureAsyncWithoutAwait => self.async_without_await = true,
-            StaticRule::ArchitectureImportBloat => self.import_bloat = true,
-            StaticRule::ArchitecturePrintInProduction => self.print_in_production = true,
-            StaticRule::ArchitectureStarImport => self.star_import = true,
-            StaticRule::ArchitectureGodModule => self.god_module = true,
-            StaticRule::ArchitecturePassthroughFunction => self.passthrough_function = true,
-            StaticRule::ArchitectureHiddenDependencyInstantiation => {
-                self.hidden_dependency_instantiation = true
-            }
-            StaticRule::ArchitectureFlagArgumentDispatch => self.flag_argument_dispatch = true,
-            StaticRule::ArchitectureAvoidSysExit => self.avoid_sys_exit = true,
-            StaticRule::ArchitectureMissingStartupValidation => {
-                self.missing_startup_validation = true
-            }
-            StaticRule::ArchitectureFatRouteHandler => self.fat_route_handler = true,
-            StaticRule::ArchitectureSlopComment => self.slop_comment = true,
-            StaticRule::SecurityMissingAuthDep => self.missing_auth_dep = true,
-            StaticRule::SecurityForbiddenWriteParam => self.forbidden_write_param = true,
-            StaticRule::CorrectnessDuplicateRoute => self.duplicate_route = true,
-            StaticRule::CorrectnessMissingResponseModel => self.missing_response_model = true,
-            StaticRule::CorrectnessWeakResponseModel => self.weak_response_model = true,
-            StaticRule::CorrectnessPostStatusCode => self.post_status_code = true,
-            StaticRule::ApiSurfaceMissingTags => self.missing_tags = true,
-            StaticRule::ApiSurfaceMissingDocstring => self.missing_docstring = true,
-            StaticRule::ApiSurfaceMissingPagination => self.missing_pagination = true,
-            StaticRule::ConfigDirectEnvAccess => self.direct_env_access = true,
-            StaticRule::ConfigEnvMutation => self.env_mutation = true,
-            StaticRule::ConfigAlembicTargetMetadata => self.config_alembic_target_metadata = true,
-            StaticRule::ConfigAlembicEmptyAutogenRevision => {
-                self.config_alembic_empty_autogen_revision = true
-            }
-            StaticRule::ConfigSqlalchemyNamingConvention => {
-                self.config_sqlalchemy_naming_convention = true
-            }
-            StaticRule::CorrectnessAsyncioRunInAsync => self.asyncio_run_in_async = true,
-            StaticRule::CorrectnessSyncIoInAsync => self.sync_io_in_async = true,
-            StaticRule::CorrectnessMisusedAsyncConstructs => self.misused_async_constructs = true,
-            StaticRule::CorrectnessAvoidOsPath => self.avoid_os_path = true,
-            StaticRule::CorrectnessDeprecatedTypingImports => self.deprecated_typing_imports = true,
-            StaticRule::CorrectnessMutableDefaultArg => self.mutable_default_arg = true,
-            StaticRule::CorrectnessImportTimeDefaultCall => self.import_time_default_call = true,
-            StaticRule::CorrectnessNaiveDatetime => self.naive_datetime = true,
-            StaticRule::CorrectnessReturnInFinally => self.return_in_finally = true,
-            StaticRule::CorrectnessThreadingLockInAsync => self.threading_lock_in_async = true,
-            StaticRule::CorrectnessUnreachableCode => self.unreachable_code = true,
-            StaticRule::CorrectnessGetWithSideEffect => self.get_with_side_effect = true,
-            StaticRule::CorrectnessExposedMutableState => self.exposed_mutable_state = true,
-            StaticRule::CorrectnessServerlessFilesystemWrite => {
-                self.serverless_filesystem_write = true
-            }
-            StaticRule::CorrectnessMissingHttpTimeout => self.missing_http_timeout = true,
-            StaticRule::CorrectnessUntrackedBackgroundTask => self.untracked_background_task = true,
-            StaticRule::PerformanceSequentialAwaits => self.sequential_awaits = true,
-            StaticRule::PerformanceRegexInLoop => self.regex_in_loop = true,
-            StaticRule::PerformanceNPlusOneHint => self.n_plus_one_hint = true,
-            StaticRule::PydanticDeprecatedValidator => self.deprecated_validator = true,
-            StaticRule::PydanticMutableDefault => self.mutable_model_default = true,
-            StaticRule::PydanticExtraAllowOnRequest => self.extra_allow_on_request = true,
-            StaticRule::PydanticShouldBeModel => self.should_be_model = true,
-            StaticRule::PydanticSensitiveFieldType => self.sensitive_field_type = true,
-            StaticRule::PydanticNormalizedNameCollision => self.normalized_name_collision = true,
-            StaticRule::SecurityAssertInProduction => self.assert_in_production = true,
-            StaticRule::SecurityCorsWildcard => self.cors_wildcard = true,
-            StaticRule::SecurityExceptionDetailLeak => self.exception_detail_leak = true,
-            StaticRule::SecuritySubprocessShellTrue => self.subprocess_shell_true = true,
-            StaticRule::SecurityUnsafeYamlLoad => self.unsafe_yaml_load = true,
-            StaticRule::SecurityUnsafeEvalExec => self.unsafe_eval_exec = true,
-            StaticRule::SecurityUnsafePickleLoad => self.unsafe_pickle_load = true,
-            StaticRule::SecurityHttpVerifyFalse => self.http_verify_false = true,
-            StaticRule::SecurityInsecureCookie => self.insecure_cookie = true,
-            StaticRule::SecurityExceptionStringResponse => self.exception_string_response = true,
-            StaticRule::SecurityJwtInsecureDecode => self.jwt_insecure_decode = true,
-            StaticRule::SecurityDebugEnabled => self.debug_enabled = true,
-            StaticRule::SecurityCorsWildcardCredentials => self.cors_wildcard_credentials = true,
-            StaticRule::SecuritySqlExecuteFstring => self.sql_execute_fstring = true,
-            StaticRule::SecurityUnvalidatedRedirect => self.unvalidated_redirect = true,
-            StaticRule::SecurityWeakHashWithoutFlag => self.weak_hash_without_flag = true,
-            StaticRule::SecuritySqlFstringInterpolation => self.sql_fstring_interpolation = true,
-            StaticRule::SecurityHardcodedSecret => self.hardcoded_secret = true,
-            StaticRule::SecurityPydanticSecretStr => self.pydantic_secretstr = true,
-            StaticRule::ResilienceSqlalchemyPoolPrePing => self.sqlalchemy_pool_pre_ping = true,
-            StaticRule::ResilienceBareExceptPass => self.bare_except_pass = true,
-            StaticRule::ResilienceReraiseWithoutContext => self.reraise_without_context = true,
-            StaticRule::ResilienceExceptionSwallowed => self.exception_swallowed = true,
-            StaticRule::ResilienceBroadExceptNoContext => self.broad_except_no_context = true,
-            StaticRule::ResilienceExceptionLogWithoutTraceback => {
-                self.exception_log_without_traceback = true
-            }
-        }
+    pub(crate) fn contains(&self, rule: StaticRule) -> bool {
+        self.enabled.contains(&rule)
     }
 
     fn any_ast_rules(&self) -> bool {
-        self.giant_function
-            || self.giant_route_handler
-            || self.large_function
-            || self.deep_nesting
-            || self.async_without_await
-            || self.import_bloat
-            || self.print_in_production
-            || self.asyncio_run_in_async
-            || self.sync_io_in_async
-            || self.misused_async_constructs
-            || self.mutable_default_arg
-            || self.import_time_default_call
-            || self.return_in_finally
-            || self.threading_lock_in_async
-            || self.unreachable_code
-            || self.bare_except_pass
-            || self.reraise_without_context
-            || self.exception_swallowed
-            || self.broad_except_no_context
-            || self.exception_log_without_traceback
-            || self.sql_fstring_interpolation
-            || self.unsafe_eval_exec
-            || self.unsafe_pickle_load
-            || self.http_verify_false
-            || self.insecure_cookie
-            || self.exception_string_response
-            || self.jwt_insecure_decode
-            || self.debug_enabled
-            || self.cors_wildcard_credentials
-            || self.sql_execute_fstring
-            || self.unvalidated_redirect
-            || self.hardcoded_secret
-            || self.pydantic_secretstr
-            || self.exception_detail_leak
-            || self.sequential_awaits
-            || self.regex_in_loop
-            || self.n_plus_one_hint
-            || self.mutable_model_default
-            || self.should_be_model
-            || self.sensitive_field_type
-            || self.normalized_name_collision
-            || self.get_with_side_effect
-            || self.exposed_mutable_state
-            || self.serverless_filesystem_write
-            || self.missing_http_timeout
-            || self.untracked_background_task
-            || self.passthrough_function
-            || self.hidden_dependency_instantiation
-            || self.flag_argument_dispatch
-            || self.avoid_sys_exit
-            || self.missing_startup_validation
-            || self.fat_route_handler
+        self.enabled.iter().any(|rule| rule.requires_ast())
     }
 
     fn any_line_rules(&self) -> bool {
-        self.star_import
-            || self.direct_env_access
-            || self.env_mutation
-            || self.avoid_os_path
-            || self.deprecated_typing_imports
-            || self.naive_datetime
-            || self.assert_in_production
-            || self.cors_wildcard
-            || self.subprocess_shell_true
-            || self.unsafe_yaml_load
-            || self.slop_comment
-            || self.weak_hash_without_flag
-            || self.sqlalchemy_pool_pre_ping
-            || self.deprecated_validator
-            || self.extra_allow_on_request
-            || self.missing_startup_validation
+        self.enabled.iter().any(|rule| rule.uses_line_scan())
     }
 
     pub fn any_route_rules(&self) -> bool {
-        self.missing_auth_dep
-            || self.forbidden_write_param
-            || self.duplicate_route
-            || self.missing_response_model
-            || self.weak_response_model
-            || self.post_status_code
-            || self.missing_tags
-            || self.missing_docstring
-            || self.missing_pagination
+        self.enabled.iter().any(|rule| rule.is_route_rule())
     }
 }
 
@@ -517,7 +267,9 @@ pub fn analyze_suite(
 ) -> Vec<Issue> {
     let mut issues = Vec::new();
 
-    if (rules.giant_function || rules.giant_route_handler || rules.large_function)
+    if (rules.contains(StaticRule::ArchitectureGiantFunction)
+        || rules.contains(StaticRule::ArchitectureGiantRouteHandler)
+        || rules.contains(StaticRule::ArchitectureLargeFunction))
         && (config.giant_function_threshold > 0 || config.large_function_threshold > 0)
     {
         let function_index = FunctionIndex::from_suite(module, suite);
@@ -530,7 +282,7 @@ pub fn analyze_suite(
         ));
     }
 
-    if rules.deep_nesting && config.deep_nesting_threshold > 0 {
+    if rules.contains(StaticRule::ArchitectureDeepNesting) && config.deep_nesting_threshold > 0 {
         issues.extend(architecture::collect_deep_nesting_issues(
             module,
             suite,
@@ -538,173 +290,186 @@ pub fn analyze_suite(
         ));
     }
 
-    if rules.asyncio_run_in_async {
+    if rules.contains(StaticRule::CorrectnessAsyncioRunInAsync) {
         issues.extend(correctness::collect_asyncio_run_in_async_issues(
             module, suite,
         ));
     }
-    if rules.threading_lock_in_async {
+    if rules.contains(StaticRule::CorrectnessThreadingLockInAsync) {
         issues.extend(correctness::collect_threading_lock_in_async_issues(
             module, suite,
         ));
     }
-    if rules.mutable_default_arg {
+    if rules.contains(StaticRule::CorrectnessMutableDefaultArg) {
         issues.extend(correctness::collect_mutable_default_arg_issues(
             module, suite,
         ));
     }
-    if rules.import_time_default_call {
+    if rules.contains(StaticRule::CorrectnessImportTimeDefaultCall) {
         issues.extend(correctness::collect_import_time_default_call_issues(
             module, suite,
         ));
     }
-    if rules.return_in_finally {
+    if rules.contains(StaticRule::CorrectnessReturnInFinally) {
         issues.extend(correctness::collect_return_in_finally_issues(module, suite));
     }
-    if rules.unreachable_code {
+    if rules.contains(StaticRule::CorrectnessUnreachableCode) {
         issues.extend(correctness::collect_unreachable_code_issues(module, suite));
     }
 
-    if rules.bare_except_pass
-        || rules.reraise_without_context
-        || rules.exception_swallowed
-        || rules.broad_except_no_context
-        || rules.exception_log_without_traceback
+    if rules.contains(StaticRule::ResilienceBareExceptPass)
+        || rules.contains(StaticRule::ResilienceReraiseWithoutContext)
+        || rules.contains(StaticRule::ResilienceExceptionSwallowed)
+        || rules.contains(StaticRule::ResilienceBroadExceptNoContext)
+        || rules.contains(StaticRule::ResilienceExceptionLogWithoutTraceback)
     {
         issues.extend(resilience::collect_resilience_issues(module, suite, rules));
     }
-    if rules.sql_fstring_interpolation {
+    if rules.contains(StaticRule::SecuritySqlFstringInterpolation) {
         issues.extend(security::collect_sql_fstring_issues(module, suite));
     }
-    if rules.sql_execute_fstring {
+    if rules.contains(StaticRule::SecuritySqlExecuteFstring) {
         issues.extend(security::collect_sql_execute_fstring_issues(module, suite));
     }
-    if rules.unsafe_eval_exec {
+    if rules.contains(StaticRule::SecurityUnsafeEvalExec) {
         issues.extend(security::collect_unsafe_eval_exec_issues(module, suite));
     }
-    if rules.unsafe_pickle_load {
+    if rules.contains(StaticRule::SecurityUnsafePickleLoad) {
         issues.extend(security::collect_unsafe_pickle_load_issues(module, suite));
     }
-    if rules.http_verify_false {
+    if rules.contains(StaticRule::SecurityHttpVerifyFalse) {
         issues.extend(security::collect_http_verify_false_issues(module, suite));
     }
-    if rules.insecure_cookie {
+    if rules.contains(StaticRule::SecurityInsecureCookie) {
         issues.extend(security::collect_insecure_cookie_issues(module, suite));
     }
-    if rules.exception_string_response {
+    if rules.contains(StaticRule::SecurityExceptionStringResponse) {
         issues.extend(security::collect_exception_string_response_issues(
             module, suite,
         ));
     }
-    if rules.jwt_insecure_decode {
+    if rules.contains(StaticRule::SecurityJwtInsecureDecode) {
         issues.extend(security::collect_jwt_insecure_decode_issues(module, suite));
     }
-    if rules.debug_enabled {
+    if rules.contains(StaticRule::SecurityDebugEnabled) {
         issues.extend(security::collect_debug_enabled_issues(module, suite));
     }
-    if rules.cors_wildcard_credentials {
+    if rules.contains(StaticRule::SecurityCorsWildcardCredentials) {
         issues.extend(security::collect_cors_wildcard_credentials_issues(
             module, suite,
         ));
     }
-    if rules.unvalidated_redirect {
+    if rules.contains(StaticRule::SecurityUnvalidatedRedirect) {
         issues.extend(security::collect_unvalidated_redirect_issues(module, suite));
     }
-    if rules.hardcoded_secret {
+    if rules.contains(StaticRule::SecurityHardcodedSecret) {
         issues.extend(security::collect_hardcoded_secret_issues(module, suite));
     }
-    if rules.pydantic_secretstr
-        || rules.sensitive_field_type
-        || rules.mutable_model_default
-        || rules.should_be_model
-        || rules.normalized_name_collision
+    if rules.contains(StaticRule::SecurityPydanticSecretStr)
+        || rules.contains(StaticRule::PydanticSensitiveFieldType)
+        || rules.contains(StaticRule::PydanticMutableDefault)
+        || rules.contains(StaticRule::PydanticShouldBeModel)
+        || rules.contains(StaticRule::PydanticNormalizedNameCollision)
     {
         issues.extend(pydantic::collect_pydantic_issues(
             module, suite, rules, config,
         ));
     }
-    if rules.avoid_sys_exit {
+    if rules.contains(StaticRule::ArchitectureAvoidSysExit) {
         issues.extend(architecture::collect_avoid_sys_exit_issues(module, suite));
     }
-    if rules.serverless_filesystem_write {
+    if rules.contains(StaticRule::CorrectnessServerlessFilesystemWrite) {
         issues.extend(correctness::collect_serverless_filesystem_write_issues(
             module, suite,
         ));
     }
-    if rules.missing_http_timeout {
+    if rules.contains(StaticRule::CorrectnessMissingHttpTimeout) {
         issues.extend(correctness::collect_missing_http_timeout_issues(
             module, suite,
         ));
     }
-    if rules.untracked_background_task {
+    if rules.contains(StaticRule::CorrectnessUntrackedBackgroundTask) {
         issues.extend(correctness::collect_untracked_background_task_issues(
             module, suite,
         ));
     }
-    if rules.regex_in_loop {
+    if rules.contains(StaticRule::PerformanceRegexInLoop) {
         issues.extend(performance::collect_regex_in_loop_issues(module, suite));
     }
-    if rules.n_plus_one_hint {
+    if rules.contains(StaticRule::PerformanceNPlusOneHint) {
         issues.extend(performance::collect_n_plus_one_hint_issues(module, suite));
     }
-    if rules.get_with_side_effect {
+    if rules.contains(StaticRule::CorrectnessGetWithSideEffect) {
         issues.extend(correctness::collect_get_with_side_effect_issues(
             module, suite,
         ));
     }
-    if rules.exposed_mutable_state {
+    if rules.contains(StaticRule::CorrectnessExposedMutableState) {
         issues.extend(correctness::collect_exposed_mutable_state_issues(
             module, suite,
         ));
     }
-    if rules.fat_route_handler {
+    if rules.contains(StaticRule::ArchitectureFatRouteHandler) {
         issues.extend(architecture::collect_fat_route_handler_issues(
             module, suite, config,
         ));
     }
-    if rules.passthrough_function {
+    if rules.contains(StaticRule::ArchitectureHttpExceptionInService) {
+        issues.extend(architecture::collect_httpexception_in_service_issues(
+            module, suite,
+        ));
+    }
+    if rules.contains(StaticRule::ArchitectureServicePositionalArgs) {
+        issues.extend(architecture::collect_service_positional_args_issues(
+            module, suite,
+        ));
+    }
+    if rules.contains(StaticRule::ArchitecturePassthroughFunction) {
         issues.extend(architecture::collect_passthrough_function_issues(
             module, suite,
         ));
     }
-    if rules.hidden_dependency_instantiation {
+    if rules.contains(StaticRule::ArchitectureHiddenDependencyInstantiation) {
         issues.extend(architecture::collect_hidden_dependency_instantiation_issues(module, suite));
     }
-    if rules.flag_argument_dispatch {
+    if rules.contains(StaticRule::ArchitectureFlagArgumentDispatch) {
         issues.extend(architecture::collect_flag_argument_dispatch_issues(
             module, suite,
         ));
     }
-    if rules.sequential_awaits {
+    if rules.contains(StaticRule::PerformanceSequentialAwaits) {
         issues.extend(performance::collect_sequential_awaits_issues(module, suite));
     }
-    if rules.print_in_production {
+    if rules.contains(StaticRule::ArchitecturePrintInProduction) {
         issues.extend(architecture::collect_print_in_production_issues(
             module, suite,
         ));
     }
-    if rules.exception_detail_leak {
+    if rules.contains(StaticRule::SecurityExceptionDetailLeak) {
         issues.extend(security::collect_exception_detail_leak_issues(
             module, suite,
         ));
     }
 
-    if rules.async_without_await || rules.sync_io_in_async || rules.misused_async_constructs {
+    if rules.contains(StaticRule::ArchitectureAsyncWithoutAwait)
+        || rules.contains(StaticRule::CorrectnessSyncIoInAsync)
+        || rules.contains(StaticRule::CorrectnessMisusedAsyncConstructs)
+    {
         let function_index = FunctionIndex::from_suite(module, suite);
 
-        if rules.async_without_await {
+        if rules.contains(StaticRule::ArchitectureAsyncWithoutAwait) {
             issues.extend(architecture::collect_async_without_await_issues(
                 module,
                 &function_index,
             ));
         }
-        if rules.sync_io_in_async {
+        if rules.contains(StaticRule::CorrectnessSyncIoInAsync) {
             issues.extend(correctness::collect_sync_io_in_async_issues(
                 module,
                 &function_index,
             ));
         }
-        if rules.misused_async_constructs {
+        if rules.contains(StaticRule::CorrectnessMisusedAsyncConstructs) {
             issues.extend(correctness::collect_misused_async_construct_issues(
                 module,
                 &function_index,
@@ -746,7 +511,7 @@ pub fn analyze_module_with_suite(
         issues.extend(analyze_suite(module, parsed_suite, rules, config));
     }
 
-    if rules.import_bloat
+    if rules.contains(StaticRule::ArchitectureImportBloat)
         && config.import_bloat_threshold > 0
         && module.file_name.as_deref() != Some("__init__.py")
         && module.file_name.as_deref() != Some("main.py")
@@ -764,26 +529,25 @@ pub fn analyze_module_with_suite(
         }
     }
 
-    if rules.god_module
+    if rules.contains(StaticRule::ArchitectureGodModule)
         && config.god_module_threshold > 0
         && !module.has_noqa_architecture
         && module.lines.len() > config.god_module_threshold
     {
         issues.push(Issue {
-            check: "architecture/god-module",
+            check: "architecture/god-module".into(),
             severity: "warning",
             category: "Architecture",
             line: 0,
             path: module.rel_path.to_string(),
-            message: Box::leak(
+            message:
                 format!(
                     "File is {} lines (>{}) — decompose into focused modules",
                     module.lines.len(),
                     config.god_module_threshold
                 )
-                .into_boxed_str(),
-            ),
-            help: "Extract cohesive groups of functions into separate modules. Each module should have one reason to change.",
+                .into(),
+            help: "Extract cohesive groups of functions into separate modules. Each module should have one reason to change.".into(),
         });
     }
 
@@ -791,15 +555,17 @@ pub fn analyze_module_with_suite(
         return issues;
     }
 
-    let allow_star_import = rules.star_import && module.file_name.as_deref() != Some("__init__.py");
-    let allow_direct_env =
-        rules.direct_env_access && module.has_path_part(&["routers", "services", "interfaces"]);
-    let allow_env_mutation = rules.env_mutation
+    let allow_star_import = rules.contains(StaticRule::ArchitectureStarImport)
+        && module.file_name.as_deref() != Some("__init__.py");
+    let allow_direct_env = rules.contains(StaticRule::ConfigDirectEnvAccess)
+        && module.has_path_part(&["routers", "services", "interfaces"]);
+    let allow_env_mutation = rules.contains(StaticRule::ConfigEnvMutation)
         && module.file_name.as_deref() != Some("main.py")
         && module.file_name.as_deref() != Some("__main__.py")
         && module.file_name.as_deref() != Some("cli.py")
         && !module.rel_path.contains("scripts/");
-    let allow_assert = rules.assert_in_production && !should_skip_assert(module.rel_path);
+    let allow_assert = rules.contains(StaticRule::SecurityAssertInProduction)
+        && !should_skip_assert(module.rel_path);
     let deprecated_typing = [
         "List",
         "Dict",
@@ -826,7 +592,7 @@ pub fn analyze_module_with_suite(
             ));
         }
 
-        if rules.slop_comment
+        if rules.contains(StaticRule::ArchitectureSlopComment)
             && !module.has_path_part(&["tests", "test", "vendor", "vendored", "third_party"])
             && !module.is_rule_suppressed(line.number, "architecture/slop-comment")
         {
@@ -860,7 +626,7 @@ pub fn analyze_module_with_suite(
             }
         }
 
-        if rules.cors_wildcard {
+        if rules.contains(StaticRule::SecurityCorsWildcard) {
             let has_cors = line.compact.contains("CORSMiddleware(")
                 || line.compact.contains(".add_middleware(CORSMiddleware");
             let wildcard_origins = line.compact.contains("allow_origins=[\"*\"]")
@@ -889,23 +655,21 @@ pub fn analyze_module_with_suite(
                 .and_then(|rest| rest.split(" import *").next())
                 .unwrap_or("module");
             issues.push(Issue {
-                check: "architecture/star-import",
+                check: "architecture/star-import".into(),
                 severity: "warning",
                 category: "Architecture",
                 line: line.number,
                 path: module.rel_path.to_string(),
-                message: Box::leak(
-                    format!(
-                        "from {} import * — pollutes namespace and breaks static analysis",
-                        module_name
-                    )
-                    .into_boxed_str(),
-                ),
-                help: "Import specific names: from module import Name1, Name2",
+                message: format!(
+                    "from {} import * — pollutes namespace and breaks static analysis",
+                    module_name
+                )
+                .into(),
+                help: "Import specific names: from module import Name1, Name2".into(),
             });
         }
 
-        if rules.subprocess_shell_true {
+        if rules.contains(StaticRule::SecuritySubprocessShellTrue) {
             let has_target = line.compact.contains("subprocess.Popen(")
                 || line.compact.contains("subprocess.run(")
                 || line.compact.contains("subprocess.call(")
@@ -924,7 +688,7 @@ pub fn analyze_module_with_suite(
             }
         }
 
-        if rules.unsafe_yaml_load {
+        if rules.contains(StaticRule::SecurityUnsafeYamlLoad) {
             let safe_loader = line.compact.contains("Loader=yaml.SafeLoader")
                 || line.compact.contains("Loader=yaml.BaseLoader")
                 || line.compact.contains("Loader=yaml.CSafeLoader");
@@ -941,7 +705,7 @@ pub fn analyze_module_with_suite(
             }
         }
 
-        if rules.avoid_os_path {
+        if rules.contains(StaticRule::CorrectnessAvoidOsPath) {
             if let Some(rest) = line.compact.split("os.path.").nth(1) {
                 let attr: String = rest
                     .chars()
@@ -949,22 +713,21 @@ pub fn analyze_module_with_suite(
                     .collect();
                 if !attr.is_empty() {
                     issues.push(Issue {
-                        check: "correctness/avoid-os-path",
+                        check: "correctness/avoid-os-path".into(),
                         severity: "warning",
                         category: "Correctness",
                         line: line.number,
                         path: module.rel_path.to_string(),
-                        message: Box::leak(
-                            format!("os.path.{} usage detected — prefer pathlib.Path", attr)
-                                .into_boxed_str(),
-                        ),
-                        help: "pathlib offers a safer, more robust object-oriented API for paths.",
+                        message: format!("os.path.{} usage detected — prefer pathlib.Path", attr)
+                            .into(),
+                        help: "pathlib offers a safer, more robust object-oriented API for paths."
+                            .into(),
                     });
                 }
             }
         }
 
-        if rules.deprecated_typing_imports
+        if rules.contains(StaticRule::CorrectnessDeprecatedTypingImports)
             && line.trimmed.starts_with("from typing import")
             && !line.raw.contains("# noqa")
         {
@@ -980,22 +743,21 @@ pub fn analyze_module_with_suite(
                     .collect();
                 if !found.is_empty() {
                     issues.push(Issue {
-                        check: "correctness/deprecated-typing-imports",
+                        check: "correctness/deprecated-typing-imports".into(),
                         severity: "warning",
                         category: "Correctness",
                         line: line.number,
                         path: module.rel_path.to_string(),
-                        message: Box::leak(
+                        message:
                             format!("Deprecated typing imports: {} — use builtins", found.join(", "))
-                                .into_boxed_str(),
-                        ),
-                        help: "Use list, dict, tuple, set, X | None directly. Add 'from __future__ import annotations' for 3.7+ compat.",
+                                .into(),
+                        help: "Use list, dict, tuple, set, X | None directly. Add 'from __future__ import annotations' for 3.7+ compat.".into(),
                     });
                 }
             }
         }
 
-        if rules.naive_datetime {
+        if rules.contains(StaticRule::CorrectnessNaiveDatetime) {
             if line.compact.contains("datetime.utcnow()") {
                 issues.push(issue(
                     "correctness/naive-datetime",
@@ -1069,7 +831,7 @@ pub fn analyze_module_with_suite(
             ));
         }
 
-        if rules.weak_hash_without_flag {
+        if rules.contains(StaticRule::SecurityWeakHashWithoutFlag) {
             let uses_hash = line.compact.contains("sha1(") || line.compact.contains("md5(");
             let uses_hexdigest = line.compact.contains(".hexdigest()");
             let has_flag = line.compact.contains("usedforsecurity=False");
@@ -1086,7 +848,7 @@ pub fn analyze_module_with_suite(
             }
         }
 
-        if rules.sqlalchemy_pool_pre_ping {
+        if rules.contains(StaticRule::ResilienceSqlalchemyPoolPrePing) {
             let is_engine_call =
                 line.compact.contains("create_engine(") || line.compact.contains(".create_engine(");
             if is_engine_call && !line.compact.contains("pool_pre_ping=True") {
@@ -1102,7 +864,7 @@ pub fn analyze_module_with_suite(
             }
         }
 
-        if rules.deprecated_validator
+        if rules.contains(StaticRule::PydanticDeprecatedValidator)
             && line.trimmed.starts_with("@validator(")
             && !line.raw.contains("field_validator")
         {
@@ -1117,7 +879,7 @@ pub fn analyze_module_with_suite(
             ));
         }
 
-        if rules.extra_allow_on_request
+        if rules.contains(StaticRule::PydanticExtraAllowOnRequest)
             && module.has_path_part(&["routers", "interfaces"])
             && (line.raw.contains("extra=\"allow\"") || line.raw.contains("extra='allow'"))
         {
@@ -1132,21 +894,22 @@ pub fn analyze_module_with_suite(
             ));
         }
 
-        if rules.missing_startup_validation
+        if rules.contains(StaticRule::ArchitectureMissingStartupValidation)
             && line.number == 1
-            && suite.is_some_and(|parsed_suite| is_startup_entrypoint_module(module, parsed_suite))
+            && suite.is_some_and(|parsed_suite| {
+                is_startup_entrypoint_module(module, parsed_suite)
+                    && !has_startup_validation_signal(parsed_suite)
+            })
         {
-            if suite.is_some_and(|parsed_suite| !has_startup_validation_signal(parsed_suite)) {
-                issues.push(issue(
-                    "architecture/missing-startup-validation",
-                    "warning",
-                    "Architecture",
-                    1,
-                    module.rel_path,
-                    "Main app entry point creates the FastAPI app without an evident startup/lifespan validation or settings bootstrap signal",
-                    "Add a lifespan/startup hook or touch validated settings/config during app bootstrap so startup fails fast when configuration is broken.",
-                ));
-            }
+            issues.push(issue(
+                "architecture/missing-startup-validation",
+                "warning",
+                "Architecture",
+                1,
+                module.rel_path,
+                "Main app entry point creates the FastAPI app without an evident startup/lifespan validation or settings bootstrap signal",
+                "Add a lifespan/startup hook or touch validated settings/config during app bootstrap so startup fails fast when configuration is broken.",
+            ));
         }
     }
 

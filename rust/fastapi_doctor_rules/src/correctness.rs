@@ -1,4 +1,5 @@
 use rustpython_parser::ast::{self, Expr, Ranged, Stmt};
+use std::borrow::Cow;
 use std::collections::HashSet;
 
 use fastapi_doctor_core::ast_helpers::*;
@@ -22,19 +23,17 @@ pub(crate) fn collect_sync_io_in_async_issues(
                     continue;
                 }
                 issues.push(Issue {
-                    check: "correctness/sync-io-in-async",
+                    check: "correctness/sync-io-in-async".into(),
                     severity: "error",
                     category: "Correctness",
                     line: call.line,
                     path: module.rel_path.to_string(),
-                    message: Box::leak(
-                        format!(
-                            "{label} inside async function '{}' blocks the event loop",
-                            function.qualname
-                        )
-                        .into_boxed_str(),
-                    ),
-                    help: Box::leak(help.to_string().into_boxed_str()),
+                    message: format!(
+                        "{label} inside async function '{}' blocks the event loop",
+                        function.qualname
+                    )
+                    .into(),
+                    help: help.into(),
                 });
                 continue;
             }
@@ -63,25 +62,23 @@ pub(crate) fn collect_sync_io_in_async_issues(
             }
             emitted_transitive.insert(fingerprint);
             issues.push(Issue {
-                check: "correctness/sync-io-in-async",
+                check: "correctness/sync-io-in-async".into(),
                 severity: "error",
                 category: "Correctness",
                 line: call.line,
                 path: module.rel_path.to_string(),
-                message: Box::leak(
+                message:
                     format!(
                         "Async function '{}' calls sync helper '{}' that blocks the event loop",
                         function.qualname, resolved.qualname
                     )
-                    .into_boxed_str(),
-                ),
-                help: Box::leak(
+                    .into(),
+                help:
                     format!(
                         "Convert '{}()' to non-blocking async work or run it in a thread. Blocking path detected via {}.",
                         resolved.qualname, nested_label
                     )
-                    .into_boxed_str(),
-                ),
+                    .into(),
             });
         }
     }
@@ -106,15 +103,14 @@ pub(crate) fn collect_misused_async_construct_issues(
             };
             if !resolved.is_async && !resolved.returns_awaitable {
                 issues.push(Issue {
-                    check: "correctness/await-on-sync",
+                    check: "correctness/await-on-sync".into(),
                     severity: "error",
                     category: "Correctness",
                     line: call.line,
                     path: module.rel_path.to_string(),
-                    message: Box::leak(
-                        format!("await used on sync function '{}()'", resolved.qualname).into_boxed_str(),
-                    ),
-                    help: "await only works on coroutines. Remove 'await' or convert the function to 'async def'.",
+                    message:
+                        format!("await used on sync function '{}()'", resolved.qualname).into(),
+                    help: "await only works on coroutines. Remove 'await' or convert the function to 'async def'.".into(),
                 });
             }
         }
@@ -125,19 +121,18 @@ pub(crate) fn collect_misused_async_construct_issues(
             };
             if !resolved.is_async && !resolved.is_generator {
                 issues.push(Issue {
-                    check: "correctness/sync-iterable-in-async-for",
+                    check: "correctness/sync-iterable-in-async-for".into(),
                     severity: "error",
                     category: "Correctness",
                     line: call.line,
                     path: module.rel_path.to_string(),
-                    message: Box::leak(
+                    message:
                         format!(
                             "async for used on sync iterable from '{}()'",
                             resolved.qualname
                         )
-                        .into_boxed_str(),
-                    ),
-                    help: "async for requires an async iterator. Use plain 'for' or make the helper an async generator.",
+                        .into(),
+                    help: "async for requires an async iterator. Use plain 'for' or make the helper an async generator.".into(),
                 });
             }
         }
@@ -148,19 +143,18 @@ pub(crate) fn collect_misused_async_construct_issues(
             };
             if !resolved.is_async && resolved.is_sync_context_manager {
                 issues.push(Issue {
-                    check: "correctness/sync-cm-in-async-with",
+                    check: "correctness/sync-cm-in-async-with".into(),
                     severity: "error",
                     category: "Correctness",
                     line: call.line,
                     path: module.rel_path.to_string(),
-                    message: Box::leak(
+                    message:
                         format!(
                             "async with used on sync context manager from '{}()'",
                             resolved.qualname
                         )
-                        .into_boxed_str(),
-                    ),
-                    help: "async with requires an async context manager. Use plain 'with' or @asynccontextmanager.",
+                        .into(),
+                    help: "async with requires an async context manager. Use plain 'with' or @asynccontextmanager.".into(),
                 });
             }
         }
@@ -206,15 +200,17 @@ pub(crate) fn collect_asyncio_run_in_async_issues(
             return;
         }
         issues.push(Issue {
-            check: "correctness/asyncio-run-in-async",
+            check: "correctness/asyncio-run-in-async".into(),
             severity: "error",
             category: "Correctness",
             line,
             path: module.rel_path.to_string(),
             message:
-                "asyncio.run() in a module with async functions — use await or create_task instead",
+                "asyncio.run() in a module with async functions — use await or create_task instead"
+                    .into(),
             help:
-                "asyncio.run() creates a new loop and blocks. In async code, use 'await' directly.",
+                "asyncio.run() creates a new loop and blocks. In async code, use 'await' directly."
+                    .into(),
         });
     });
     issues
@@ -250,13 +246,13 @@ pub(crate) fn collect_threading_lock_in_async_issues(
             return;
         }
         issues.push(Issue {
-            check: "correctness/threading-lock-in-async",
+            check: "correctness/threading-lock-in-async".into(),
             severity: "warning",
             category: "Correctness",
             line,
             path: module.rel_path.to_string(),
-            message: "threading.Lock() in async module — blocks event loop; use asyncio.Lock()",
-            help: "threading.Lock blocks the event loop. Use asyncio.Lock for async code, or add '# noqa' if cross-thread sync is intentional.",
+            message: "threading.Lock() in async module — blocks event loop; use asyncio.Lock()".into(),
+            help: "threading.Lock blocks the event loop. Use asyncio.Lock for async code, or add '# noqa' if cross-thread sync is intentional.".into(),
         });
     });
     issues
@@ -277,19 +273,17 @@ pub(crate) fn collect_mutable_default_arg_issues(
                 continue;
             }
             issues.push(Issue {
-                check: "correctness/mutable-default-arg",
+                check: "correctness/mutable-default-arg".into(),
                 severity: "error",
                 category: "Correctness",
                 line,
                 path: module.rel_path.to_string(),
-                message: Box::leak(
-                    format!(
-                        "Mutable default argument in {}() — shared across calls",
-                        function.name
-                    )
-                    .into_boxed_str(),
-                ),
-                help: "Use None as default: def foo(items=None): items = items or []",
+                message: format!(
+                    "Mutable default argument in {}() — shared across calls",
+                    function.name
+                )
+                .into(),
+                help: "Use None as default: def foo(items=None): items = items or []".into(),
             });
         }
     }
@@ -331,19 +325,18 @@ pub(crate) fn collect_import_time_default_call_issues(
                 _ => "field",
             };
             issues.push(Issue {
-                check: "correctness/import-time-default-call",
+                check: "correctness/import-time-default-call".into(),
                 severity: "warning",
                 category: "Correctness",
                 line,
                 path: module.rel_path.to_string(),
-                message: Box::leak(
+                message:
                     format!(
                         "Field '{}' in class '{}' calls a factory at import time",
                         field_name, class_node.name
                     )
-                    .into_boxed_str(),
-                ),
-                help: "Use field(default_factory=...) or Field(default_factory=...) so each instance gets a fresh value.",
+                    .into(),
+                help: "Use field(default_factory=...) or Field(default_factory=...) so each instance gets a fresh value.".into(),
             });
         }
     }
@@ -403,19 +396,18 @@ pub(crate) fn collect_exposed_mutable_state_issues(
             }
 
             issues.push(Issue {
-                check: "correctness/exposed-mutable-state",
+                check: "correctness/exposed-mutable-state".into(),
                 severity: "warning",
                 category: "Correctness",
                 line,
                 path: module.rel_path.to_string(),
-                message: Box::leak(
+                message:
                     format!(
                         "Method '{}.{}()' returns internal mutable state directly",
                         class_node.name, name
                     )
-                    .into_boxed_str(),
-                ),
-                help: "Return a copy or immutable view instead of exposing the internal collection directly.",
+                    .into(),
+                help: "Return a copy or immutable view instead of exposing the internal collection directly.".into(),
             });
         }
     }
@@ -443,13 +435,14 @@ pub(crate) fn collect_return_in_finally_issues(
                 continue;
             }
             issues.push(Issue {
-                check: "correctness/return-in-finally",
+                check: "correctness/return-in-finally".into(),
                 severity: "error",
                 category: "Correctness",
                 line,
                 path: module.rel_path.to_string(),
-                message: "return inside finally block — silently swallows exceptions",
-                help: "Move the return outside the finally block. finally should only do cleanup.",
+                message: "return inside finally block — silently swallows exceptions".into(),
+                help: "Move the return outside the finally block. finally should only do cleanup."
+                    .into(),
             });
         }
     });
@@ -542,13 +535,13 @@ pub(crate) fn collect_untracked_background_task_issues(
             return;
         }
         issues.push(Issue {
-            check: "correctness/untracked-background-task",
+            check: "correctness/untracked-background-task".into(),
             severity: "warning",
             category: "Correctness",
             line,
             path: module.rel_path.to_string(),
-            message: "asyncio.create_task() result is not retained or supervised",
-            help: "Store the task, attach error handling, or run it through FastAPI/Starlette background task infrastructure so failures are visible.",
+            message: "asyncio.create_task() result is not retained or supervised".into(),
+            help: "Store the task, attach error handling, or run it through FastAPI/Starlette background task infrastructure so failures are visible.".into(),
         });
     });
     issues
@@ -559,7 +552,7 @@ fn find_blocking_call_in_sync_helper(
     function_index: &FunctionIndex,
     depth: usize,
     seen: &mut HashSet<String>,
-) -> Option<(&'static str, &'static str)> {
+) -> Option<(Cow<'static, str>, &'static str)> {
     if depth >= ASYNC_HELPER_MAX_DEPTH || seen.contains(helper_name) {
         return None;
     }
@@ -590,48 +583,48 @@ fn find_blocking_call_in_sync_helper(
     None
 }
 
-fn blocking_call_details(call: &CallSite) -> Option<(&'static str, &'static str)> {
+fn blocking_call_details(call: &CallSite) -> Option<(Cow<'static, str>, &'static str)> {
     match &call.callee {
         Callee::Name(name) if name == "open" => Some((
-            "Sync I/O call 'open()'",
+            "Sync I/O call 'open()'".into(),
             "Use aiofiles.open() or run the file operation in a thread with asyncio.to_thread().",
         )),
         Callee::Attribute {
             base: Some(base),
             attr,
         } if base == "os" && matches!(attr.as_str(), "open" | "scandir" | "listdir") => Some((
-            Box::leak(format!("Sync filesystem call 'os.{attr}()'").into_boxed_str()),
+            format!("Sync filesystem call 'os.{attr}()'").into(),
             "Use asyncio.to_thread() or an async-friendly filesystem abstraction for blocking os.* calls.",
         )),
         Callee::Attribute {
             base: Some(base),
             attr,
         } if base == "fcntl" && attr == "flock" => Some((
-            "Blocking file-lock call 'fcntl.flock()'",
+            "Blocking file-lock call 'fcntl.flock()'".into(),
             "Run file locking in asyncio.to_thread() so the event loop stays responsive.",
         )),
         Callee::Attribute {
             base: Some(base),
             attr,
         } if base == "tempfile" && attr == "NamedTemporaryFile" => Some((
-            "Sync tempfile call 'tempfile.NamedTemporaryFile()'",
+            "Sync tempfile call 'tempfile.NamedTemporaryFile()'".into(),
             "Create temp files in a thread or use a non-blocking async workflow around tempfile usage.",
         )),
         Callee::Name(name) if name == "sleep" => Some((
-            "Sync I/O call 'sleep()'",
+            "Sync I/O call 'sleep()'".into(),
             "Use asyncio.sleep() instead of time.sleep() or a sync sleep wrapper.",
         )),
         Callee::Attribute {
             base: Some(base),
             attr,
         } if base == "time" && attr == "sleep" => {
-            Some(("time.sleep()", "Use asyncio.sleep() instead."))
+            Some(("time.sleep()".into(), "Use asyncio.sleep() instead."))
         }
         Callee::Attribute {
             base: Some(base),
             attr,
         } if base == "requests" && SYNC_HTTP_ATTRS.contains(&attr.as_str()) => Some((
-            Box::leak(format!("Sync HTTP call 'requests.{attr}()'").into_boxed_str()),
+            format!("Sync HTTP call 'requests.{attr}()'").into(),
             "Use httpx.AsyncClient or aiohttp instead of the requests library.",
         )),
         Callee::Attribute {
@@ -644,7 +637,7 @@ fn blocking_call_details(call: &CallSite) -> Option<(&'static str, &'static str)
             ) =>
         {
             Some((
-                Box::leak(format!("Blocking process call 'subprocess.{attr}()'").into_boxed_str()),
+                format!("Blocking process call 'subprocess.{attr}()'").into(),
                 "Use asyncio.create_subprocess_exec() or run the process call in asyncio.to_thread().",
             ))
         }
@@ -655,7 +648,7 @@ fn blocking_call_details(call: &CallSite) -> Option<(&'static str, &'static str)
             ) =>
         {
             Some((
-                Box::leak(format!("Blocking filesystem method '{}()'", attr).into_boxed_str()),
+                format!("Blocking filesystem method '{}()'", attr).into(),
                 "Path/file methods are synchronous. Use aiofiles or asyncio.to_thread() in async code.",
             ))
         }
@@ -663,7 +656,7 @@ fn blocking_call_details(call: &CallSite) -> Option<(&'static str, &'static str)
     }
 }
 
-pub(crate) fn collect_returns_in_block<'a>(body: &'a [Stmt]) -> Vec<&'a ast::StmtReturn> {
+pub(crate) fn collect_returns_in_block(body: &[Stmt]) -> Vec<&ast::StmtReturn> {
     let mut returns = Vec::new();
     for stmt in body {
         collect_returns_in_stmt(stmt, &mut returns);
@@ -784,19 +777,17 @@ pub(crate) fn collect_unreachable_in_block(
             continue;
         }
         issues.push(Issue {
-            check: "correctness/unreachable-code",
+            check: "correctness/unreachable-code".into(),
             severity: "warning",
             category: "Correctness",
             line,
             path: module.rel_path.to_string(),
-            message: Box::leak(
-                format!(
-                    "Unreachable code after {} statement",
-                    terminal_stmt_name(stmt)
-                )
-                .into_boxed_str(),
-            ),
-            help: "This code never executes. Remove it or fix the control flow logic.",
+            message: format!(
+                "Unreachable code after {} statement",
+                terminal_stmt_name(stmt)
+            )
+            .into(),
+            help: "This code never executes. Remove it or fix the control flow logic.".into(),
         });
         break;
     }
@@ -931,14 +922,17 @@ pub(crate) fn collect_serverless_filesystem_write_issues(
                 return;
             }
             let line = module.line_for_offset(call.range.start().to_usize());
+            if module.is_rule_suppressed(line, "correctness/serverless-filesystem-write") {
+                return;
+            }
             issues.push(Issue {
-                check: "correctness/serverless-filesystem-write",
+                check: "correctness/serverless-filesystem-write".into(),
                 severity: "warning",
                 category: "Correctness",
                 line,
                 path: module.rel_path.to_string(),
-                message: "Potential filesystem write outside /tmp — will fail in serverless environments",
-                help: "Use /tmp for temporary storage or an external object store (S3/GCS) for persistence.",
+                message: "Potential filesystem write outside /tmp — will fail in serverless environments".into(),
+                help: "Use /tmp for temporary storage or an external object store (S3/GCS) for persistence.".into(),
             });
         }
     });
@@ -953,15 +947,15 @@ fn collect_safe_temp_helper_names(
     loop {
         let mut changed = false;
         walk_suite_stmts(suite, &mut |stmt| match stmt {
-            Stmt::FunctionDef(node) => {
-                if function_returns_safe_temp_path(&node.body, safe_temp_names, &helper_names) {
-                    changed |= helper_names.insert(node.name.to_string());
-                }
+            Stmt::FunctionDef(node)
+                if function_returns_safe_temp_path(&node.body, safe_temp_names, &helper_names) =>
+            {
+                changed |= helper_names.insert(node.name.to_string());
             }
-            Stmt::AsyncFunctionDef(node) => {
-                if function_returns_safe_temp_path(&node.body, safe_temp_names, &helper_names) {
-                    changed |= helper_names.insert(node.name.to_string());
-                }
+            Stmt::AsyncFunctionDef(node)
+                if function_returns_safe_temp_path(&node.body, safe_temp_names, &helper_names) =>
+            {
+                changed |= helper_names.insert(node.name.to_string());
             }
             _ => {}
         });
@@ -982,27 +976,27 @@ fn collect_path_like_helper_names(
     loop {
         let mut changed = false;
         walk_suite_stmts(suite, &mut |stmt| match stmt {
-            Stmt::FunctionDef(node) => {
+            Stmt::FunctionDef(node)
                 if function_returns_path_like(
                     &node.body,
                     safe_temp_names,
                     path_like_names,
                     safe_temp_helper_names,
                     &helper_names,
-                ) {
-                    changed |= helper_names.insert(node.name.to_string());
-                }
+                ) =>
+            {
+                changed |= helper_names.insert(node.name.to_string());
             }
-            Stmt::AsyncFunctionDef(node) => {
+            Stmt::AsyncFunctionDef(node)
                 if function_returns_path_like(
                     &node.body,
                     safe_temp_names,
                     path_like_names,
                     safe_temp_helper_names,
                     &helper_names,
-                ) {
-                    changed |= helper_names.insert(node.name.to_string());
-                }
+                ) =>
+            {
+                changed |= helper_names.insert(node.name.to_string());
             }
             _ => {}
         });
@@ -1429,14 +1423,17 @@ pub(crate) fn collect_missing_http_timeout_issues(
             .any(|kw| kw.arg.as_deref() == Some("timeout"));
         if !has_timeout {
             let line = module.line_for_offset(call.range.start().to_usize());
+            if module.is_rule_suppressed(line, "correctness/missing-http-timeout") {
+                return;
+            }
             issues.push(Issue {
-                check: "correctness/missing-http-timeout",
+                check: "correctness/missing-http-timeout".into(),
                 severity: "warning",
                 category: "Correctness",
                 line,
                 path: module.rel_path.to_string(),
-                message: "HTTP call missing timeout — can hang indefinitely",
-                help: "Always specify a timeout for HTTP calls to avoid hanging requests.",
+                message: "HTTP call missing timeout — can hang indefinitely".into(),
+                help: "Always specify a timeout for HTTP calls to avoid hanging requests.".into(),
             });
         }
     });
@@ -1511,15 +1508,14 @@ pub(crate) fn collect_get_with_side_effect_issues(
                     let line = module.line_for_offset(call.range.start().to_usize());
                     if !module.is_rule_suppressed(line, "correctness/get-with-side-effect") {
                         issues.push(Issue {
-                            check: "correctness/get-with-side-effect",
+                            check: "correctness/get-with-side-effect".into(),
                             severity: "warning",
                             category: "Correctness",
                             line,
                             path: module.rel_path.to_string(),
-                            message: Box::leak(
-                                format!("GET endpoint {}() calls .{}() — violates REST semantics", function.name, func.attr).into_boxed_str(),
-                            ),
-                            help: "GET must be safe/idempotent. Move mutations to POST/PUT/DELETE endpoints.",
+                            message:
+                                format!("GET endpoint {}() calls .{}() — violates REST semantics", function.name, func.attr).into(),
+                            help: "GET must be safe/idempotent. Move mutations to POST/PUT/DELETE endpoints.".into(),
                         });
                         found = true;
                     }
